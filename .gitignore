@@ -1,0 +1,8 @@
+venv/
+storage/
+__pycache__/
+.env
+finetune/
+dados/
+dados_reduzidos/
+*.pyc
