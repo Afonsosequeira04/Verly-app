@@ -8,7 +8,6 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body class="auth-body">
-
 <div class="auth-container">
     <div class="auth-left">
         <div class="auth-brand">
@@ -20,21 +19,16 @@
             <blockquote>"Bem-vindo à esquadra. Os teus gastos irão arrepender-se."</blockquote>
         </div>
     </div>
-
     <div class="auth-right">
         <div class="auth-card">
             <h2>Alistamento</h2>
             <p class="auth-sub">Cria a tua ficha de recruta.</p>
-
             {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="flash flash-{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
+                {% if messages %}{% for category, message in messages %}
+                    <div class="flash flash-{{ category }}">{{ message }}</div>
+                {% endfor %}{% endif %}
             {% endwith %}
-
-            <form method="POST" action="{{ url_for('auth.register') }}">
+            <form method="POST">
                 <div class="form-group">
                     <label>Nome</label>
                     <input type="text" name="nome" placeholder="O teu nome, recruta" required autofocus>
@@ -53,11 +47,9 @@
                 </div>
                 <button type="submit" class="btn-primary">Alistar-me →</button>
             </form>
-
             <p class="auth-switch">Já tens conta? <a href="{{ url_for('auth.login') }}">Faz login</a></p>
         </div>
     </div>
 </div>
-
 </body>
 </html>

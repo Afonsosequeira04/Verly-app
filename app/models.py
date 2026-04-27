@@ -12,6 +12,8 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(150), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    notificacoes_email = db.Column(db.Boolean, default=False)
+    email_notificacoes = db.Column(db.String(150))
 
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
@@ -22,8 +24,12 @@ class User(UserMixin, db.Model):
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
 
-    def __repr__(self):
-        return f'<User {self.email}>'
+
+CATEGORIAS = [
+    'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
+    'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
+    'Educação', 'Outros',
+]
 
 
 class Fatura(db.Model):
@@ -35,12 +41,12 @@ class Fatura(db.Model):
     loja = db.Column(db.String(150))
     data_compra = db.Column(db.String(50))
     total = db.Column(db.Float)
-    items = db.Column(db.Text)           # JSON string com lista de items
-    notas = db.Column(db.Text)           # Resumo gerado pela IA
+    items = db.Column(db.Text)
+    categoria = db.Column(db.String(50), default='Outros')
+    data_garantia = db.Column(db.String(50))
+    data_devolucao = db.Column(db.String(50))
+    notas = db.Column(db.Text)
     data_upload = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<Fatura {self.nome_ficheiro}>'
 
 
 class Conversa(db.Model):
@@ -51,6 +57,3 @@ class Conversa(db.Model):
     pergunta = db.Column(db.Text, nullable=False)
     resposta = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f'<Conversa {self.id}>'

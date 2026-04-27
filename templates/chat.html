@@ -10,7 +10,6 @@
         </div>
         <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
     </div>
-
     <div id="messages" class="messages-area">
         {% if conversas %}
             {% for c in conversas %}
@@ -24,14 +23,13 @@
             </div>
             {% endfor %}
         {% else %}
-            <div class="empty-chat" id="emptyChat">
-                <div class="empty-chat-icon">👮</div>
-                <h3>Aguardando Suspeito</h3>
-                <p>Carrega uma fatura no <a href="{{ url_for('faturas.faturas') }}">Inventário</a> e começa a ser interrogado sobre os teus gastos duvidosos.</p>
-            </div>
+        <div class="empty-chat" id="emptyChat">
+            <div class="empty-chat-icon">👮</div>
+            <h3>Aguardando Suspeito</h3>
+            <p>Carrega uma fatura no <a href="{{ url_for('faturas.faturas') }}">Inventário</a> e começa o interrogatório.</p>
+        </div>
         {% endif %}
     </div>
-
     <div class="chat-input-area">
         <textarea id="userInput" placeholder="Onde gastei dinheiro este mês?"
             onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
@@ -42,90 +40,51 @@
 
 {% block extra_scripts %}
 <script>
-let emptyRemoved = {{ 'false' if conversas else 'true' }};
-
-// Scroll ao fundo no load
-window.addEventListener('load', () => {
-    const m = document.getElementById('messages');
-    m.scrollTop = m.scrollHeight;
-});
+let emptyRemoved = {{ 'false' if not conversas else 'true' }};
+window.addEventListener('load', () => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; });
 
 function removeEmpty() {
-    if (!emptyRemoved) {
-        const el = document.getElementById('emptyChat');
-        if (el) el.remove();
-        emptyRemoved = true;
-    }
+    if (!emptyRemoved) { const el = document.getElementById('emptyChat'); if (el) el.remove(); emptyRemoved = true; }
 }
-
 function addMsg(role, text, avatar) {
     removeEmpty();
-    const messages = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'msg ' + role;
-    div.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${text}</div>`;
-    messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
-    return div;
+    const m = document.getElementById('messages');
+    const d = document.createElement('div');
+    d.className = 'msg ' + role;
+    d.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${text}</div>`;
+    m.appendChild(d); m.scrollTop = m.scrollHeight;
 }
-
 function showTyping() {
     removeEmpty();
-    const messages = document.getElementById('messages');
-    const div = document.createElement('div');
-    div.className = 'msg bot';
-    div.id = 'typing';
-    div.innerHTML = `<div class="msg-avatar">👮</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
+    const m = document.getElementById('messages');
+    const d = document.createElement('div');
+    d.className = 'msg bot'; d.id = 'typing';
+    d.innerHTML = `<div class="msg-avatar">👮</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
+    m.appendChild(d); m.scrollTop = m.scrollHeight;
 }
-
-function removeTyping() {
-    const t = document.getElementById('typing');
-    if (t) t.remove();
-}
+function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
 
 async function sendMessage() {
     const input = document.getElementById('userInput');
     const btn = document.getElementById('btnSend');
     const text = input.value.trim();
     if (!text) return;
-
     addMsg('user', text, '{{ current_user.nome[0].upper() }}');
-    input.value = '';
-    input.style.height = 'auto';
-    btn.disabled = true;
+    input.value = ''; input.style.height = 'auto'; btn.disabled = true;
     showTyping();
-
     try {
-        const res = await fetch('/chat/send', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text })
-        });
+        const res = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: text}) });
         const data = await res.json();
-        removeTyping();
-        addMsg('bot', data.response, '👮');
-    } catch(e) {
-        removeTyping();
-        addMsg('bot', 'Erro de ligação ao servidor.', '👮');
-    }
+        removeTyping(); addMsg('bot', data.response, '👮');
+    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '👮'); }
     btn.disabled = false;
 }
-
 async function clearChat() {
-    if (!confirm('Apagar todo o histórico de interrogatório?')) return;
-    await fetch('/chat/clear', { method: 'POST' });
+    if (!confirm('Apagar todo o histórico?')) return;
+    await fetch('/chat/clear', {method:'POST'});
     location.reload();
 }
-
-function handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-}
-
-function autoResize(el) {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
+function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
 </script>
 {% endblock %}

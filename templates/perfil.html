@@ -1,0 +1,114 @@
+{% extends 'base.html' %}
+{% block title %}Perfil · Shopping Police{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Perfil</h1>
+        <p class="page-sub">Ficha do recruta {{ current_user.nome }}.</p>
+    </div>
+</div>
+
+<div class="perfil-grid">
+    <!-- Stats -->
+    <div class="card">
+        <div class="card-header"><h3>Estatísticas</h3></div>
+        <div class="card-body">
+            <div class="perfil-stats">
+                <div class="perfil-stat">
+                    <span class="ps-icon">🧾</span>
+                    <span class="ps-val">{{ num_faturas }}</span>
+                    <span class="ps-label">Faturas</span>
+                </div>
+                <div class="perfil-stat">
+                    <span class="ps-icon">💬</span>
+                    <span class="ps-val">{{ num_conversas }}</span>
+                    <span class="ps-label">Interrogatórios</span>
+                </div>
+                <div class="perfil-stat">
+                    <span class="ps-icon">💸</span>
+                    <span class="ps-val">{{ "%.0f"|format(total_gasto) }}€</span>
+                    <span class="ps-label">Total Gasto</span>
+                </div>
+            </div>
+            <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
+                Membro desde {{ current_user.criado_em.strftime('%d/%m/%Y') }}
+            </div>
+        </div>
+    </div>
+
+    <!-- Editar Perfil -->
+    <div class="card">
+        <div class="card-header"><h3>Informação Pessoal</h3></div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('perfil.atualizar') }}">
+                <div class="form-group">
+                    <label>Nome</label>
+                    <input type="text" name="nome" value="{{ current_user.nome }}" required>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" value="{{ current_user.email }}" disabled style="opacity:0.5;cursor:not-allowed;">
+                </div>
+                <div class="form-group">
+                    <label>Email para Notificações</label>
+                    <input type="email" name="email_notificacoes" value="{{ current_user.email_notificacoes or '' }}" placeholder="outro@email.com">
+                </div>
+                <div class="form-check" style="margin-bottom:20px;">
+                    <input type="checkbox" name="notificacoes_email" id="notif" {% if current_user.notificacoes_email %}checked{% endif %}>
+                    <label for="notif">Receber alertas de garantia por email</label>
+                </div>
+                <button type="submit" class="btn-primary">Guardar Alterações</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Alterar Password -->
+    <div class="card">
+        <div class="card-header"><h3>Alterar Password</h3></div>
+        <div class="card-body">
+            <form method="POST" action="{{ url_for('perfil.alterar_password') }}">
+                <div class="form-group">
+                    <label>Password Atual</label>
+                    <input type="password" name="password_atual" required placeholder="••••••••">
+                </div>
+                <div class="form-group">
+                    <label>Nova Password</label>
+                    <input type="password" name="password_nova" required placeholder="Mínimo 6 caracteres">
+                </div>
+                <div class="form-group">
+                    <label>Confirmar Nova Password</label>
+                    <input type="password" name="confirmar_password" required placeholder="Repete a password">
+                </div>
+                <button type="submit" class="btn-primary">Alterar Password</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Zona de Perigo -->
+    <div class="card card-danger">
+        <div class="card-header"><h3>Zona de Perigo</h3></div>
+        <div class="card-body">
+            <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+                Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas.
+            </p>
+            <button class="btn-danger" onclick="confirmarEliminar()">Eliminar Conta Permanentemente</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function confirmarEliminar() {
+    const conf = prompt('Escreve "ELIMINAR" para confirmar:');
+    if (conf === 'ELIMINAR') {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{{ url_for("perfil.eliminar_conta") }}';
+        document.body.appendChild(form);
+        form.submit();
+    }
+}
+</script>
+{% endblock %}

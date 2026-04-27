@@ -29,20 +29,13 @@ def send():
 
     index = get_index(data_dir, storage_dir)
     if index is None:
-        return jsonify({'response': 'Ainda não tens provas carregadas, recruta! Vai ao Inventário e faz upload de uma fatura primeiro.'})
+        return jsonify({'response': 'Ainda não tens provas carregadas! Vai ao Inventário e faz upload de uma fatura primeiro, recruta.'})
 
     try:
         resposta = chat_with_index(index, user_msg)
-
-        # Guardar conversa na base de dados
-        conversa = Conversa(
-            user_id=current_user.id,
-            pergunta=user_msg,
-            resposta=resposta
-        )
+        conversa = Conversa(user_id=current_user.id, pergunta=user_msg, resposta=resposta)
         db.session.add(conversa)
         db.session.commit()
-
         return jsonify({'response': resposta})
     except Exception as e:
         return jsonify({'response': f'Erro interno: {str(e)}'})

@@ -3,6 +3,7 @@ flask-sqlalchemy
 flask-login
 python-dotenv
 werkzeug
+reportlab
 llama-index-core
 llama-index-llms-groq
 llama-index-embeddings-huggingface

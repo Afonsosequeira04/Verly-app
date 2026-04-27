@@ -17,19 +17,14 @@ def index():
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard.dashboard'))
-
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
-        remember = request.form.get('remember') == 'on'
-
         user = User.query.filter_by(email=email).first()
         if user and user.check_password(password):
-            login_user(user, remember=remember)
+            login_user(user, remember=request.form.get('remember') == 'on')
             return redirect(url_for('dashboard.dashboard'))
-        else:
-            flash('Email ou password incorretos, recruta.', 'error')
-
+        flash('Email ou password incorretos, recruta.', 'error')
     return render_template('auth/login.html')
 
 
@@ -37,13 +32,11 @@ def login():
 def register():
     if current_user.is_authenticated:
         return redirect(url_for('dashboard.dashboard'))
-
     if request.method == 'POST':
         nome = request.form.get('nome', '').strip()
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
         confirm = request.form.get('confirm_password', '')
-
         if not nome or not email or not password:
             flash('Preenche todos os campos.', 'error')
         elif password != confirm:
@@ -59,7 +52,6 @@ def register():
             db.session.commit()
             login_user(user)
             return redirect(url_for('dashboard.dashboard'))
-
     return render_template('auth/register.html')
 
 

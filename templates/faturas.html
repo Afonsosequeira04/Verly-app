@@ -5,76 +5,109 @@
 <div class="page-header">
     <div>
         <h1 class="page-title">Inventário de Provas</h1>
-        <p class="page-sub">{{ faturas|length }} fatura(s) registada(s).</p>
+        <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
     </div>
+    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
 </div>
 
-<!-- UPLOAD ZONE -->
-<div class="card" style="margin-bottom: 24px;">
-    <div class="card-header">
-        <h3>Submeter Nova Prova</h3>
-    </div>
+<!-- UPLOAD -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header"><h3>Submeter Nova Prova</h3></div>
     <div class="card-body">
         <div class="upload-zone" id="uploadZone">
             <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
             <div class="upload-icon">📁</div>
-            <strong id="uploadLabel">Arrastar ficheiro ou clicar para selecionar</strong>
-            <p id="uploadSub">PDF, PNG, JPG, TXT · Máx. 10MB</p>
+            <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
+            <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
         </div>
-        <button class="btn-primary" id="btnUpload" style="display:none; margin-top:12px;" onclick="uploadFile()">
+        <button class="btn-primary" id="btnUpload" style="display:none;margin-top:12px;" onclick="uploadFile()">
             Enviar para Análise →
         </button>
         <div class="upload-status" id="uploadStatus"></div>
     </div>
 </div>
 
-<!-- TABELA DE FATURAS -->
-<div class="card">
-    <div class="card-header">
-        <h3>Faturas Registadas</h3>
+<!-- FILTROS -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-body" style="padding:16px 20px;">
+        <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
+            <input type="text" name="q" value="{{ search }}" placeholder="🔍 Pesquisar loja, item..." class="filtro-input">
+            <select name="categoria" class="filtro-select">
+                <option value="">Todas as categorias</option>
+                {% for cat in categorias %}
+                <option value="{{ cat }}" {% if cat == categoria_sel %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+            <select name="ordenar" class="filtro-select">
+                <option value="recente" {% if ordenar == 'recente' %}selected{% endif %}>Mais recente</option>
+                <option value="antigo" {% if ordenar == 'antigo' %}selected{% endif %}>Mais antigo</option>
+                <option value="maior" {% if ordenar == 'maior' %}selected{% endif %}>Maior valor</option>
+                <option value="menor" {% if ordenar == 'menor' %}selected{% endif %}>Menor valor</option>
+            </select>
+            <button type="submit" class="btn-accent">Filtrar</button>
+            {% if search or categoria_sel %}
+            <a href="{{ url_for('faturas.faturas') }}" class="btn-ghost">Limpar</a>
+            {% endif %}
+        </form>
     </div>
-    <div class="card-body">
+</div>
+
+<!-- TABELA -->
+<div class="card">
+    <div class="card-header"><h3>Faturas Registadas</h3></div>
+    <div class="card-body" style="padding:0;">
         {% if faturas %}
-        <table class="data-table" id="faturasTable">
+        <table class="data-table">
             <thead>
                 <tr>
                     <th>Ficheiro</th>
                     <th>Loja</th>
+                    <th>Categoria</th>
                     <th>Data Compra</th>
                     <th>Total</th>
+                    <th>Devolução</th>
+                    <th>Garantia</th>
                     <th>Items</th>
-                    <th>Carregada</th>
                     <th></th>
                 </tr>
             </thead>
-            <tbody id="faturasBody">
+            <tbody>
                 {% for f in faturas %}
                 <tr id="row-{{ f.id }}">
                     <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
-                    <td>{{ f.loja or '—' }}</td>
+                    <td>
+                        <span class="editable" onclick="editarCampo({{ f.id }}, 'loja', this)">{{ f.loja or '—' }}</span>
+                    </td>
+                    <td>
+                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)">
+                            {% for cat in categorias %}
+                            <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
                     <td>{{ f.data_compra or '—' }}</td>
                     <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
-                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                        <span class="editable" onclick="editarCampo({{ f.id }}, 'total', this)">
+                            {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                        </span>
                     </td>
+                    <td class="{% if f.data_devolucao %}text-warning{% endif %}">{{ f.data_devolucao or '—' }}</td>
+                    <td class="text-muted">{{ f.data_garantia or '—' }}</td>
                     <td>
                         {% if f.items_list %}
-                            <span class="items-preview" title="{{ f.items_list|join(', ') }}">
-                                {{ f.items_list|length }} item(s)
-                            </span>
+                        <span class="items-preview" title="{{ f.items_list|join(', ') }}">{{ f.items_list|length }} item(s)</span>
                         {% else %}—{% endif %}
                     </td>
-                    <td class="text-muted">{{ f.data_upload.strftime('%d/%m/%Y') }}</td>
-                    <td>
-                        <button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button>
-                    </td>
+                    <td><button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
         {% else %}
-        <div class="empty-card" id="emptyState">
+        <div class="empty-card">
             <span>🧾</span>
-            <p>Nenhuma prova carregada ainda, recruta.<br>Submete uma fatura acima para começar.</p>
+            <p>Nenhuma fatura encontrada.<br>
+            {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
         </div>
         {% endif %}
     </div>
@@ -94,12 +127,11 @@ function handleFileSelect(input) {
     }
 }
 
-const uploadZone = document.getElementById('uploadZone');
-uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
-uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
-uploadZone.addEventListener('drop', e => {
-    e.preventDefault();
-    uploadZone.classList.remove('drag-over');
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
     const file = e.dataTransfer.files[0];
     if (file) {
         selectedFile = file;
@@ -112,28 +144,21 @@ uploadZone.addEventListener('drop', e => {
 async function uploadFile() {
     if (!selectedFile) return;
     const btn = document.getElementById('btnUpload');
-    const status = document.getElementById('uploadStatus');
-    btn.disabled = true;
-    btn.textContent = 'A analisar...';
+    btn.disabled = true; btn.textContent = 'A analisar...';
     setStatus('loading', '⏳ A Polícia está a analisar a fatura...');
-
     const formData = new FormData();
     formData.append('file', selectedFile);
-
     try {
         const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
         const data = await res.json();
         if (data.success) {
-            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.total ? data.total.toFixed(2) + ' €' : ''}`);
+            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.categoria}`);
             setTimeout(() => location.reload(), 1500);
         } else {
             setStatus('error', '✗ ' + data.message);
         }
-    } catch(e) {
-        setStatus('error', '✗ Erro de ligação.');
-    }
-    btn.disabled = false;
-    btn.textContent = 'Enviar para Análise →';
+    } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
+    btn.disabled = false; btn.textContent = 'Enviar para Análise →';
 }
 
 function setStatus(type, msg) {
@@ -142,13 +167,40 @@ function setStatus(type, msg) {
     el.textContent = msg;
 }
 
+async function editarCategoria(id, valor) {
+    await fetch(`/faturas/editar/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria: valor })
+    });
+}
+
+function editarCampo(id, campo, el) {
+    const valor = el.textContent.replace(' €', '').trim();
+    const input = document.createElement('input');
+    input.type = 'text'; input.value = valor === '—' ? '' : valor;
+    input.className = 'inline-edit';
+    el.replaceWith(input);
+    input.focus();
+    input.addEventListener('blur', async () => {
+        const novo = input.value.trim();
+        const body = {};
+        body[campo] = novo;
+        await fetch(`/faturas/editar/${id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        location.reload();
+    });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
+}
+
 async function deleteFatura(id) {
     if (!confirm('Remover esta fatura?')) return;
     const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
     const data = await res.json();
-    if (data.success) {
-        document.getElementById('row-' + id).remove();
-    }
+    if (data.success) document.getElementById('row-' + id).remove();
 }
 </script>
 {% endblock %}
