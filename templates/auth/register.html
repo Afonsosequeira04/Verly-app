@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registo · Shopping Police</title>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="auth-body">
+
+<div class="auth-container">
+    <div class="auth-left">
+        <div class="auth-brand">
+            <div class="auth-logo">🚔</div>
+            <h1>Shopping<br>Police</h1>
+            <p>Unidade Anti-Gastos · Porto Division</p>
+        </div>
+        <div class="auth-tagline">
+            <blockquote>"Bem-vindo à esquadra. Os teus gastos irão arrepender-se."</blockquote>
+        </div>
+    </div>
+
+    <div class="auth-right">
+        <div class="auth-card">
+            <h2>Alistamento</h2>
+            <p class="auth-sub">Cria a tua ficha de recruta.</p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('auth.register') }}">
+                <div class="form-group">
+                    <label>Nome</label>
+                    <input type="text" name="nome" placeholder="O teu nome, recruta" required autofocus>
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" name="email" placeholder="recruta@exemplo.com" required>
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="password" placeholder="Mínimo 6 caracteres" required>
+                </div>
+                <div class="form-group">
+                    <label>Confirmar Password</label>
+                    <input type="password" name="confirm_password" placeholder="Repete a password" required>
+                </div>
+                <button type="submit" class="btn-primary">Alistar-me →</button>
+            </form>
+
+            <p class="auth-switch">Já tens conta? <a href="{{ url_for('auth.login') }}">Faz login</a></p>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

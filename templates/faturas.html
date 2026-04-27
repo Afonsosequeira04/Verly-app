@@ -1,0 +1,154 @@
+{% extends 'base.html' %}
+{% block title %}Inventário · Shopping Police{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Inventário de Provas</h1>
+        <p class="page-sub">{{ faturas|length }} fatura(s) registada(s).</p>
+    </div>
+</div>
+
+<!-- UPLOAD ZONE -->
+<div class="card" style="margin-bottom: 24px;">
+    <div class="card-header">
+        <h3>Submeter Nova Prova</h3>
+    </div>
+    <div class="card-body">
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
+            <div class="upload-icon">📁</div>
+            <strong id="uploadLabel">Arrastar ficheiro ou clicar para selecionar</strong>
+            <p id="uploadSub">PDF, PNG, JPG, TXT · Máx. 10MB</p>
+        </div>
+        <button class="btn-primary" id="btnUpload" style="display:none; margin-top:12px;" onclick="uploadFile()">
+            Enviar para Análise →
+        </button>
+        <div class="upload-status" id="uploadStatus"></div>
+    </div>
+</div>
+
+<!-- TABELA DE FATURAS -->
+<div class="card">
+    <div class="card-header">
+        <h3>Faturas Registadas</h3>
+    </div>
+    <div class="card-body">
+        {% if faturas %}
+        <table class="data-table" id="faturasTable">
+            <thead>
+                <tr>
+                    <th>Ficheiro</th>
+                    <th>Loja</th>
+                    <th>Data Compra</th>
+                    <th>Total</th>
+                    <th>Items</th>
+                    <th>Carregada</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="faturasBody">
+                {% for f in faturas %}
+                <tr id="row-{{ f.id }}">
+                    <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
+                    <td>{{ f.loja or '—' }}</td>
+                    <td>{{ f.data_compra or '—' }}</td>
+                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
+                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if f.items_list %}
+                            <span class="items-preview" title="{{ f.items_list|join(', ') }}">
+                                {{ f.items_list|length }} item(s)
+                            </span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-muted">{{ f.data_upload.strftime('%d/%m/%Y') }}</td>
+                    <td>
+                        <button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-card" id="emptyState">
+            <span>🧾</span>
+            <p>Nenhuma prova carregada ainda, recruta.<br>Submete uma fatura acima para começar.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedFile = null;
+
+function handleFileSelect(input) {
+    selectedFile = input.files[0];
+    if (selectedFile) {
+        document.getElementById('uploadLabel').textContent = selectedFile.name;
+        document.getElementById('uploadSub').textContent = (selectedFile.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+}
+
+const uploadZone = document.getElementById('uploadZone');
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+        selectedFile = file;
+        document.getElementById('uploadLabel').textContent = file.name;
+        document.getElementById('uploadSub').textContent = (file.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+});
+
+async function uploadFile() {
+    if (!selectedFile) return;
+    const btn = document.getElementById('btnUpload');
+    const status = document.getElementById('uploadStatus');
+    btn.disabled = true;
+    btn.textContent = 'A analisar...';
+    setStatus('loading', '⏳ A Polícia está a analisar a fatura...');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+
+    try {
+        const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.total ? data.total.toFixed(2) + ' €' : ''}`);
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            setStatus('error', '✗ ' + data.message);
+        }
+    } catch(e) {
+        setStatus('error', '✗ Erro de ligação.');
+    }
+    btn.disabled = false;
+    btn.textContent = 'Enviar para Análise →';
+}
+
+function setStatus(type, msg) {
+    const el = document.getElementById('uploadStatus');
+    el.className = 'upload-status ' + type;
+    el.textContent = msg;
+}
+
+async function deleteFatura(id) {
+    if (!confirm('Remover esta fatura?')) return;
+    const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+        document.getElementById('row-' + id).remove();
+    }
+}
+</script>
+{% endblock %}

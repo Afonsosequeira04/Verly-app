@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard · Shopping Police{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-sub">Relatório de danos financeiros, {{ current_user.nome }}.</p>
+    </div>
+    <a href="{{ url_for('faturas.faturas') }}" class="btn-accent">+ Nova Fatura</a>
+</div>
+
+<!-- MÉTRICAS -->
+<div class="metrics-grid">
+    <div class="metric-card">
+        <div class="metric-icon">💸</div>
+        <div class="metric-body">
+            <span class="metric-label">Total Gasto</span>
+            <span class="metric-value">{{ "%.2f"|format(total_gasto) }} €</span>
+        </div>
+        <div class="metric-trend {% if total_gasto > 500 %}trend-bad{% else %}trend-ok{% endif %}">
+            {% if total_gasto > 500 %}⚠ Suspeito{% else %}✓ Controlado{% endif %}
+        </div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-icon">🧾</div>
+        <div class="metric-body">
+            <span class="metric-label">Faturas Registadas</span>
+            <span class="metric-value">{{ num_faturas }}</span>
+        </div>
+        <div class="metric-trend trend-neutral">provas</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-icon">💬</div>
+        <div class="metric-body">
+            <span class="metric-label">Interrogatórios</span>
+            <span class="metric-value">{{ num_conversas }}</span>
+        </div>
+        <div class="metric-trend trend-neutral">mensagens</div>
+    </div>
+
+    <div class="metric-card">
+        <div class="metric-icon">🏪</div>
+        <div class="metric-body">
+            <span class="metric-label">Loja Favorita</span>
+            <span class="metric-value metric-value-sm">{{ top_loja }}</span>
+        </div>
+        <div class="metric-trend trend-bad">{% if top_loja != '—' %}suspeita{% else %}—{% endif %}</div>
+    </div>
+</div>
+
+<!-- GRÁFICO + CONVERSAS -->
+<div class="dashboard-grid">
+    <div class="card">
+        <div class="card-header">
+            <h3>Gastos por Loja</h3>
+        </div>
+        <div class="card-body">
+            {% if chart_labels != '[]' %}
+                <canvas id="lojasChart" height="200"></canvas>
+            {% else %}
+                <div class="empty-card">
+                    <span>📊</span>
+                    <p>Carrega faturas para ver os gráficos.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h3>Interrogatórios Recentes</h3>
+            <a href="{{ url_for('chat.chat') }}" class="card-link">Ver todos →</a>
+        </div>
+        <div class="card-body">
+            {% if conversas_recentes %}
+                <ul class="convo-list">
+                    {% for c in conversas_recentes %}
+                    <li class="convo-item">
+                        <div class="convo-q">{{ c.pergunta[:80] }}{% if c.pergunta|length > 80 %}...{% endif %}</div>
+                        <div class="convo-a">{{ c.resposta[:120] }}{% if c.resposta|length > 120 %}...{% endif %}</div>
+                        <div class="convo-time">{{ c.timestamp.strftime('%d/%m %H:%M') }}</div>
+                    </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="empty-card">
+                    <span>👮</span>
+                    <p>Ainda não há interrogatórios. O recruta está com medo?</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- ÚLTIMAS FATURAS -->
+<div class="card" style="margin-top: 24px;">
+    <div class="card-header">
+        <h3>Últimas Faturas</h3>
+        <a href="{{ url_for('faturas.faturas') }}" class="card-link">Ver todas →</a>
+    </div>
+    <div class="card-body">
+        {% if ultimas_faturas %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Ficheiro</th>
+                    <th>Loja</th>
+                    <th>Data Compra</th>
+                    <th>Total</th>
+                    <th>Carregada em</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in ultimas_faturas %}
+                <tr>
+                    <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
+                    <td>{{ f.loja or '—' }}</td>
+                    <td>{{ f.data_compra or '—' }}</td>
+                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
+                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                    </td>
+                    <td class="text-muted">{{ f.data_upload.strftime('%d/%m/%Y') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <div class="empty-card">
+                <span>🧾</span>
+                <p>Nenhuma fatura carregada ainda. <a href="{{ url_for('faturas.faturas') }}">Submete uma prova.</a></p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const labels = {{ chart_labels|safe }};
+const values = {{ chart_values|safe }};
+
+if (labels.length > 0) {
+    const ctx = document.getElementById('lojasChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Gasto (€)',
+                data: values,
+                backgroundColor: 'rgba(230, 57, 70, 0.7)',
+                borderColor: '#e63946',
+                borderWidth: 2,
+                borderRadius: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => `${ctx.parsed.y.toFixed(2)} €`
+                    }
+                }
+            },
+            scales: {
+                x: { grid: { color: '#2a2a2a' }, ticks: { color: '#888' } },
+                y: { grid: { color: '#2a2a2a' }, ticks: { color: '#888', callback: v => v + ' €' } }
+            }
+        }
+    });
+}
+</script>
+{% endblock %}
