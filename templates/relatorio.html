@@ -1,0 +1,193 @@
+{% extends 'base.html' %}
+{% block title %}Relatório Mensal · Verly{% endblock %}
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">📊 Financial Damage Report</h1>
+        <p class="page-sub">{{ mes_nome }} {{ ano }} — O teu relatório mensal de gastos</p>
+    </div>
+    <!-- Navegação de meses -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        {% for m in meses_nav %}
+        <a href="{{ url_for('reports.relatorio', mes=m.mes, ano=m.ano) }}"
+           class="btn-ghost {% if m.mes == mes and m.ano == ano %}btn-ghost--active{% endif %}"
+           style="{% if m.mes == mes and m.ano == ano %}border-color:var(--brand-2);color:var(--brand-2);{% endif %}padding:7px 12px;font-size:12px;">
+            {{ m.nome }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+{% if total_gasto > 0 %}
+
+<!-- MÉTRICAS PRINCIPAIS -->
+<div class="metrics-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:28px;">
+    <div class="metric-card">
+        <div class="metric-icon">💸</div>
+        <div class="metric-body">
+            <span class="metric-label">Total Gasto</span>
+            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_gasto) }}€</span>
+            {% if variacao != 0 %}
+            <span class="metric-trend {% if variacao > 0 %}trend-bad{% else %}trend-ok{% endif %}">
+                {% if variacao > 0 %}▲{% else %}▼{% endif %} {{ variacao|abs|round(1) }}% vs mês anterior
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">🗑️</div>
+        <div class="metric-body">
+            <span class="metric-label">Estimativa Desperdício</span>
+            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ '%.2f'|format(desperdicado) }}€</span>
+            <span class="metric-trend trend-bad">{{ '%.0f'|format(desperdicado / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">✅</div>
+        <div class="metric-body">
+            <span class="metric-label">Boas Decisões</span>
+            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ '%.2f'|format(boas_decisoes) }}€</span>
+            <span class="metric-trend trend-ok">{{ '%.0f'|format(boas_decisoes / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+</div>
+
+<!-- FRASE DE IMPACTO -->
+<div style="
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-left:3px solid var(--brand-2);
+    border-radius:0 12px 12px 0;
+    padding:18px 22px;
+    margin-bottom:28px;
+    font-size:15px;
+    line-height:1.7;
+    color:var(--text);
+    font-style:italic;
+">
+    "{{ roast_phrase }}"
+</div>
+
+<!-- GRID: BARRAS + GRÁFICO -->
+<div class="dashboard-grid" style="margin-bottom:28px;">
+
+    <!-- Barras por categoria -->
+    <div class="card">
+        <div class="card-header"><h3>Gastos por Categoria</h3></div>
+        <div class="card-body">
+            {% for b in barras %}
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
+                    <span style="font-size:12px;color:var(--text-muted);">{{ b.categoria }}</span>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span style="font-size:11px;color:var(--red);font-weight:600;">
+                            ~{{ b.desperdicado }}€ desperdiçado
+                        </span>
+                        <span style="font-size:13px;font-weight:700;color:var(--text);">{{ b.valor }}€</span>
+                    </div>
+                </div>
+                <div style="height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+                    <div style="
+                        width:{{ b.percentagem }}%;
+                        height:100%;
+                        border-radius:4px;
+                        background:{% if b.regret_pct > 35 %}var(--red)
+                                   {% elif b.regret_pct > 20 %}var(--yellow)
+                                   {% else %}var(--green){% endif %};
+                        transition:width 0.8s ease;
+                    "></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Gráfico donut -->
+    <div class="card">
+        <div class="card-header"><h3>Distribuição</h3></div>
+        <div class="card-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;">
+            <canvas id="donutChart" style="max-width:220px;max-height:220px;"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- TOP LOJAS -->
+{% if top_lojas %}
+<div class="card" style="margin-bottom:28px;">
+    <div class="card-header"><h3>Top Lojas</h3></div>
+    <div class="card-body" style="padding:0;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Loja</th>
+                    <th style="text-align:right;">Total Gasto</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in top_lojas %}
+                <tr>
+                    <td style="color:var(--text-sub);font-weight:700;">{{ loop.index }}</td>
+                    <td style="font-weight:600;">{{ l.loja }}</td>
+                    <td style="text-align:right;color:var(--brand-2);font-weight:700;">{{ l.valor }}€</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<!-- EMPTY STATE -->
+<div class="empty-card">
+    <span>📊</span>
+    <p>Sem faturas registadas em {{ mes_nome }} {{ ano }}.<br>
+       Carrega as tuas faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+{% if barras %}
+const ctx = document.getElementById('donutChart');
+if (ctx) {
+    const labels = {{ barras | map(attribute='categoria') | list | tojson }};
+    const values = {{ barras | map(attribute='valor') | list | tojson }};
+    const colors = ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#FF6B35'];
+
+    new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors.slice(0, labels.length),
+                borderWidth: 0,
+                hoverOffset: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: {
+                legend: {
+                    display: false,
+                },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ` ${ctx.label}: ${ctx.parsed.toFixed(2)}€`
+                    }
+                }
+            }
+        }
+    });
+}
+{% endif %}
+</script>
+{% endblock %}

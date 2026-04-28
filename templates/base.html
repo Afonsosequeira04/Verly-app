@@ -37,6 +37,40 @@
             </li>
         </ul>
 
+        <span class="sidenav-section">Ferramentas IA</span>
+        <ul class="sidenav-menu">
+            <li>
+                <a href="{{ url_for('scoring.analisar') }}" class="nav-link {% if request.endpoint and 'scoring' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🧠</span>
+                    <span>Score de Compras</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('subscriptions.subscriptions') }}" class="nav-link {% if request.endpoint and 'subscriptions' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">💸</span>
+                    <span>Leak Detector</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('impulse.impulse') }}" class="nav-link {% if request.endpoint and 'impulse' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🛑</span>
+                    <span>Impulse Control</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('reports.relatorio') }}" class="nav-link {% if request.endpoint and 'reports' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">📊</span>
+                    <span>Relatório Mensal</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('personality.personality') }}" class="nav-link {% if request.endpoint and 'personality' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🔥</span>
+                    <span>Personalidade</span>
+                </a>
+            </li>
+        </ul>
+
         <span class="sidenav-section">Conta</span>
         <ul class="sidenav-menu">
             <li>

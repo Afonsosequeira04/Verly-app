@@ -48,11 +48,17 @@ app/chat.py
 app/dashboard.py
 app/exportar.py
 app/faturas.py
+app/impulse.py
 app/models.py
 app/perfil.py
+app/personality.py
+app/reports.py
+app/scoring.py
+app/subscriptions.py
 dados_utilizadores/1/fatura_exemplo.pdf
 dados_utilizadores/user_demo/fatura_exemplo.pdf
 dados_utilizadores/user_demo/transferir.png
+migration_personalidade.py
 NOTAS.md
 README.md
 requirements.txt
@@ -76,11 +82,1475 @@ templates/base.html
 templates/chat.html
 templates/dashboard.html
 templates/faturas.html
+templates/impulse.html
 templates/perfil.html
+templates/personality.html
+templates/relatorio.html
+templates/subscriptions.html
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/impulse.py">
+"""
+impulse.py — Impulse Control Mode
+Analisa uma compra antes de acontecer e devolve análise racional + alternativa + sugestão de espera.
+Usa o LLM (Groq via LlamaIndex) que já existe no projeto.
+"""
+from flask import Blueprint, request, jsonify, render_template
+from flask_login import login_required, current_user
+
+impulse_bp = Blueprint('impulse', __name__)
+
+
+# Prompts por personalidade — injetados no system prompt do LLM
+SYSTEM_PROMPTS = {
+    'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
+Quando o utilizador quer comprar algo, dizes-lhe a verdade nua e crua.
+Usa linguagem directa, às vezes agressiva mas sempre factual.
+Nunca sejas gentil desnecessariamente. Sem rodeios.
+Formato da resposta (em JSON):
+{
+  "analise": "análise racional mas cortante (2-3 frases)",
+  "alternativa": "alternativa concreta ou sugestão de poupar (1-2 frases)",
+  "aguardar": true ou false,
+  "veredicto": "frase final de impacto (máx 15 palavras)"
+}""",
+
+    'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
+Quando o utilizador quer comprar algo, respondes com ironia refinada mas construtiva.
+Usa sarcasmo inteligente, não grosseria. Sê engraçado mas útil.
+Formato da resposta (em JSON):
+{
+  "analise": "análise com tom sarcástico mas verdadeiro (2-3 frases)",
+  "alternativa": "alternativa com ironia leve (1-2 frases)",
+  "aguardar": true ou false,
+  "veredicto": "frase sarcástica final (máx 15 palavras)"
+}""",
+
+    'calm': """És a Verly, uma coach financeira empática e construtiva.
+Quando o utilizador quer comprar algo, ajudas-o a tomar uma decisão consciente.
+Sê gentil, honesto e encorajador. Foca-te no bem-estar financeiro a longo prazo.
+Formato da resposta (em JSON):
+{
+  "analise": "análise empática e construtiva (2-3 frases)",
+  "alternativa": "sugestão alternativa gentil (1-2 frases)",
+  "aguardar": true ou false,
+  "veredicto": "mensagem encorajadora e honesta (máx 15 palavras)"
+}""",
+
+    'pro': """És a Verly, um CFO pessoal altamente analítico.
+Quando o utilizador quer comprar algo, fazes uma análise custo-benefício objectiva.
+Usa linguagem financeira, dados e lógica. Zero emoções, máximo rigor.
+Formato da resposta (em JSON):
+{
+  "analise": "análise de custo-benefício e ROI (2-3 frases)",
+  "alternativa": "alternativa baseada em dados ou redireccionamento de capital (1-2 frases)",
+  "aguardar": true ou false,
+  "veredicto": "recomendação final objectiva (máx 15 palavras)"
+}""",
+}
+
+
+def _call_llm(system_prompt: str, user_message: str) -> dict:
+    """
+    Chama o LLM usando a mesma infra do projecto (Groq via LlamaIndex Settings).
+    Devolve dict com analise, alternativa, aguardar, veredicto.
+    """
+    import json
+    try:
+        from llama_index.core import Settings
+        from llama_index.llms.groq import Groq
+
+        llm = Settings.llm
+
+        full_prompt = f"{system_prompt}\n\nO utilizador quer comprar: {user_message}\n\nResponde APENAS com o JSON, sem markdown, sem texto extra."
+        response = llm.complete(full_prompt)
+        text = response.text.strip()
+
+        # Limpar possíveis backticks do modelo
+        if text.startswith('```'):
+            text = text.split('```')[1]
+            if text.startswith('json'):
+                text = text[4:]
+        text = text.strip().rstrip('`')
+
+        parsed = json.loads(text)
+        return {
+            'analise':    parsed.get('analise', ''),
+            'alternativa': parsed.get('alternativa', ''),
+            'aguardar':   parsed.get('aguardar', True),
+            'veredicto':  parsed.get('veredicto', ''),
+            'error':      False,
+        }
+
+    except Exception as e:
+        # Fallback se o LLM falhar
+        return {
+            'analise':    f'Antes de comprares, pensa: precisas mesmo disto agora?',
+            'alternativa': 'Considera guardar o dinheiro por 48h e reavalia.',
+            'aguardar':   True,
+            'veredicto':  'Espera 48h. Se ainda quiseres, então compra.',
+            'error':      True,
+            'error_msg':  str(e),
+        }
+
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+@impulse_bp.route('/impulse')
+@login_required
+def impulse():
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    return render_template('impulse.html', personalidade_atual=personalidade)
+
+
+@impulse_bp.route('/impulse/analyze', methods=['POST'])
+@login_required
+def analyze():
+    """
+    POST /impulse/analyze
+    Body JSON: { produto: str, personalidade: str }
+    Devolve análise racional + alternativa + veredicto.
+    """
+    data = request.json or {}
+    produto      = (data.get('produto') or '').strip()
+    personalidade = data.get('personalidade', 'calm')
+
+    if not produto:
+        return jsonify({'success': False, 'message': 'Descreve o que queres comprar.'})
+
+    if personalidade not in SYSTEM_PROMPTS:
+        personalidade = 'calm'
+
+    system = SYSTEM_PROMPTS[personalidade]
+    resultado = _call_llm(system, produto)
+
+    return jsonify({
+        'success':     True,
+        'personalidade': personalidade,
+        'produto':     produto,
+        'resultado':   resultado,
+    })
+</file>
+
+<file path="app/personality.py">
+"""
+personality.py — Roast / Personality Engine
+Gere a preferência de personalidade do utilizador (Savage / Sarcástico / Calmo / Pro).
+Expõe route para guardar preferência + preview das frases por modo.
+"""
+from flask import Blueprint, request, jsonify, render_template, flash, redirect, url_for
+from flask_login import login_required, current_user
+from app import db
+
+personality_bp = Blueprint('personality', __name__)
+
+PERSONALIDADES = {
+    'savage': {
+        'nome':     'Savage',
+        'emoji':    '🔥',
+        'descricao': 'Sem filtros. Verdade nua e crua. A Verly não te vai poupar.',
+        'preview':  'Gastaste 243€ em lixo financeiro este mês. Parabéns pela consistência.',
+        'cor':      '#FF4757',
+    },
+    'sarcastic': {
+        'nome':     'Sarcástico',
+        'emoji':    '😏',
+        'descricao': 'Ironia refinada. Construtivo, mas com estilo.',
+        'preview':  'Ah, só 243€ desperdiçados. Modesto para os teus padrões habituais.',
+        'cor':      '#FF6B35',
+    },
+    'calm': {
+        'nome':     'Calmo',
+        'emoji':    '🧘',
+        'descricao': 'Coach financeiro gentil. Honesto sem ser brutal.',
+        'preview':  'Identificámos 243€ de oportunidades de poupança este mês. Vamos melhorar juntos.',
+        'cor':      '#00D68F',
+    },
+    'pro': {
+        'nome':     'Profissional',
+        'emoji':    '🧑‍⚖️',
+        'descricao': 'CFO pessoal. Dados, análise, zero drama.',
+        'preview':  'Índice de desperdício: 29.1% (243€). Acção requerida: optimizar 2 categorias.',
+        'cor':      '#7B61FF',
+    },
+}
+
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+@personality_bp.route('/personality')
+@login_required
+def personality():
+    atual = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    return render_template('personality.html',
+        personalidades=PERSONALIDADES,
+        atual=atual,
+    )
+
+
+@personality_bp.route('/personality/set', methods=['POST'])
+@login_required
+def set_personality():
+    """
+    POST /personality/set
+    Body JSON ou form: { personalidade: 'savage'|'sarcastic'|'calm'|'pro' }
+    """
+    data = request.json or request.form
+    nova = data.get('personalidade', 'calm')
+
+    if nova not in PERSONALIDADES:
+        if request.is_json:
+            return jsonify({'success': False, 'message': 'Personalidade inválida.'})
+        flash('Personalidade inválida.', 'error')
+        return redirect(url_for('personality.personality'))
+
+    # Guardar na BD (requer coluna personalidade na tabela users — ver migration abaixo)
+    if hasattr(current_user, 'personalidade'):
+        current_user.personalidade = nova
+        db.session.commit()
+
+    if request.is_json:
+        return jsonify({
+            'success':      True,
+            'personalidade': nova,
+            'info':         PERSONALIDADES[nova],
+        })
+
+    flash(f'Personalidade alterada para {PERSONALIDADES[nova]["nome"]}.', 'success')
+    return redirect(url_for('personality.personality'))
+
+
+@personality_bp.route('/personality/preview/<string:modo>')
+@login_required
+def preview(modo: str):
+    """GET /personality/preview/<modo> — devolve o preview de um modo."""
+    if modo not in PERSONALIDADES:
+        return jsonify({'success': False})
+    return jsonify({
+        'success': True,
+        'preview': PERSONALIDADES[modo]['preview'],
+        'info':    PERSONALIDADES[modo],
+    })
+</file>
+
+<file path="app/reports.py">
+"""
+reports.py — Financial Damage Report
+Gera o relatório mensal: gasto total, desperdício estimado, categorias de arrependimento,
+e a frase de impacto personalizada por personalidade.
+"""
+import json
+from datetime import datetime
+from collections import defaultdict
+from flask import Blueprint, render_template, request, jsonify
+from flask_login import login_required, current_user
+from app.models import Fatura
+
+reports_bp = Blueprint('reports', __name__)
+
+
+# Categorias com alto índice de arrependimento histórico
+HIGH_REGRET_CATEGORIES = {'Entretenimento', 'Vestuário', 'Outros'}
+# Categorias consideradas essenciais (baixo arrependimento)
+LOW_REGRET_CATEGORIES  = {'Alimentação', 'Saúde & Beleza', 'Educação', 'Transportes'}
+
+
+def _regret_factor(categoria: str) -> float:
+    """Percentagem estimada de desperdício por categoria."""
+    factors = {
+        'Tecnologia':       0.25,
+        'Entretenimento':   0.45,
+        'Vestuário':        0.35,
+        'Casa & Decoração': 0.20,
+        'Saúde & Beleza':   0.15,
+        'Desporto':         0.20,
+        'Alimentação':      0.05,
+        'Transportes':      0.10,
+        'Educação':         0.05,
+        'Outros':           0.40,
+    }
+    return factors.get(categoria, 0.30)
+
+
+def _roast_phrase(total_gasto: float, desperdicado: float, top_cat: str, personalidade: str) -> str:
+    poupanca = round(desperdicado)
+    frases = {
+        'savage': [
+            f"Gastaste {total_gasto:.0f}€. {desperdicado:.0f}€ foram literalmente para o lixo. Parabéns pela consistência.",
+            f"O teu histórico financeiro é uma obra de ficção científica. {poupanca}€ desperdiçados este mês.",
+            f"'{top_cat}' é a tua categoria favorita de combustão de dinheiro. Impressionante.",
+        ],
+        'sarcastic': [
+            f"Ah, só {desperdicado:.0f}€ desperdiçados. Modesto para os teus padrões.",
+            f"Podias ter poupado {poupanca}€. Mas escolheste o caos. Claro.",
+            f"'{top_cat}' levou a melhor. Quem precisava de poupanças mesmo?",
+        ],
+        'calm': [
+            f"Este mês gastaste {total_gasto:.0f}€, dos quais cerca de {desperdicado:.0f}€ podiam ter sido poupados. É um bom ponto de partida para reflexão.",
+            f"Identificámos {poupanca}€ de oportunidades de poupança. Pequenas mudanças fazem grande diferença.",
+            f"A categoria '{top_cat}' tem espaço para optimização. Vamos trabalhar nisso juntos.",
+        ],
+        'pro': [
+            f"Análise mensal: {total_gasto:.0f}€ gastos. Índice de desperdício: {(desperdicado/total_gasto*100):.1f}% ({desperdicado:.0f}€). Acção requerida.",
+            f"Capital desperdiçado: {desperdicado:.0f}€/mês = {desperdicado*12:.0f}€/ano. ROI da optimização: alto.",
+            f"Categoria crítica: '{top_cat}'. Recomendação: reduzir 30% nesta área. Potencial de poupança: {poupanca*0.3:.0f}€/mês.",
+        ],
+    }
+    import random
+    p = personalidade if personalidade in frases else 'calm'
+    # Escolher frase baseada no total (determinístico para o mesmo mês)
+    idx = int(total_gasto) % len(frases[p])
+    return frases[p][idx]
+
+
+def gerar_relatorio(user_id: int, mes: int = None, ano: int = None) -> dict:
+    """
+    Gera o relatório financeiro mensal para o utilizador.
+    Se mes/ano não forem fornecidos, usa o mês corrente.
+    """
+    hoje = datetime.utcnow()
+    mes = mes or hoje.month
+    ano = ano or hoje.year
+
+    # Filtrar faturas do mês
+    faturas_mes = [
+        f for f in Fatura.query.filter_by(user_id=user_id).all()
+        if f.data_upload and f.data_upload.month == mes and f.data_upload.year == ano
+    ]
+
+    # Faturas do mês anterior para comparação
+    mes_ant = mes - 1 if mes > 1 else 12
+    ano_ant  = ano if mes > 1 else ano - 1
+    faturas_ant = [
+        f for f in Fatura.query.filter_by(user_id=user_id).all()
+        if f.data_upload and f.data_upload.month == mes_ant and f.data_upload.year == ano_ant
+    ]
+
+    # Totais
+    total_gasto = sum(f.total or 0 for f in faturas_mes)
+    total_ant   = sum(f.total or 0 for f in faturas_ant)
+
+    # Por categoria
+    por_categoria = defaultdict(float)
+    for f in faturas_mes:
+        cat = f.categoria or 'Outros'
+        por_categoria[cat] += f.total or 0
+
+    # Desperdício estimado por categoria
+    desperdicado = sum(
+        valor * _regret_factor(cat)
+        for cat, valor in por_categoria.items()
+    )
+    boas_decisoes = total_gasto - desperdicado
+
+    # Top categoria de gasto
+    top_cat = max(por_categoria, key=por_categoria.get) if por_categoria else 'Outros'
+
+    # Variação vs mês anterior
+    variacao = ((total_gasto - total_ant) / total_ant * 100) if total_ant > 0 else 0
+
+    # Barras (sorted por valor, top 6)
+    categorias_sorted = sorted(por_categoria.items(), key=lambda x: x[1], reverse=True)[:6]
+    max_val = categorias_sorted[0][1] if categorias_sorted else 1
+
+    barras = []
+    for cat, val in categorias_sorted:
+        barras.append({
+            'categoria':  cat,
+            'valor':      round(val, 2),
+            'percentagem': round(val / max_val * 100),
+            'desperdicado': round(val * _regret_factor(cat), 2),
+            'regret_pct':  int(_regret_factor(cat) * 100),
+        })
+
+    # Top lojas
+    por_loja = defaultdict(float)
+    for f in faturas_mes:
+        if f.loja:
+            por_loja[f.loja] += f.total or 0
+    top_lojas = sorted(por_loja.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Número de faturas por categoria de arrependimento
+    alto_arr = sum(v for c, v in por_categoria.items() if c in HIGH_REGRET_CATEGORIES)
+
+    return {
+        'mes':              mes,
+        'ano':              ano,
+        'mes_nome':         _nome_mes(mes),
+        'total_gasto':      round(total_gasto, 2),
+        'total_ant':        round(total_ant, 2),
+        'variacao':         round(variacao, 1),
+        'desperdicado':     round(desperdicado, 2),
+        'boas_decisoes':    round(boas_decisoes, 2),
+        'num_faturas':      len(faturas_mes),
+        'top_cat':          top_cat,
+        'alto_arrependimento': round(alto_arr, 2),
+        'barras':           barras,
+        'top_lojas':        [{'loja': l, 'valor': round(v, 2)} for l, v in top_lojas],
+        'roast_phrase':     '',   # preenchido com personalidade no route
+    }
+
+
+def _nome_mes(mes: int) -> str:
+    nomes = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+             'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+    return nomes[mes] if 1 <= mes <= 12 else str(mes)
+
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+@reports_bp.route('/relatorio')
+@login_required
+def relatorio():
+    mes = request.args.get('mes', type=int)
+    ano = request.args.get('ano', type=int)
+    data = gerar_relatorio(current_user.id, mes, ano)
+
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    if data['total_gasto'] > 0:
+        data['roast_phrase'] = _roast_phrase(
+            data['total_gasto'], data['desperdicado'],
+            data['top_cat'], personalidade
+        )
+    else:
+        data['roast_phrase'] = 'Sem dados este mês. Carrega as tuas faturas!'
+
+    # Meses disponíveis (para navegação)
+    hoje = datetime.utcnow()
+    meses_nav = []
+    for i in range(6):
+        m = hoje.month - i
+        a = hoje.year
+        if m <= 0:
+            m += 12
+            a -= 1
+        meses_nav.append({'mes': m, 'ano': a, 'nome': _nome_mes(m)})
+    data['meses_nav'] = meses_nav
+
+    return render_template('relatorio.html', **data)
+
+
+@reports_bp.route('/relatorio/api')
+@login_required
+def relatorio_api():
+    mes = request.args.get('mes', type=int)
+    ano = request.args.get('ano', type=int)
+    data = gerar_relatorio(current_user.id, mes, ano)
+
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    data['roast_phrase'] = _roast_phrase(
+        data['total_gasto'], data['desperdicado'],
+        data['top_cat'], personalidade
+    ) if data['total_gasto'] > 0 else 'Sem dados este mês.'
+
+    return jsonify({'success': True, **data})
+</file>
+
+<file path="app/scoring.py">
+"""
+scoring.py — "Was It Worth It?" AI Scoring
+Devolve um score 0-100 por compra com label e justificação.
+"""
+import json
+from flask import Blueprint, request, jsonify
+from flask_login import login_required, current_user
+from app.models import Fatura
+from app import db
+
+scoring_bp = Blueprint('scoring', __name__)
+
+# Pesos por categoria (quanto a categoria "justifica" o gasto)
+CATEGORY_WEIGHTS = {
+    'Alimentação':      1.15,
+    'Saúde & Beleza':   1.10,
+    'Educação':         1.10,
+    'Desporto':         1.05,
+    'Casa & Decoração': 1.00,
+    'Vestuário':        0.95,
+    'Tecnologia':       0.90,
+    'Entretenimento':   0.85,
+    'Transportes':      1.00,
+    'Outros':           0.90,
+}
+
+# Penalidade por preço (compras maiores = mais escrutínio)
+def _price_penalty(price: float) -> float:
+    if price > 1000: return -20
+    if price > 500:  return -12
+    if price > 200:  return -6
+    if price > 100:  return -3
+    return 0
+
+# Score base por frequência de uso declarada
+USAGE_BASE = {
+    'daily':   80,
+    'weekly':  65,
+    'monthly': 45,
+    'rarely':  22,
+    'never':   5,
+}
+
+USAGE_LABELS = {
+    'daily':   'Uso diário',
+    'weekly':  'Uso regular',
+    'monthly': 'Uso ocasional',
+    'rarely':  'Raramente usado',
+    'never':   'Nunca utilizado',
+}
+
+def _score_label(score: int, personalidade: str) -> dict:
+    """Devolve label, cor CSS e mensagem baseados no score e personalidade do user."""
+
+    personas = {
+        'savage': {
+            (80, 101): ('Decisão Sólida',   'green',  'Raro. Até tu fizeste bem desta vez.'),
+            (60,  80): ('Aceitável',         'brand2', 'Passável. Mas não te gabares.'),
+            (40,  60): ('Duvidoso',          'yellow', 'Sabes que não precisavas disto.'),
+            (20,  40): ('Regret Incoming',   'orange', 'O teu futuro eu vai mandar-te mensagens de ódio.'),
+            (0,   20): ('Dinheiro Ardido',   'red',    'Parabéns. Transformaste euros em remorso puro.'),
+        },
+        'sarcastic': {
+            (80, 101): ('Uau, bem feito',    'green',  'Quem diria. Uma decisão financeira adulta.'),
+            (60,  80): ('Mais ou menos',     'brand2', 'Podias ter poupado, mas pronto.'),
+            (40,  60): ('Interessante...',   'yellow', 'Tenho a certeza que tinhas mesmo de comprar isto.'),
+            (20,  40): ('Boa sorte aí',      'orange', 'Espero que o remorso venha com brinde.'),
+            (0,   20): ('Magistral',         'red',    'Ninguém te bate nisto. Literalmente ninguém.'),
+        },
+        'calm': {
+            (80, 101): ('Boa decisão',       'green',  'Esta compra alinha com os teus objetivos. Bem feito.'),
+            (60,  80): ('Razoável',          'brand2', 'Há melhores opções, mas não foi má escolha.'),
+            (40,  60): ('Reconsiderar',      'yellow', 'Vale a pena refletir se isto era mesmo necessário.'),
+            (20,  40): ('Risco elevado',     'orange', 'Esta compra pode gerar arrependimento. Aprende para a próxima.'),
+            (0,   20): ('Evitar repetir',    'red',    'Esta decisão não ajuda os teus objetivos financeiros.'),
+        },
+        'pro': {
+            (80, 101): ('ROI Positivo',      'green',  'Investimento justificado. Custo-benefício favorável.'),
+            (60,  80): ('ROI Neutro',        'brand2', 'Dentro do aceitável. Monitorizar uso.'),
+            (40,  60): ('ROI Baixo',         'yellow', 'Retorno questionável. Rever prioridades.'),
+            (20,  40): ('Capital em Risco',  'orange', 'Desperdício provável. Ajustar comportamento.'),
+            (0,   20): ('Prejuízo Total',    'red',    'Gasto sem retorno mensurável. Reclassificar como custo de oportunidade perdida.'),
+        },
+    }
+
+    p = personalidade if personalidade in personas else 'calm'
+    for (low, high), (label, color, msg) in personas[p].items():
+        if low <= score < high:
+            return {'label': label, 'color': color, 'message': msg}
+    return {'label': '—', 'color': 'muted', 'message': ''}
+
+
+def calcular_score(categoria: str, preco: float, uso: str, personalidade: str = 'calm') -> dict:
+    """
+    Calcula o score de arrependimento/valia de uma compra.
+    Retorna dict com score, label, color, message, chips.
+    """
+    base = USAGE_BASE.get(uso, 40)
+    weight = CATEGORY_WEIGHTS.get(categoria, 0.90)
+    penalty = _price_penalty(preco)
+
+    raw = base * weight + penalty
+    score = int(max(0, min(100, raw)))
+
+    label_info = _score_label(score, personalidade)
+
+    chips = []
+    chips.append({'text': USAGE_LABELS.get(uso, uso), 'type': 'good' if score >= 60 else 'bad'})
+    chips.append({'text': f'{preco:.2f}€', 'type': 'bad' if preco > 300 else 'mid'})
+    chips.append({'text': categoria, 'type': 'mid'})
+    if score < 40:
+        chips.append({'text': 'Alto arrependimento', 'type': 'bad'})
+    elif score >= 75:
+        chips.append({'text': 'Compra validada', 'type': 'good'})
+
+    return {
+        'score': score,
+        'label': label_info['label'],
+        'color': label_info['color'],
+        'message': label_info['message'],
+        'chips': chips,
+    }
+
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+@scoring_bp.route('/scoring/analisar', methods=['POST'])
+@login_required
+def analisar():
+    """
+    POST /scoring/analisar
+    Body JSON: { item, preco, categoria, uso }
+    Devolve score + label + chips.
+    """
+    data = request.json or {}
+    item      = data.get('item', 'Item').strip() or 'Item'
+    preco     = float(data.get('preco') or 0)
+    categoria = data.get('categoria', 'Outros')
+    uso       = data.get('uso', 'monthly')
+
+    # Personalidade guardada no perfil do user (adicionada à migration)
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+
+    resultado = calcular_score(categoria, preco, uso, personalidade)
+    resultado['item'] = item
+
+    return jsonify({'success': True, 'resultado': resultado})
+
+
+@scoring_bp.route('/scoring/fatura/<int:fatura_id>', methods=['GET'])
+@login_required
+def score_fatura(fatura_id):
+    """
+    GET /scoring/fatura/<id>
+    Score automático de uma fatura já guardada (usa uso='monthly' por defeito
+    pois não temos esse dado histórico).
+    """
+    fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
+    if not fatura:
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'})
+
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    resultado = calcular_score(
+        categoria=fatura.categoria or 'Outros',
+        preco=fatura.total or 0,
+        uso='monthly',
+        personalidade=personalidade,
+    )
+    resultado['item'] = fatura.loja or fatura.nome_ficheiro
+
+    return jsonify({'success': True, 'resultado': resultado})
+
+    @scoring_bp.route('/scoring')
+@login_required
+def analisar():
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    return render_template('scoring.html', personalidade=personalidade)
+</file>
+
+<file path="app/subscriptions.py">
+"""
+subscriptions.py — Subscription Leak Detector
+Deteta subscrições repetidas nas faturas do user e calcula desperdício mensal.
+"""
+import json
+import re
+from collections import defaultdict
+from datetime import datetime, timedelta
+from flask import Blueprint, render_template, jsonify
+from flask_login import login_required, current_user
+from app.models import Fatura
+
+subscriptions_bp = Blueprint('subscriptions', __name__)
+
+# Palavras-chave que indicam subscrição/serviço recorrente
+SUBSCRIPTION_KEYWORDS = [
+    'netflix', 'spotify', 'amazon prime', 'disney', 'hbo', 'apple music',
+    'youtube premium', 'google one', 'icloud', 'dropbox', 'adobe',
+    'microsoft 365', 'office 365', 'linkedin', 'canva', 'notion',
+    'slack', 'zoom', 'gym', 'ginásio', 'fitness', 'health club',
+    'nespresso', 'hello fresh', 'deliveroo', 'uber one',
+    'tvtel', 'nos', 'meo', 'vodafone', 'deco', 'seguro',
+    'antivirus', 'vpn', 'cloudflare', 'github', 'figma',
+    'duolingo', 'coursera', 'udemy',
+]
+
+# Emojis por categoria de subscrição
+SUB_ICONS = {
+    'streaming':    '📺',
+    'musica':       '🎵',
+    'cloud':        '☁️',
+    'fitness':      '💪',
+    'software':     '💻',
+    'alimentacao':  '🍱',
+    'telco':        '📡',
+    'educacao':     '📚',
+    'outro':        '📦',
+}
+
+def _classify_sub(name: str) -> str:
+    n = name.lower()
+    if any(k in n for k in ['netflix','disney','hbo','youtube','tvtel']): return 'streaming'
+    if any(k in n for k in ['spotify','apple music','deezer']):           return 'musica'
+    if any(k in n for k in ['icloud','google one','dropbox','onedrive']): return 'cloud'
+    if any(k in n for k in ['gym','ginásio','fitness','health']):          return 'fitness'
+    if any(k in n for k in ['adobe','microsoft','office','figma','canva','antivirus','vpn','github']): return 'software'
+    if any(k in n for k in ['hello fresh','nespresso','deliveroo','uber one']): return 'alimentacao'
+    if any(k in n for k in ['nos','meo','vodafone','tvtel','nos ']):       return 'telco'
+    if any(k in n for k in ['coursera','udemy','duolingo','linkedin']):    return 'educacao'
+    return 'outro'
+
+
+def _is_subscription(loja: str, items_json: str) -> bool:
+    text = (loja or '').lower() + ' ' + (items_json or '').lower()
+    return any(kw in text for kw in SUBSCRIPTION_KEYWORDS)
+
+
+def _days_since_last_use(faturas_loja: list) -> int:
+    """Calcula quantos dias desde a fatura mais recente desta loja."""
+    datas = []
+    for f in faturas_loja:
+        if f.data_upload:
+            datas.append(f.data_upload)
+    if not datas:
+        return 999
+    return (datetime.utcnow() - max(datas)).days
+
+
+def _risk_level(meses_pago: int, dias_sem_uso: int, total_pago: float) -> str:
+    """Determina o nível de risco da subscrição."""
+    if dias_sem_uso > 60 or (meses_pago >= 3 and dias_sem_uso > 30):
+        return 'danger'   # Cancelar já
+    if dias_sem_uso > 30 or meses_pago >= 6:
+        return 'warning'  # Suspeito
+    return 'ok'           # Vale a pena
+
+
+def detect_subscriptions(user_id: int) -> dict:
+    """
+    Analisa as faturas do user e devolve lista de subscrições detetadas
+    + resumo de desperdício.
+    """
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    # Agrupar faturas por loja
+    por_loja = defaultdict(list)
+    for f in faturas:
+        if f.loja:
+            por_loja[f.loja.strip()].append(f)
+
+    subscriptions = []
+    total_mensal_desperdicado = 0.0
+    total_mensal_ok = 0.0
+
+    for loja, fat_list in por_loja.items():
+        # Verificar se parece subscrição
+        items_json = fat_list[0].items if fat_list else ''
+        if not _is_subscription(loja, items_json):
+            continue
+
+        meses_pago = len(fat_list)
+        total_pago = sum(f.total or 0 for f in fat_list)
+        preco_mensal = total_pago / meses_pago if meses_pago > 0 else 0
+        dias_sem_uso = _days_since_last_use(fat_list)
+        risk = _risk_level(meses_pago, dias_sem_uso, total_pago)
+        categoria_sub = _classify_sub(loja)
+
+        sub = {
+            'nome':           loja,
+            'icone':          SUB_ICONS.get(categoria_sub, '📦'),
+            'categoria':      categoria_sub,
+            'meses_pago':     meses_pago,
+            'preco_mensal':   round(preco_mensal, 2),
+            'total_pago':     round(total_pago, 2),
+            'dias_sem_uso':   dias_sem_uso,
+            'risk':           risk,
+            'risk_label':     {'danger': 'Cancelar já', 'warning': 'Suspeito', 'ok': 'Vale a pena'}[risk],
+            'alerta':         _build_alert(loja, meses_pago, dias_sem_uso, risk),
+        }
+        subscriptions.append(sub)
+
+        if risk == 'danger':
+            total_mensal_desperdicado += preco_mensal
+        elif risk == 'warning':
+            total_mensal_desperdicado += preco_mensal * 0.5
+        else:
+            total_mensal_ok += preco_mensal
+
+    # Ordenar: danger primeiro, depois warning, depois ok
+    order = {'danger': 0, 'warning': 1, 'ok': 2}
+    subscriptions.sort(key=lambda s: order[s['risk']])
+
+    return {
+        'subscriptions':              subscriptions,
+        'total_mensal_desperdicado':  round(total_mensal_desperdicado, 2),
+        'total_mensal_ok':            round(total_mensal_ok, 2),
+        'total_anual_desperdicado':   round(total_mensal_desperdicado * 12, 2),
+        'count_danger':               sum(1 for s in subscriptions if s['risk'] == 'danger'),
+        'count_warning':              sum(1 for s in subscriptions if s['risk'] == 'warning'),
+        'count_ok':                   sum(1 for s in subscriptions if s['risk'] == 'ok'),
+    }
+
+
+def _build_alert(nome: str, meses: int, dias: int, risk: str) -> str:
+    if risk == 'danger' and dias > 60:
+        return f'Estás a pagar isto há {meses} meses sem usar há +{dias} dias'
+    if risk == 'danger':
+        return f'Pagas há {meses} meses — uso muito baixo'
+    if risk == 'warning':
+        return f'Pagas há {meses} meses — último acesso há {dias} dias'
+    return f'Uso regular — {meses} meses activo'
+
+
+# ─── ROUTES ──────────────────────────────────────────────────────────────────
+
+@subscriptions_bp.route('/subscriptions')
+@login_required
+def subscriptions():
+    data = detect_subscriptions(current_user.id)
+    return render_template('subscriptions.html', **data)
+
+
+@subscriptions_bp.route('/subscriptions/api')
+@login_required
+def subscriptions_api():
+    data = detect_subscriptions(current_user.id)
+    return jsonify({'success': True, **data})
+</file>
+
+<file path="migration_personalidade.py">
+"""
+migration_personalidade.py
+Adiciona a coluna `personalidade` à tabela `users`.
+
+Executa UMA VEZ com:
+    python migration_personalidade.py
+
+Ou integra no teu processo de migração (Flask-Migrate, etc.).
+"""
+import sqlite3
+import os
+
+DB_PATH = 'shopping_police.db'
+
+def run():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    # Verificar se a coluna já existe
+    cur.execute("PRAGMA table_info(users)")
+    cols = [row[1] for row in cur.fetchall()]
+
+    if 'personalidade' not in cols:
+        cur.execute("ALTER TABLE users ADD COLUMN personalidade VARCHAR(20) DEFAULT 'calm'")
+        conn.commit()
+        print("✓ Coluna 'personalidade' adicionada à tabela users.")
+    else:
+        print("ℹ Coluna 'personalidade' já existe. Nada a fazer.")
+
+    conn.close()
+
+
+if __name__ == '__main__':
+    run()
+</file>
+
+<file path="templates/impulse.html">
+{% extends 'base.html' %}
+{% block title %}Impulse Control · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">🛑 Impulse Control Mode</h1>
+        <p class="page-sub">Antes de comprar, pergunta à Verly. Ela vai ser honesta.</p>
+    </div>
+</div>
+
+<div style="max-width:680px;">
+
+    <!-- PERSONALIDADE ATUAL -->
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+            <h3>Modo de Resposta</h3>
+            <a href="{{ url_for('personality.personality') }}" class="card-link">Alterar →</a>
+        </div>
+        <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;">
+            {% set modos = [
+                ('savage',   '🔥', 'Savage'),
+                ('sarcastic','😏', 'Sarcástico'),
+                ('calm',     '🧘', 'Calmo'),
+                ('pro',      '🧑‍⚖️', 'Profissional'),
+            ] %}
+            {% for key, emoji, nome in modos %}
+            <button
+                class="pers-pill {% if key == personalidade_atual %}pers-pill--active{% endif %}"
+                data-p="{{ key }}"
+                onclick="selecionarPersonalidade('{{ key }}', this)"
+                style="
+                    padding:8px 16px; border-radius:20px; border:1px solid var(--border);
+                    background:{% if key == personalidade_atual %}rgba(123,97,255,0.12){% else %}var(--surface2){% endif %};
+                    color:{% if key == personalidade_atual %}var(--brand-2){% else %}var(--text-muted){% endif %};
+                    font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
+                    border-color:{% if key == personalidade_atual %}var(--brand-2){% else %}var(--border){% endif %};
+                    transition:all 0.2s;
+                ">
+                {{ emoji }} {{ nome }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- INPUT -->
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><h3>O que queres comprar?</h3></div>
+        <div class="card-body">
+            <textarea
+                id="impulseInput"
+                placeholder="Ex: Adidas Samba 120€ / iPhone 16 Pro 1299€ / Novo sofá Ikea 800€ ..."
+                rows="3"
+                style="
+                    width:100%; background:var(--surface2); border:1px solid var(--border);
+                    border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
+                    font-size:14px; padding:12px 16px; resize:none; outline:none;
+                    transition:border-color 0.2s; line-height:1.5;
+                "
+                onfocus="this.style.borderColor='var(--brand)'"
+                onblur="this.style.borderColor='var(--border)'"
+            ></textarea>
+            <button class="btn-primary" style="margin-top:12px;" onclick="analisarImpulso()">
+                Analisar antes de comprar →
+            </button>
+        </div>
+    </div>
+
+    <!-- RESULTADO -->
+    <div id="impulseResult" style="display:none;">
+
+        <!-- Loading -->
+        <div id="impulseLoading" class="card" style="margin-bottom:20px;display:none;">
+            <div class="card-body" style="text-align:center;padding:32px;color:var(--text-muted);">
+                <div style="font-size:32px;margin-bottom:12px;">🤔</div>
+                <div style="font-size:14px;">A Verly está a analisar...</div>
+            </div>
+        </div>
+
+        <!-- Conteúdo -->
+        <div id="impulseContent">
+            <div class="card" style="margin-bottom:12px;">
+                <div class="card-header"><h3>🧠 Análise Racional</h3></div>
+                <div class="card-body">
+                    <p id="resAnalise" style="font-size:14px;line-height:1.7;color:var(--text);"></p>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom:12px;">
+                <div class="card-header"><h3>💡 Alternativa</h3></div>
+                <div class="card-body">
+                    <p id="resAlternativa" style="font-size:14px;line-height:1.7;color:var(--text);"></p>
+                </div>
+            </div>
+
+            <!-- Banner de espera -->
+            <div id="bannerAguardar" style="
+                background:rgba(255,184,0,0.08); border:1px solid rgba(255,184,0,0.2);
+                border-radius:12px; padding:18px 20px; text-align:center; margin-bottom:20px;
+            ">
+                <div style="font-size:28px;margin-bottom:8px;">⏳</div>
+                <div id="resVeredicto" style="font-size:14px;font-weight:600;color:var(--yellow);"></div>
+            </div>
+
+            <div id="bannerOk" style="
+                background:rgba(0,214,143,0.08); border:1px solid rgba(0,214,143,0.2);
+                border-radius:12px; padding:18px 20px; text-align:center; margin-bottom:20px;
+                display:none;
+            ">
+                <div style="font-size:28px;margin-bottom:8px;">✅</div>
+                <div id="resVeredictoOk" style="font-size:14px;font-weight:600;color:var(--green);"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let personalidadeAtual = '{{ personalidade_atual }}';
+
+function selecionarPersonalidade(key, btn) {
+    personalidadeAtual = key;
+    document.querySelectorAll('.pers-pill').forEach(b => {
+        const isActive = b.dataset.p === key;
+        b.style.background  = isActive ? 'rgba(123,97,255,0.12)' : 'var(--surface2)';
+        b.style.color       = isActive ? 'var(--brand-2)' : 'var(--text-muted)';
+        b.style.borderColor = isActive ? 'var(--brand-2)' : 'var(--border)';
+    });
+    // Guardar preferência no perfil via API
+    fetch('/personality/set', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({personalidade: key})
+    });
+}
+
+async function analisarImpulso() {
+    const produto = document.getElementById('impulseInput').value.trim();
+    if (!produto) { alert('Descreve o que queres comprar!'); return; }
+
+    document.getElementById('impulseResult').style.display = 'block';
+    document.getElementById('impulseLoading').style.display = 'block';
+    document.getElementById('impulseContent').style.display = 'none';
+
+    try {
+        const res = await fetch('/impulse/analyze', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ produto, personalidade: personalidadeAtual })
+        });
+        const data = await res.json();
+
+        document.getElementById('impulseLoading').style.display = 'none';
+
+        if (data.success) {
+            const r = data.resultado;
+            document.getElementById('resAnalise').textContent      = r.analise;
+            document.getElementById('resAlternativa').textContent  = r.alternativa;
+
+            if (r.aguardar) {
+                document.getElementById('bannerAguardar').style.display = 'block';
+                document.getElementById('bannerOk').style.display       = 'none';
+                document.getElementById('resVeredicto').textContent     = r.veredicto;
+            } else {
+                document.getElementById('bannerAguardar').style.display = 'none';
+                document.getElementById('bannerOk').style.display       = 'block';
+                document.getElementById('resVeredictoOk').textContent   = r.veredicto;
+            }
+            document.getElementById('impulseContent').style.display = 'block';
+        } else {
+            alert('Erro: ' + (data.message || 'Tenta de novo.'));
+            document.getElementById('impulseResult').style.display = 'none';
+        }
+    } catch(e) {
+        alert('Erro de ligação.');
+        document.getElementById('impulseResult').style.display = 'none';
+    }
+}
+
+// Enter no textarea
+document.getElementById('impulseInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.ctrlKey) analisarImpulso();
+});
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/personality.html">
+{% extends 'base.html' %}
+{% block title %}Personalidade · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">🔥 Roast / Personality Engine</h1>
+        <p class="page-sub">Escolhe como a Verly te fala. Muda quando quiseres.</p>
+    </div>
+</div>
+
+<div style="max-width:680px;">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px;">
+        {% for key, p in personalidades.items() %}
+        <div class="pers-card {% if key == atual %}pers-card--active{% endif %}"
+             data-key="{{ key }}"
+             onclick="selecionarPersonalidade('{{ key }}')"
+             style="
+                background:var(--surface);
+                border:1px solid {% if key == atual %}{{ p.cor }}{% else %}var(--border){% endif %};
+                border-radius:14px; padding:22px; cursor:pointer;
+                transition:all 0.2s; position:relative; overflow:hidden;
+             ">
+
+            {% if key == atual %}
+            <div style="
+                position:absolute; top:12px; right:12px;
+                background:rgba(123,97,255,0.15); color:var(--brand-2);
+                font-size:10px; font-weight:700; padding:3px 9px;
+                border-radius:20px; letter-spacing:0.5px;
+            ">ATIVO</div>
+            {% endif %}
+
+            <div style="font-size:28px;margin-bottom:10px;">{{ p.emoji }}</div>
+            <div style="font-family:'Sora',sans-serif;font-size:16px;font-weight:700;margin-bottom:6px;">{{ p.nome }}</div>
+            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:14px;">{{ p.descricao }}</div>
+
+            <!-- Preview da frase -->
+            <div style="
+                background:var(--surface2); border-radius:8px;
+                padding:12px 14px; border:1px solid var(--border);
+                font-size:12px; line-height:1.6; color:var(--text-muted);
+                font-style:italic;
+            ">
+                "{{ p.preview }}"
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Feedback de confirmação -->
+    <div id="confirmMsg" style="
+        display:none; background:rgba(0,214,143,0.08);
+        border:1px solid rgba(0,214,143,0.2); border-radius:10px;
+        padding:14px 18px; font-size:13px; color:var(--green); font-weight:600;
+        text-align:center;
+    "></div>
+
+    <p style="font-size:12px;color:var(--text-sub);text-align:center;margin-top:20px;">
+        A personalidade afeta todas as análises: Score de compras, Relatório mensal e Impulse Control.
+    </p>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function selecionarPersonalidade(key) {
+    try {
+        const res = await fetch('/personality/set', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({personalidade: key})
+        });
+        const data = await res.json();
+        if (!data.success) return;
+
+        // Atualizar UI
+        document.querySelectorAll('.pers-card').forEach(card => {
+            const isActive = card.dataset.key === key;
+            const cor = isActive ? data.info.cor : 'var(--border)';
+            card.style.borderColor = cor;
+
+            // Badge ATIVO
+            const existing = card.querySelector('.badge-ativo');
+            if (existing) existing.remove();
+
+            if (isActive) {
+                const badge = document.createElement('div');
+                badge.className = 'badge-ativo';
+                badge.style.cssText = `
+                    position:absolute; top:12px; right:12px;
+                    background:rgba(123,97,255,0.15); color:var(--brand-2);
+                    font-size:10px; font-weight:700; padding:3px 9px;
+                    border-radius:20px; letter-spacing:0.5px;
+                `;
+                badge.textContent = 'ATIVO';
+                card.appendChild(badge);
+            }
+        });
+
+        // Mensagem de confirmação
+        const msg = document.getElementById('confirmMsg');
+        msg.textContent = `✓ Personalidade "${data.info.nome}" ativada. Todas as análises vão usar este modo.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+
+    } catch(e) {
+        console.error('Erro ao guardar personalidade:', e);
+    }
+}
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/relatorio.html">
+{% extends 'base.html' %}
+{% block title %}Relatório Mensal · Verly{% endblock %}
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">📊 Financial Damage Report</h1>
+        <p class="page-sub">{{ mes_nome }} {{ ano }} — O teu relatório mensal de gastos</p>
+    </div>
+    <!-- Navegação de meses -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        {% for m in meses_nav %}
+        <a href="{{ url_for('reports.relatorio', mes=m.mes, ano=m.ano) }}"
+           class="btn-ghost {% if m.mes == mes and m.ano == ano %}btn-ghost--active{% endif %}"
+           style="{% if m.mes == mes and m.ano == ano %}border-color:var(--brand-2);color:var(--brand-2);{% endif %}padding:7px 12px;font-size:12px;">
+            {{ m.nome }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+{% if total_gasto > 0 %}
+
+<!-- MÉTRICAS PRINCIPAIS -->
+<div class="metrics-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:28px;">
+    <div class="metric-card">
+        <div class="metric-icon">💸</div>
+        <div class="metric-body">
+            <span class="metric-label">Total Gasto</span>
+            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_gasto) }}€</span>
+            {% if variacao != 0 %}
+            <span class="metric-trend {% if variacao > 0 %}trend-bad{% else %}trend-ok{% endif %}">
+                {% if variacao > 0 %}▲{% else %}▼{% endif %} {{ variacao|abs|round(1) }}% vs mês anterior
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">🗑️</div>
+        <div class="metric-body">
+            <span class="metric-label">Estimativa Desperdício</span>
+            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ '%.2f'|format(desperdicado) }}€</span>
+            <span class="metric-trend trend-bad">{{ '%.0f'|format(desperdicado / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">✅</div>
+        <div class="metric-body">
+            <span class="metric-label">Boas Decisões</span>
+            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ '%.2f'|format(boas_decisoes) }}€</span>
+            <span class="metric-trend trend-ok">{{ '%.0f'|format(boas_decisoes / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+</div>
+
+<!-- FRASE DE IMPACTO -->
+<div style="
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-left:3px solid var(--brand-2);
+    border-radius:0 12px 12px 0;
+    padding:18px 22px;
+    margin-bottom:28px;
+    font-size:15px;
+    line-height:1.7;
+    color:var(--text);
+    font-style:italic;
+">
+    "{{ roast_phrase }}"
+</div>
+
+<!-- GRID: BARRAS + GRÁFICO -->
+<div class="dashboard-grid" style="margin-bottom:28px;">
+
+    <!-- Barras por categoria -->
+    <div class="card">
+        <div class="card-header"><h3>Gastos por Categoria</h3></div>
+        <div class="card-body">
+            {% for b in barras %}
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
+                    <span style="font-size:12px;color:var(--text-muted);">{{ b.categoria }}</span>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span style="font-size:11px;color:var(--red);font-weight:600;">
+                            ~{{ b.desperdicado }}€ desperdiçado
+                        </span>
+                        <span style="font-size:13px;font-weight:700;color:var(--text);">{{ b.valor }}€</span>
+                    </div>
+                </div>
+                <div style="height:8px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+                    <div style="
+                        width:{{ b.percentagem }}%;
+                        height:100%;
+                        border-radius:4px;
+                        background:{% if b.regret_pct > 35 %}var(--red)
+                                   {% elif b.regret_pct > 20 %}var(--yellow)
+                                   {% else %}var(--green){% endif %};
+                        transition:width 0.8s ease;
+                    "></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Gráfico donut -->
+    <div class="card">
+        <div class="card-header"><h3>Distribuição</h3></div>
+        <div class="card-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;">
+            <canvas id="donutChart" style="max-width:220px;max-height:220px;"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- TOP LOJAS -->
+{% if top_lojas %}
+<div class="card" style="margin-bottom:28px;">
+    <div class="card-header"><h3>Top Lojas</h3></div>
+    <div class="card-body" style="padding:0;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Loja</th>
+                    <th style="text-align:right;">Total Gasto</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for l in top_lojas %}
+                <tr>
+                    <td style="color:var(--text-sub);font-weight:700;">{{ loop.index }}</td>
+                    <td style="font-weight:600;">{{ l.loja }}</td>
+                    <td style="text-align:right;color:var(--brand-2);font-weight:700;">{{ l.valor }}€</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<!-- EMPTY STATE -->
+<div class="empty-card">
+    <span>📊</span>
+    <p>Sem faturas registadas em {{ mes_nome }} {{ ano }}.<br>
+       Carrega as tuas faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+{% if barras %}
+const ctx = document.getElementById('donutChart');
+if (ctx) {
+    const labels = {{ barras | map(attribute='categoria') | list | tojson }};
+    const values = {{ barras | map(attribute='valor') | list | tojson }};
+    const colors = ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#FF6B35'];
+
+    new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: colors.slice(0, labels.length),
+                borderWidth: 0,
+                hoverOffset: 6,
+            }]
+        },
+        options: {
+            responsive: true,
+            cutout: '65%',
+            plugins: {
+                legend: {
+                    display: false,
+                },
+                tooltip: {
+                    callbacks: {
+                        label: (ctx) => ` ${ctx.label}: ${ctx.parsed.toFixed(2)}€`
+                    }
+                }
+            }
+        }
+    });
+}
+{% endif %}
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/subscriptions.html">
+{% extends 'base.html' %}
+{% block title %}Subscription Leak · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">💸 Subscription Leak Detector</h1>
+        <p class="page-sub">Subscrições detetadas nas tuas faturas — ordenadas por risco financeiro</p>
+    </div>
+</div>
+
+<!-- RESUMO -->
+<div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:28px;">
+    <div class="metric-card">
+        <div class="metric-icon">🔥</div>
+        <div class="metric-body">
+            <span class="metric-label">Desperdiçado / mês</span>
+            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€</span>
+            <span class="metric-trend trend-bad">≈ {{ '%.0f'|format(total_anual_desperdicado) }}€/ano</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">✅</div>
+        <div class="metric-body">
+            <span class="metric-label">Subscr. saudáveis</span>
+            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ count_ok }}</span>
+            <span class="metric-trend trend-ok">{{ '%.2f'|format(total_mensal_ok) }}€/mês</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">⚠️</div>
+        <div class="metric-body">
+            <span class="metric-label">Em risco</span>
+            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ count_danger + count_warning }}</span>
+            <span class="metric-trend trend-bad">{{ count_danger }} para cancelar</span>
+        </div>
+    </div>
+</div>
+
+{% if subscriptions %}
+<!-- LISTA DE SUBSCRIÇÕES -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h3>Subscrições Detetadas</h3>
+        <span style="font-size:12px;color:var(--text-sub)">{{ subscriptions|length }} serviço(s)</span>
+    </div>
+    <div class="card-body" style="padding:0;">
+        {% for sub in subscriptions %}
+        <div class="sub-leak-item sub-risk-{{ sub.risk }}" style="
+            display:flex; align-items:center; gap:16px;
+            padding:16px 20px;
+            border-bottom:1px solid var(--border);
+            transition: background 0.15s;
+        ">
+            <!-- Ícone -->
+            <div style="
+                width:42px; height:42px; border-radius:10px;
+                background:{% if sub.risk == 'danger' %}rgba(255,71,87,0.1){% elif sub.risk == 'warning' %}rgba(255,184,0,0.1){% else %}rgba(0,214,143,0.08){% endif %};
+                display:flex; align-items:center; justify-content:center;
+                font-size:20px; flex-shrink:0;
+            ">{{ sub.icone }}</div>
+
+            <!-- Info -->
+            <div style="flex:1;">
+                <div style="font-size:14px;font-weight:600;color:var(--text);">{{ sub.nome }}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                    {{ sub.alerta }}
+                </div>
+            </div>
+
+            <!-- Preço + Badge -->
+            <div style="text-align:right; flex-shrink:0;">
+                <div style="font-size:15px; font-weight:700;
+                    color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
+                    {{ '%.2f'|format(sub.preco_mensal) }}€/mês
+                </div>
+                <div style="margin-top:4px;">
+                    <span style="
+                        font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; letter-spacing:0.5px;
+                        {% if sub.risk == 'danger' %}background:rgba(255,71,87,0.15);color:var(--red);
+                        {% elif sub.risk == 'warning' %}background:rgba(255,184,0,0.15);color:var(--yellow);
+                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}
+                    ">{{ sub.risk_label }}</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- FRASE DE IMPACTO -->
+{% if total_mensal_desperdicado > 0 %}
+<div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;margin-bottom:24px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
+    <div style="font-size:15px;color:var(--text);line-height:1.6;">
+        Estás a desperdiçar <strong style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€/mês</strong>
+        em subscrições que não usas. Isso é
+        <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong>
+        a ir pelo cano.
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<!-- EMPTY STATE -->
+<div class="empty-card">
+    <span>✅</span>
+    <p>Nenhuma subscrição detetada nas tuas faturas.<br>
+    Carrega mais faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para uma análise mais completa.</p>
+</div>
+{% endif %}
+{% endblock %}
+</file>
 
 <file path="run.py">
 from app import create_app
@@ -594,6 +2064,11 @@ def create_app():
     from app.chat import chat_bp
     from app.perfil import perfil_bp
     from app.exportar import exportar_bp
+    from app.scoring import scoring_bp
+    from app.subscriptions import subscriptions_bp
+    from app.impulse import impulse_bp
+    from app.reports import reports_bp
+    from app.personality import personality_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -601,6 +2076,11 @@ def create_app():
     app.register_blueprint(chat_bp)
     app.register_blueprint(perfil_bp)
     app.register_blueprint(exportar_bp)
+    app.register_blueprint(scoring_bp)
+    app.register_blueprint(subscriptions_bp)
+    app.register_blueprint(impulse_bp)
+    app.register_blueprint(reports_bp)
+    app.register_blueprint(personality_bp)
 
     with app.app_context():
         db.create_all()
@@ -619,6 +2099,7 @@ def _migrate_db():
         ("faturas", "data_devolucao", "VARCHAR(50)"),
         ("users", "notificacoes_email", "BOOLEAN DEFAULT 0"),
         ("users", "email_notificacoes", "VARCHAR(150)"),
+        ("users", "personalidade", "VARCHAR(20) DEFAULT 'calm'"),
     ]
     
     for table, column, col_type in migrations:
@@ -1231,6 +2712,513 @@ llama-index-core
 llama-index-llms-groq
 llama-index-embeddings-huggingface
 sentence-transformers
+</file>
+
+<file path="templates/chat.html">
+{% extends 'base.html' %}
+{% block title %}Assistente IA · Verly{% endblock %}
+
+{% block content %}
+<div class="chat-page">
+    <div class="chat-topbar">
+        <div class="chat-topbar-left">
+            <div class="status-dot"></div>
+            <h1>Assistente Verly</h1>
+        </div>
+        <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
+    </div>
+
+    <div id="messages" class="messages-area">
+        {% if conversas %}
+            {% for c in conversas %}
+            <div class="msg user">
+                <div class="msg-avatar">{{ current_user.nome[0].upper() }}</div>
+                <div class="msg-bubble">{{ c.pergunta }}</div>
+            </div>
+            <div class="msg bot">
+                <div class="msg-avatar">✦</div>
+                <div class="msg-bubble">{{ c.resposta }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-chat" id="emptyChat">
+            <div class="empty-chat-icon">✦</div>
+            <h3>Assistente Verly</h3>
+            <p>Faz perguntas sobre as tuas faturas, garantias ou gastos. Primeiro carrega uma fatura em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="chat-input-area">
+        <textarea id="userInput" placeholder="Pergunta algo sobre as tuas faturas..."
+            onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
+        <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let emptyRemoved = {{ 'false' if not conversas else 'true' }};
+window.addEventListener('load', () => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; });
+
+function removeEmpty() {
+    if (!emptyRemoved) { const el = document.getElementById('emptyChat'); if (el) el.remove(); emptyRemoved = true; }
+}
+function addMsg(role, text, avatar) {
+    removeEmpty();
+    const m = document.getElementById('messages');
+    const d = document.createElement('div');
+    d.className = 'msg ' + role;
+    d.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${text}</div>`;
+    m.appendChild(d); m.scrollTop = m.scrollHeight;
+}
+function showTyping() {
+    removeEmpty();
+    const m = document.getElementById('messages');
+    const d = document.createElement('div');
+    d.className = 'msg bot'; d.id = 'typing';
+    d.innerHTML = `<div class="msg-avatar">✦</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
+    m.appendChild(d); m.scrollTop = m.scrollHeight;
+}
+function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
+
+async function sendMessage() {
+    const input = document.getElementById('userInput');
+    const btn = document.getElementById('btnSend');
+    const text = input.value.trim();
+    if (!text) return;
+    addMsg('user', text, '{{ current_user.nome[0].upper() }}');
+    input.value = ''; input.style.height = 'auto'; btn.disabled = true;
+    showTyping();
+    try {
+        const res = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: text}) });
+        const data = await res.json();
+        removeTyping(); addMsg('bot', data.response, '✦');
+    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '✦'); }
+    btn.disabled = false;
+}
+async function clearChat() {
+    if (!confirm('Apagar todo o histórico?')) return;
+    await fetch('/chat/clear', {method:'POST'});
+    location.reload();
+}
+function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/dashboard.html">
+{% extends 'base.html' %}
+{% block title %}Dashboard · Verly{% endblock %}
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-sub">Olá, {{ current_user.nome }}. Aqui está o teu resumo financeiro.</p>
+    </div>
+    <div style="display:flex;gap:10px;">
+        <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
+        <a href="{{ url_for('faturas.faturas') }}" class="btn-accent">+ Nova Fatura</a>
+    </div>
+</div>
+
+<!-- ALERTAS -->
+{% if alertas %}
+<div class="alertas-section">
+    {% for a in alertas %}
+    <div class="alerta alerta-{{ a.urgencia }}">
+        <span class="alerta-icon">{% if a.tipo == 'devolucao' %}↩{% else %}🛡{% endif %}</span>
+        <div class="alerta-body">
+            <strong>{% if a.tipo == 'devolucao' %}Devolução expira{% else %}Garantia expira{% endif %} em {{ a.dias }} dia(s)</strong>
+            <span>{{ a.loja }} · {{ a.fatura }} · até {{ a.data }}</span>
+        </div>
+        <span class="alerta-badge">{{ a.tipo|upper }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- MÉTRICAS -->
+<div class="metrics-grid">
+    <div class="metric-card">
+        <div class="metric-icon">💸</div>
+        <div class="metric-body">
+            <span class="metric-label">Total Gasto</span>
+            <span class="metric-value">{{ "%.2f"|format(total_gasto) }} €</span>
+        </div>
+        <div class="metric-trend {% if total_gasto > 500 %}trend-bad{% else %}trend-ok{% endif %}">
+            {% if total_gasto > 500 %}⚠ Acima do normal{% else %}✓ Dentro do esperado{% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">🧾</div>
+        <div class="metric-body">
+            <span class="metric-label">Faturas</span>
+            <span class="metric-value">{{ num_faturas }}</span>
+        </div>
+        <div class="metric-trend trend-neutral">registadas</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">💬</div>
+        <div class="metric-body">
+            <span class="metric-label">Conversas IA</span>
+            <span class="metric-value">{{ num_conversas }}</span>
+        </div>
+        <div class="metric-trend trend-neutral">mensagens</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon">🔔</div>
+        <div class="metric-body">
+            <span class="metric-label">Alertas Ativos</span>
+            <span class="metric-value {% if alertas %}text-danger{% endif %}">{{ alertas|length }}</span>
+        </div>
+        <div class="metric-trend {% if alertas %}trend-bad{% else %}trend-ok{% endif %}">
+            {% if alertas %}requer atenção{% else %}tudo em ordem{% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- GRÁFICOS -->
+<div class="dashboard-grid">
+    <div class="card">
+        <div class="card-header"><h3>Gastos por Categoria</h3></div>
+        <div class="card-body">
+            {% if cat_labels != '[]' %}
+                <canvas id="catChart" height="220"></canvas>
+            {% else %}
+                <div class="empty-card"><span>📊</span><p>Carrega faturas para ver os gráficos.</p></div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>Gastos por Loja</h3></div>
+        <div class="card-body">
+            {% if loja_labels != '[]' %}
+                <canvas id="lojaChart" height="220"></canvas>
+            {% else %}
+                <div class="empty-card"><span>🏪</span><p>Sem dados ainda.</p></div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- ÚLTIMAS FATURAS + CONVERSAS -->
+<div class="dashboard-grid" style="margin-top:24px;">
+    <div class="card">
+        <div class="card-header">
+            <h3>Últimas Faturas</h3>
+            <a href="{{ url_for('faturas.faturas') }}" class="card-link">Ver todas →</a>
+        </div>
+        <div class="card-body">
+            {% if ultimas_faturas %}
+            <table class="data-table">
+                <thead><tr><th>Loja</th><th>Categoria</th><th>Total</th><th>Data</th></tr></thead>
+                <tbody>
+                    {% for f in ultimas_faturas %}
+                    <tr>
+                        <td>{{ f.loja or '—' }}</td>
+                        <td><span class="cat-badge">{{ f.categoria or '—' }}</span></td>
+                        <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">{% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}</td>
+                        <td class="text-muted">{{ f.data_upload.strftime('%d/%m/%Y') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-card"><span>🧾</span><p><a href="{{ url_for('faturas.faturas') }}">Submete a tua primeira fatura.</a></p></div>
+            {% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header">
+            <h3>Conversas Recentes</h3>
+            <a href="{{ url_for('chat.chat') }}" class="card-link">Ver todas →</a>
+        </div>
+        <div class="card-body">
+            {% if conversas_recentes %}
+            <ul class="convo-list">
+                {% for c in conversas_recentes %}
+                <li class="convo-item">
+                    <div class="convo-q">{{ c.pergunta[:80] }}{% if c.pergunta|length > 80 %}...{% endif %}</div>
+                    <div class="convo-a">{{ c.resposta[:120] }}{% if c.resposta|length > 120 %}...{% endif %}</div>
+                    <div class="convo-time">{{ c.timestamp.strftime('%d/%m %H:%M') }}</div>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <div class="empty-card"><span>💬</span><p>Ainda sem conversas com o assistente.</p></div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const COLORS = ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#6C5CE7','#00b4d8','#f4a261','#e76f51','#2a9d8f'];
+
+const catLabels = {{ cat_labels|safe }};
+const catValues = {{ cat_values|safe }};
+if (catLabels.length > 0) {
+    new Chart(document.getElementById('catChart'), {
+        type: 'doughnut',
+        data: {
+            labels: catLabels,
+            datasets: [{ data: catValues, backgroundColor: COLORS, borderWidth: 0, hoverOffset: 6 }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { position: 'right', labels: { color: '#6B6B80', font: { size: 11, family: 'Outfit' }, padding: 14 } },
+                tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toFixed(2)} €` } }
+            }
+        }
+    });
+}
+
+const lojaLabels = {{ loja_labels|safe }};
+const lojaValues = {{ loja_values|safe }};
+if (lojaLabels.length > 0) {
+    new Chart(document.getElementById('lojaChart'), {
+        type: 'bar',
+        data: {
+            labels: lojaLabels,
+            datasets: [{
+                data: lojaValues,
+                backgroundColor: 'rgba(74,58,255,0.5)',
+                borderColor: '#4A3AFF',
+                borderWidth: 2,
+                borderRadius: 6,
+                hoverBackgroundColor: 'rgba(74,58,255,0.8)'
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(2)} €` } } },
+            scales: {
+                x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B6B80', font: { family: 'Outfit' } } },
+                y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B6B80', font: { family: 'Outfit' }, callback: v => v + ' €' } }
+            }
+        }
+    });
+}
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/faturas.html">
+{% extends 'base.html' %}
+{% block title %}Faturas · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Faturas</h1>
+        <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
+    </div>
+    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
+</div>
+
+<!-- UPLOAD -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header"><h3>Submeter Nova Fatura</h3></div>
+    <div class="card-body">
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
+            <div class="upload-icon">📁</div>
+            <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
+            <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
+        </div>
+        <button class="btn-accent" id="btnUpload" style="display:none;margin-top:14px;" onclick="uploadFile()">
+            Analisar com IA →
+        </button>
+        <div class="upload-status" id="uploadStatus"></div>
+    </div>
+</div>
+
+<!-- FILTROS -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-body" style="padding:16px 20px;">
+        <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
+            <input type="text" name="q" value="{{ search }}" placeholder="🔍 Pesquisar loja, item..." class="filtro-input">
+            <select name="categoria" class="filtro-select">
+                <option value="">Todas as categorias</option>
+                {% for cat in categorias %}
+                <option value="{{ cat }}" {% if cat == categoria_sel %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+            <select name="ordenar" class="filtro-select">
+                <option value="recente" {% if ordenar == 'recente' %}selected{% endif %}>Mais recente</option>
+                <option value="antigo" {% if ordenar == 'antigo' %}selected{% endif %}>Mais antigo</option>
+                <option value="maior" {% if ordenar == 'maior' %}selected{% endif %}>Maior valor</option>
+                <option value="menor" {% if ordenar == 'menor' %}selected{% endif %}>Menor valor</option>
+            </select>
+            <button type="submit" class="btn-accent">Filtrar</button>
+            {% if search or categoria_sel %}
+            <a href="{{ url_for('faturas.faturas') }}" class="btn-ghost">Limpar</a>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<!-- TABELA -->
+<div class="card">
+    <div class="card-header"><h3>Faturas Registadas</h3></div>
+    <div class="card-body" style="padding:0;">
+        {% if faturas %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Ficheiro</th>
+                    <th>Loja</th>
+                    <th>Categoria</th>
+                    <th>Data Compra</th>
+                    <th>Total</th>
+                    <th>Devolução</th>
+                    <th>Garantia</th>
+                    <th>Items</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in faturas %}
+                <tr id="row-{{ f.id }}">
+                    <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
+                    <td>
+                        <span class="editable" onclick="editarCampo({{ f.id }}, 'loja', this)">{{ f.loja or '—' }}</span>
+                    </td>
+                    <td>
+                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)">
+                            {% for cat in categorias %}
+                            <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="text-muted">{{ f.data_compra or '—' }}</td>
+                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
+                        <span class="editable" onclick="editarCampo({{ f.id }}, 'total', this)">
+                            {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                        </span>
+                    </td>
+                    <td class="{% if f.data_devolucao %}text-warning{% endif %}">{{ f.data_devolucao or '—' }}</td>
+                    <td class="text-muted">{{ f.data_garantia or '—' }}</td>
+                    <td>
+                        {% if f.items_list %}
+                        <span class="items-preview" title="{{ f.items_list|join(', ') }}">{{ f.items_list|length }} item(s)</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td><button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-card">
+            <span>🧾</span>
+            <p>Nenhuma fatura encontrada.<br>
+            {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedFile = null;
+
+function handleFileSelect(input) {
+    selectedFile = input.files[0];
+    if (selectedFile) {
+        document.getElementById('uploadLabel').textContent = selectedFile.name;
+        document.getElementById('uploadSub').textContent = (selectedFile.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+}
+
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+        selectedFile = file;
+        document.getElementById('uploadLabel').textContent = file.name;
+        document.getElementById('uploadSub').textContent = (file.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+});
+
+async function uploadFile() {
+    if (!selectedFile) return;
+    const btn = document.getElementById('btnUpload');
+    btn.disabled = true; btn.textContent = 'A analisar...';
+    setStatus('loading', '⏳ A analisar a fatura com IA...');
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    try {
+        const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.categoria}`);
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            setStatus('error', '✗ ' + data.message);
+        }
+    } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
+    btn.disabled = false; btn.textContent = 'Analisar com IA →';
+}
+
+function setStatus(type, msg) {
+    const el = document.getElementById('uploadStatus');
+    el.className = 'upload-status ' + type;
+    el.textContent = msg;
+}
+
+async function editarCategoria(id, valor) {
+    await fetch(`/faturas/editar/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria: valor })
+    });
+}
+
+function editarCampo(id, campo, el) {
+    const valor = el.textContent.replace(' €', '').trim();
+    const input = document.createElement('input');
+    input.type = 'text'; input.value = valor === '—' ? '' : valor;
+    input.className = 'inline-edit';
+    el.replaceWith(input);
+    input.focus();
+    input.addEventListener('blur', async () => {
+        const novo = input.value.trim();
+        const body = {};
+        body[campo] = novo;
+        await fetch(`/faturas/editar/${id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        location.reload();
+    });
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
+}
+
+async function deleteFatura(id) {
+    if (!confirm('Remover esta fatura?')) return;
+    const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) document.getElementById('row-' + id).remove();
+}
+</script>
+{% endblock %}
 </file>
 
 <file path="static/css/style.css">
@@ -2316,6 +4304,40 @@ a:hover { color: var(--brand); }
             </li>
         </ul>
 
+        <span class="sidenav-section">Ferramentas IA</span>
+        <ul class="sidenav-menu">
+            <li>
+                <a href="{{ url_for('scoring.analisar') }}" class="nav-link {% if request.endpoint and 'scoring' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🧠</span>
+                    <span>Score de Compras</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('subscriptions.subscriptions') }}" class="nav-link {% if request.endpoint and 'subscriptions' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">💸</span>
+                    <span>Leak Detector</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('impulse.impulse') }}" class="nav-link {% if request.endpoint and 'impulse' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🛑</span>
+                    <span>Impulse Control</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('reports.relatorio') }}" class="nav-link {% if request.endpoint and 'reports' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">📊</span>
+                    <span>Relatório Mensal</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('personality.personality') }}" class="nav-link {% if request.endpoint and 'personality' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">🔥</span>
+                    <span>Personalidade</span>
+                </a>
+            </li>
+        </ul>
+
         <span class="sidenav-section">Conta</span>
         <ul class="sidenav-menu">
             <li>
@@ -2361,513 +4383,6 @@ a:hover { color: var(--brand); }
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>
-</file>
-
-<file path="templates/chat.html">
-{% extends 'base.html' %}
-{% block title %}Assistente IA · Verly{% endblock %}
-
-{% block content %}
-<div class="chat-page">
-    <div class="chat-topbar">
-        <div class="chat-topbar-left">
-            <div class="status-dot"></div>
-            <h1>Assistente Verly</h1>
-        </div>
-        <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
-    </div>
-
-    <div id="messages" class="messages-area">
-        {% if conversas %}
-            {% for c in conversas %}
-            <div class="msg user">
-                <div class="msg-avatar">{{ current_user.nome[0].upper() }}</div>
-                <div class="msg-bubble">{{ c.pergunta }}</div>
-            </div>
-            <div class="msg bot">
-                <div class="msg-avatar">✦</div>
-                <div class="msg-bubble">{{ c.resposta }}</div>
-            </div>
-            {% endfor %}
-        {% else %}
-        <div class="empty-chat" id="emptyChat">
-            <div class="empty-chat-icon">✦</div>
-            <h3>Assistente Verly</h3>
-            <p>Faz perguntas sobre as tuas faturas, garantias ou gastos. Primeiro carrega uma fatura em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
-        </div>
-        {% endif %}
-    </div>
-
-    <div class="chat-input-area">
-        <textarea id="userInput" placeholder="Pergunta algo sobre as tuas faturas..."
-            onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
-        <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-let emptyRemoved = {{ 'false' if not conversas else 'true' }};
-window.addEventListener('load', () => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; });
-
-function removeEmpty() {
-    if (!emptyRemoved) { const el = document.getElementById('emptyChat'); if (el) el.remove(); emptyRemoved = true; }
-}
-function addMsg(role, text, avatar) {
-    removeEmpty();
-    const m = document.getElementById('messages');
-    const d = document.createElement('div');
-    d.className = 'msg ' + role;
-    d.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${text}</div>`;
-    m.appendChild(d); m.scrollTop = m.scrollHeight;
-}
-function showTyping() {
-    removeEmpty();
-    const m = document.getElementById('messages');
-    const d = document.createElement('div');
-    d.className = 'msg bot'; d.id = 'typing';
-    d.innerHTML = `<div class="msg-avatar">✦</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    m.appendChild(d); m.scrollTop = m.scrollHeight;
-}
-function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
-
-async function sendMessage() {
-    const input = document.getElementById('userInput');
-    const btn = document.getElementById('btnSend');
-    const text = input.value.trim();
-    if (!text) return;
-    addMsg('user', text, '{{ current_user.nome[0].upper() }}');
-    input.value = ''; input.style.height = 'auto'; btn.disabled = true;
-    showTyping();
-    try {
-        const res = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: text}) });
-        const data = await res.json();
-        removeTyping(); addMsg('bot', data.response, '✦');
-    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '✦'); }
-    btn.disabled = false;
-}
-async function clearChat() {
-    if (!confirm('Apagar todo o histórico?')) return;
-    await fetch('/chat/clear', {method:'POST'});
-    location.reload();
-}
-function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
-</script>
-{% endblock %}
-</file>
-
-<file path="templates/dashboard.html">
-{% extends 'base.html' %}
-{% block title %}Dashboard · Verly{% endblock %}
-{% block extra_head %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Dashboard</h1>
-        <p class="page-sub">Olá, {{ current_user.nome }}. Aqui está o teu resumo financeiro.</p>
-    </div>
-    <div style="display:flex;gap:10px;">
-        <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
-        <a href="{{ url_for('faturas.faturas') }}" class="btn-accent">+ Nova Fatura</a>
-    </div>
-</div>
-
-<!-- ALERTAS -->
-{% if alertas %}
-<div class="alertas-section">
-    {% for a in alertas %}
-    <div class="alerta alerta-{{ a.urgencia }}">
-        <span class="alerta-icon">{% if a.tipo == 'devolucao' %}↩{% else %}🛡{% endif %}</span>
-        <div class="alerta-body">
-            <strong>{% if a.tipo == 'devolucao' %}Devolução expira{% else %}Garantia expira{% endif %} em {{ a.dias }} dia(s)</strong>
-            <span>{{ a.loja }} · {{ a.fatura }} · até {{ a.data }}</span>
-        </div>
-        <span class="alerta-badge">{{ a.tipo|upper }}</span>
-    </div>
-    {% endfor %}
-</div>
-{% endif %}
-
-<!-- MÉTRICAS -->
-<div class="metrics-grid">
-    <div class="metric-card">
-        <div class="metric-icon">💸</div>
-        <div class="metric-body">
-            <span class="metric-label">Total Gasto</span>
-            <span class="metric-value">{{ "%.2f"|format(total_gasto) }} €</span>
-        </div>
-        <div class="metric-trend {% if total_gasto > 500 %}trend-bad{% else %}trend-ok{% endif %}">
-            {% if total_gasto > 500 %}⚠ Acima do normal{% else %}✓ Dentro do esperado{% endif %}
-        </div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon">🧾</div>
-        <div class="metric-body">
-            <span class="metric-label">Faturas</span>
-            <span class="metric-value">{{ num_faturas }}</span>
-        </div>
-        <div class="metric-trend trend-neutral">registadas</div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon">💬</div>
-        <div class="metric-body">
-            <span class="metric-label">Conversas IA</span>
-            <span class="metric-value">{{ num_conversas }}</span>
-        </div>
-        <div class="metric-trend trend-neutral">mensagens</div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon">🔔</div>
-        <div class="metric-body">
-            <span class="metric-label">Alertas Ativos</span>
-            <span class="metric-value {% if alertas %}text-danger{% endif %}">{{ alertas|length }}</span>
-        </div>
-        <div class="metric-trend {% if alertas %}trend-bad{% else %}trend-ok{% endif %}">
-            {% if alertas %}requer atenção{% else %}tudo em ordem{% endif %}
-        </div>
-    </div>
-</div>
-
-<!-- GRÁFICOS -->
-<div class="dashboard-grid">
-    <div class="card">
-        <div class="card-header"><h3>Gastos por Categoria</h3></div>
-        <div class="card-body">
-            {% if cat_labels != '[]' %}
-                <canvas id="catChart" height="220"></canvas>
-            {% else %}
-                <div class="empty-card"><span>📊</span><p>Carrega faturas para ver os gráficos.</p></div>
-            {% endif %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header"><h3>Gastos por Loja</h3></div>
-        <div class="card-body">
-            {% if loja_labels != '[]' %}
-                <canvas id="lojaChart" height="220"></canvas>
-            {% else %}
-                <div class="empty-card"><span>🏪</span><p>Sem dados ainda.</p></div>
-            {% endif %}
-        </div>
-    </div>
-</div>
-
-<!-- ÚLTIMAS FATURAS + CONVERSAS -->
-<div class="dashboard-grid" style="margin-top:24px;">
-    <div class="card">
-        <div class="card-header">
-            <h3>Últimas Faturas</h3>
-            <a href="{{ url_for('faturas.faturas') }}" class="card-link">Ver todas →</a>
-        </div>
-        <div class="card-body">
-            {% if ultimas_faturas %}
-            <table class="data-table">
-                <thead><tr><th>Loja</th><th>Categoria</th><th>Total</th><th>Data</th></tr></thead>
-                <tbody>
-                    {% for f in ultimas_faturas %}
-                    <tr>
-                        <td>{{ f.loja or '—' }}</td>
-                        <td><span class="cat-badge">{{ f.categoria or '—' }}</span></td>
-                        <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">{% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}</td>
-                        <td class="text-muted">{{ f.data_upload.strftime('%d/%m/%Y') }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
-            <div class="empty-card"><span>🧾</span><p><a href="{{ url_for('faturas.faturas') }}">Submete a tua primeira fatura.</a></p></div>
-            {% endif %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header">
-            <h3>Conversas Recentes</h3>
-            <a href="{{ url_for('chat.chat') }}" class="card-link">Ver todas →</a>
-        </div>
-        <div class="card-body">
-            {% if conversas_recentes %}
-            <ul class="convo-list">
-                {% for c in conversas_recentes %}
-                <li class="convo-item">
-                    <div class="convo-q">{{ c.pergunta[:80] }}{% if c.pergunta|length > 80 %}...{% endif %}</div>
-                    <div class="convo-a">{{ c.resposta[:120] }}{% if c.resposta|length > 120 %}...{% endif %}</div>
-                    <div class="convo-time">{{ c.timestamp.strftime('%d/%m %H:%M') }}</div>
-                </li>
-                {% endfor %}
-            </ul>
-            {% else %}
-            <div class="empty-card"><span>💬</span><p>Ainda sem conversas com o assistente.</p></div>
-            {% endif %}
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-const COLORS = ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#6C5CE7','#00b4d8','#f4a261','#e76f51','#2a9d8f'];
-
-const catLabels = {{ cat_labels|safe }};
-const catValues = {{ cat_values|safe }};
-if (catLabels.length > 0) {
-    new Chart(document.getElementById('catChart'), {
-        type: 'doughnut',
-        data: {
-            labels: catLabels,
-            datasets: [{ data: catValues, backgroundColor: COLORS, borderWidth: 0, hoverOffset: 6 }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: { position: 'right', labels: { color: '#6B6B80', font: { size: 11, family: 'Outfit' }, padding: 14 } },
-                tooltip: { callbacks: { label: ctx => ` ${ctx.label}: ${ctx.parsed.toFixed(2)} €` } }
-            }
-        }
-    });
-}
-
-const lojaLabels = {{ loja_labels|safe }};
-const lojaValues = {{ loja_values|safe }};
-if (lojaLabels.length > 0) {
-    new Chart(document.getElementById('lojaChart'), {
-        type: 'bar',
-        data: {
-            labels: lojaLabels,
-            datasets: [{
-                data: lojaValues,
-                backgroundColor: 'rgba(74,58,255,0.5)',
-                borderColor: '#4A3AFF',
-                borderWidth: 2,
-                borderRadius: 6,
-                hoverBackgroundColor: 'rgba(74,58,255,0.8)'
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y.toFixed(2)} €` } } },
-            scales: {
-                x: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B6B80', font: { family: 'Outfit' } } },
-                y: { grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#6B6B80', font: { family: 'Outfit' }, callback: v => v + ' €' } }
-            }
-        }
-    });
-}
-</script>
-{% endblock %}
-</file>
-
-<file path="templates/faturas.html">
-{% extends 'base.html' %}
-{% block title %}Faturas · Verly{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Faturas</h1>
-        <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
-    </div>
-    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
-</div>
-
-<!-- UPLOAD -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-header"><h3>Submeter Nova Fatura</h3></div>
-    <div class="card-body">
-        <div class="upload-zone" id="uploadZone">
-            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
-            <div class="upload-icon">📁</div>
-            <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
-            <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
-        </div>
-        <button class="btn-accent" id="btnUpload" style="display:none;margin-top:14px;" onclick="uploadFile()">
-            Analisar com IA →
-        </button>
-        <div class="upload-status" id="uploadStatus"></div>
-    </div>
-</div>
-
-<!-- FILTROS -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-body" style="padding:16px 20px;">
-        <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
-            <input type="text" name="q" value="{{ search }}" placeholder="🔍 Pesquisar loja, item..." class="filtro-input">
-            <select name="categoria" class="filtro-select">
-                <option value="">Todas as categorias</option>
-                {% for cat in categorias %}
-                <option value="{{ cat }}" {% if cat == categoria_sel %}selected{% endif %}>{{ cat }}</option>
-                {% endfor %}
-            </select>
-            <select name="ordenar" class="filtro-select">
-                <option value="recente" {% if ordenar == 'recente' %}selected{% endif %}>Mais recente</option>
-                <option value="antigo" {% if ordenar == 'antigo' %}selected{% endif %}>Mais antigo</option>
-                <option value="maior" {% if ordenar == 'maior' %}selected{% endif %}>Maior valor</option>
-                <option value="menor" {% if ordenar == 'menor' %}selected{% endif %}>Menor valor</option>
-            </select>
-            <button type="submit" class="btn-accent">Filtrar</button>
-            {% if search or categoria_sel %}
-            <a href="{{ url_for('faturas.faturas') }}" class="btn-ghost">Limpar</a>
-            {% endif %}
-        </form>
-    </div>
-</div>
-
-<!-- TABELA -->
-<div class="card">
-    <div class="card-header"><h3>Faturas Registadas</h3></div>
-    <div class="card-body" style="padding:0;">
-        {% if faturas %}
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Ficheiro</th>
-                    <th>Loja</th>
-                    <th>Categoria</th>
-                    <th>Data Compra</th>
-                    <th>Total</th>
-                    <th>Devolução</th>
-                    <th>Garantia</th>
-                    <th>Items</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for f in faturas %}
-                <tr id="row-{{ f.id }}">
-                    <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
-                    <td>
-                        <span class="editable" onclick="editarCampo({{ f.id }}, 'loja', this)">{{ f.loja or '—' }}</span>
-                    </td>
-                    <td>
-                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)">
-                            {% for cat in categorias %}
-                            <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
-                            {% endfor %}
-                        </select>
-                    </td>
-                    <td class="text-muted">{{ f.data_compra or '—' }}</td>
-                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
-                        <span class="editable" onclick="editarCampo({{ f.id }}, 'total', this)">
-                            {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
-                        </span>
-                    </td>
-                    <td class="{% if f.data_devolucao %}text-warning{% endif %}">{{ f.data_devolucao or '—' }}</td>
-                    <td class="text-muted">{{ f.data_garantia or '—' }}</td>
-                    <td>
-                        {% if f.items_list %}
-                        <span class="items-preview" title="{{ f.items_list|join(', ') }}">{{ f.items_list|length }} item(s)</span>
-                        {% else %}—{% endif %}
-                    </td>
-                    <td><button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <div class="empty-card">
-            <span>🧾</span>
-            <p>Nenhuma fatura encontrada.<br>
-            {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-let selectedFile = null;
-
-function handleFileSelect(input) {
-    selectedFile = input.files[0];
-    if (selectedFile) {
-        document.getElementById('uploadLabel').textContent = selectedFile.name;
-        document.getElementById('uploadSub').textContent = (selectedFile.size / 1024).toFixed(1) + ' KB';
-        document.getElementById('btnUpload').style.display = 'block';
-    }
-}
-
-const zone = document.getElementById('uploadZone');
-zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-zone.addEventListener('drop', e => {
-    e.preventDefault(); zone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) {
-        selectedFile = file;
-        document.getElementById('uploadLabel').textContent = file.name;
-        document.getElementById('uploadSub').textContent = (file.size / 1024).toFixed(1) + ' KB';
-        document.getElementById('btnUpload').style.display = 'block';
-    }
-});
-
-async function uploadFile() {
-    if (!selectedFile) return;
-    const btn = document.getElementById('btnUpload');
-    btn.disabled = true; btn.textContent = 'A analisar...';
-    setStatus('loading', '⏳ A analisar a fatura com IA...');
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    try {
-        const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (data.success) {
-            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.categoria}`);
-            setTimeout(() => location.reload(), 1500);
-        } else {
-            setStatus('error', '✗ ' + data.message);
-        }
-    } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
-    btn.disabled = false; btn.textContent = 'Analisar com IA →';
-}
-
-function setStatus(type, msg) {
-    const el = document.getElementById('uploadStatus');
-    el.className = 'upload-status ' + type;
-    el.textContent = msg;
-}
-
-async function editarCategoria(id, valor) {
-    await fetch(`/faturas/editar/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ categoria: valor })
-    });
-}
-
-function editarCampo(id, campo, el) {
-    const valor = el.textContent.replace(' €', '').trim();
-    const input = document.createElement('input');
-    input.type = 'text'; input.value = valor === '—' ? '' : valor;
-    input.className = 'inline-edit';
-    el.replaceWith(input);
-    input.focus();
-    input.addEventListener('blur', async () => {
-        const novo = input.value.trim();
-        const body = {};
-        body[campo] = novo;
-        await fetch(`/faturas/editar/${id}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        location.reload();
-    });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
-}
-
-async function deleteFatura(id) {
-    if (!confirm('Remover esta fatura?')) return;
-    const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (data.success) document.getElementById('row-' + id).remove();
-}
-</script>
-{% endblock %}
 </file>
 
 </files>

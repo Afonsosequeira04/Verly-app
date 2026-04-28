@@ -38,6 +38,11 @@ def create_app():
     from app.chat import chat_bp
     from app.perfil import perfil_bp
     from app.exportar import exportar_bp
+    from app.scoring import scoring_bp
+    from app.subscriptions import subscriptions_bp
+    from app.impulse import impulse_bp
+    from app.reports import reports_bp
+    from app.personality import personality_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -45,6 +50,11 @@ def create_app():
     app.register_blueprint(chat_bp)
     app.register_blueprint(perfil_bp)
     app.register_blueprint(exportar_bp)
+    app.register_blueprint(scoring_bp)
+    app.register_blueprint(subscriptions_bp)
+    app.register_blueprint(impulse_bp)
+    app.register_blueprint(reports_bp)
+    app.register_blueprint(personality_bp)
 
     with app.app_context():
         db.create_all()
@@ -63,6 +73,7 @@ def _migrate_db():
         ("faturas", "data_devolucao", "VARCHAR(50)"),
         ("users", "notificacoes_email", "BOOLEAN DEFAULT 0"),
         ("users", "email_notificacoes", "VARCHAR(150)"),
+        ("users", "personalidade", "VARCHAR(20) DEFAULT 'calm'"),
     ]
     
     for table, column, col_type in migrations:

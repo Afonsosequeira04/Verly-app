@@ -15,12 +15,38 @@ api_key = os.getenv("GROQ_API_KEY")
 Settings.llm = Groq(model="llama-3.3-70b-versatile", api_key=api_key)
 Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-SYSTEM_PROMPT = """És o 'Shopping Police', um polícia financeiro sarcástico e implacável.
-Tratas o utilizador por 'recruta' ou 'gastador'.
-Analisas as faturas carregadas e respondes com base nelas.
-Se o utilizador gastou muito em coisas inúteis, goza com ele de forma divertida.
-Informa sempre sobre prazos de devolução (30 dias) e garantias (3 anos EU) se encontrares datas.
-Responde sempre em português de Portugal."""
+
+# ─── SYSTEM PROMPTS POR PERSONALIDADE ────────────────────────────────────────
+
+SYSTEM_PROMPTS = {
+    'savage': """És a Verly, uma assistente financeira pessoal brutal e sem filtros.
+Tens acesso às faturas do utilizador e analisas os seus padrões de consumo com frieza cirúrgica.
+O teu tom é direto, cortante e honesto — nunca gentil desnecessariamente.
+Quando o utilizador gasta mal, dizes-lhe sem rodeios. Quando gasta bem, reconheces (raramente).
+Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), alternativas mais baratas.
+Respondes sempre em português de Portugal. Frases curtas. Zero floreados.""",
+
+    'sarcastic': """És a Verly, uma assistente financeira com ironia refinada e sarcasmo inteligente.
+Tens acesso às faturas do utilizador e comentas os seus hábitos financeiros com humor ácido mas construtivo.
+Nunca és grosseiro — és espirituoso. O sarcasmo serve para fazer o utilizador pensar, não para magoar.
+Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), sugestões práticas.
+Respondes sempre em português de Portugal. Com estilo.""",
+
+    'calm': """És a Verly, uma coach financeira pessoal empática, inteligente e construtiva.
+Tens acesso às faturas do utilizador e ajudas-o a tomar decisões financeiras mais conscientes.
+O teu tom é gentil, encorajador e honesto. Celebras as boas decisões. Ajudas a melhorar as más sem julgamento.
+Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), dicas práticas de poupança.
+Respondes sempre em português de Portugal. Com clareza e calor humano.""",
+
+    'pro': """És a Verly, um CFO pessoal altamente analítico e orientado a dados.
+Tens acesso às faturas do utilizador e fazes análises de custo-benefício objetivas e rigorosas.
+O teu tom é profissional, preciso e factual. Zero emoções, máximo rigor. Usas dados concretos das faturas.
+Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), análise de ROI de compras.
+Respondes sempre em português de Portugal. Com precisão e objetividade.""",
+}
+
+# Prompt padrão caso a personalidade não esteja definida
+DEFAULT_SYSTEM_PROMPT = SYSTEM_PROMPTS['calm']
 
 CATEGORIAS_VALIDAS = [
     'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
@@ -29,10 +55,13 @@ CATEGORIAS_VALIDAS = [
 ]
 
 
+# ─── FUNÇÕES DE ÍNDICE ────────────────────────────────────────────────────────
+
 def get_user_paths(base_upload, base_storage, user_id):
     data_dir = os.path.join(base_upload, str(user_id))
     storage_dir = os.path.join(base_storage, str(user_id))
     os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(storage_dir, exist_ok=True)
     return data_dir, storage_dir
 
 
@@ -64,12 +93,18 @@ def rebuild_index(data_dir, storage_dir):
     return index
 
 
-def chat_with_index(index, user_message):
-    full_query = SYSTEM_PROMPT + "\n\nPergunta do recruta: " + user_message
+def chat_with_index(index, user_message, personalidade='calm'):
+    """
+    Faz uma query ao índice com o system prompt da personalidade escolhida.
+    """
+    system = SYSTEM_PROMPTS.get(personalidade, DEFAULT_SYSTEM_PROMPT)
+    full_query = f"{system}\n\nPergunta do utilizador: {user_message}"
     query_engine = index.as_query_engine(streaming=False)
     response = query_engine.query(full_query)
     return str(response)
 
+
+# ─── EXTRAÇÃO DE FATURAS ──────────────────────────────────────────────────────
 
 def _calcular_datas(data_compra_str):
     """Calcula data de devolução (30 dias) e garantia (3 anos) a partir da data de compra."""
@@ -112,17 +147,16 @@ Se não encontrares algum campo, usa null. Para a categoria, escolhe a mais adeq
         elif '```' in text:
             text = text.split('```')[1].split('```')[0].strip()
 
-        # Encontrar JSON no texto
         start = text.find('{')
         end = text.rfind('}') + 1
         if start != -1 and end > start:
             text = text[start:end]
 
         data = json.loads(text)
-        
+
         data_compra = data.get('data_compra')
         data_devolucao, data_garantia = _calcular_datas(data_compra)
-        
+
         categoria = data.get('categoria', 'Outros')
         if categoria not in CATEGORIAS_VALIDAS:
             categoria = 'Outros'
