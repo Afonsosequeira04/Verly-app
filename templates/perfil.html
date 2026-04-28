@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Perfil · Shopping Police{% endblock %}
+{% block title %}Perfil · Verly{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
         <h1 class="page-title">Perfil</h1>
-        <p class="page-sub">Ficha do recruta {{ current_user.nome }}.</p>
+        <p class="page-sub">Gere a tua conta e preferências.</p>
     </div>
 </div>
 
@@ -23,7 +23,7 @@
                 <div class="perfil-stat">
                     <span class="ps-icon">💬</span>
                     <span class="ps-val">{{ num_conversas }}</span>
-                    <span class="ps-label">Interrogatórios</span>
+                    <span class="ps-label">Conversas IA</span>
                 </div>
                 <div class="perfil-stat">
                     <span class="ps-icon">💸</span>
@@ -48,7 +48,7 @@
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" value="{{ current_user.email }}" disabled style="opacity:0.5;cursor:not-allowed;">
+                    <input type="email" value="{{ current_user.email }}" disabled style="opacity:0.4;cursor:not-allowed;">
                 </div>
                 <div class="form-group">
                     <label>Email para Notificações</label>
@@ -90,7 +90,7 @@
         <div class="card-header"><h3>Zona de Perigo</h3></div>
         <div class="card-body">
             <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
-                Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas.
+                Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas. Esta ação é irreversível.
             </p>
             <button class="btn-danger" onclick="confirmarEliminar()">Eliminar Conta Permanentemente</button>
         </div>

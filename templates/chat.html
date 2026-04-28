@@ -1,15 +1,16 @@
 {% extends 'base.html' %}
-{% block title %}Interrogatório · Shopping Police{% endblock %}
+{% block title %}Assistente IA · Verly{% endblock %}
 
 {% block content %}
 <div class="chat-page">
     <div class="chat-topbar">
         <div class="chat-topbar-left">
             <div class="status-dot"></div>
-            <h1>Interrogatório Financeiro</h1>
+            <h1>Assistente Verly</h1>
         </div>
         <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
     </div>
+
     <div id="messages" class="messages-area">
         {% if conversas %}
             {% for c in conversas %}
@@ -18,20 +19,21 @@
                 <div class="msg-bubble">{{ c.pergunta }}</div>
             </div>
             <div class="msg bot">
-                <div class="msg-avatar">👮</div>
+                <div class="msg-avatar">✦</div>
                 <div class="msg-bubble">{{ c.resposta }}</div>
             </div>
             {% endfor %}
         {% else %}
         <div class="empty-chat" id="emptyChat">
-            <div class="empty-chat-icon">👮</div>
-            <h3>Aguardando Suspeito</h3>
-            <p>Carrega uma fatura no <a href="{{ url_for('faturas.faturas') }}">Inventário</a> e começa o interrogatório.</p>
+            <div class="empty-chat-icon">✦</div>
+            <h3>Assistente Verly</h3>
+            <p>Faz perguntas sobre as tuas faturas, garantias ou gastos. Primeiro carrega uma fatura em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
         </div>
         {% endif %}
     </div>
+
     <div class="chat-input-area">
-        <textarea id="userInput" placeholder="Onde gastei dinheiro este mês?"
+        <textarea id="userInput" placeholder="Pergunta algo sobre as tuas faturas..."
             onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
         <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
     </div>
@@ -59,7 +61,7 @@ function showTyping() {
     const m = document.getElementById('messages');
     const d = document.createElement('div');
     d.className = 'msg bot'; d.id = 'typing';
-    d.innerHTML = `<div class="msg-avatar">👮</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
+    d.innerHTML = `<div class="msg-avatar">✦</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
     m.appendChild(d); m.scrollTop = m.scrollHeight;
 }
 function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
@@ -75,8 +77,8 @@ async function sendMessage() {
     try {
         const res = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: text}) });
         const data = await res.json();
-        removeTyping(); addMsg('bot', data.response, '👮');
-    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '👮'); }
+        removeTyping(); addMsg('bot', data.response, '✦');
+    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '✦'); }
     btn.disabled = false;
 }
 async function clearChat() {

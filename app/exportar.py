@@ -29,13 +29,13 @@ def exportar_pdf():
 
     # Estilos
     title_s = ParagraphStyle('t', fontSize=26, fontName='Helvetica-Bold',
-                              textColor=colors.HexColor('#1a1a2e'), spaceAfter=4)
+                              textColor=colors.HexColor('#4A3AFF'), spaceAfter=4)
     sub_s = ParagraphStyle('s', fontSize=10, fontName='Helvetica',
-                            textColor=colors.HexColor('#666666'), spaceAfter=2)
+                            textColor=colors.HexColor('#6B6B80'), spaceAfter=2)
     label_s = ParagraphStyle('l', fontSize=8, fontName='Helvetica',
-                              textColor=colors.HexColor('#999999'))
+                              textColor=colors.HexColor('#9999AA'))
     h2_s = ParagraphStyle('h2', fontSize=13, fontName='Helvetica-Bold',
-                           textColor=colors.HexColor('#1a1a2e'), spaceBefore=16, spaceAfter=8)
+                           textColor=colors.HexColor('#111118'), spaceBefore=16, spaceAfter=8)
     normal_s = ParagraphStyle('n', fontSize=9, fontName='Helvetica', leading=14)
 
     # Header
@@ -43,19 +43,19 @@ def exportar_pdf():
     data_relatorio = datetime.now().strftime('%d/%m/%Y %H:%M')
 
     header_data = [[
-        [Paragraph('🚔 Shopping Police', title_s),
-         Paragraph('Relatório Financeiro · Unidade Anti-Gastos', sub_s)],
+        [Paragraph('Verly', title_s),
+         Paragraph('Relatório Financeiro · Track it. Verify it.', sub_s)],
         [Paragraph('GERADO EM', label_s),
          Paragraph(data_relatorio, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold')),
          Spacer(1, 4),
-         Paragraph('RECRUTA', label_s),
+         Paragraph('UTILIZADOR', label_s),
          Paragraph(current_user.nome, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold'))]
     ]]
     ht = Table(header_data, colWidths=[10*cm, 7*cm])
     ht.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
     story.append(ht)
     story.append(Spacer(1, 0.3*cm))
-    story.append(HRFlowable(width='100%', thickness=2, color=colors.HexColor('#e63946')))
+    story.append(HRFlowable(width='100%', thickness=2, color=colors.HexColor('#4A3AFF')))
     story.append(Spacer(1, 0.5*cm))
 
     # Resumo
@@ -67,13 +67,13 @@ def exportar_pdf():
     ]
     rt = Table(resumo_data, colWidths=[5.5*cm, 5.5*cm, 5.5*cm])
     rt.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a1a2e')),
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('FONTSIZE', (0,0), (-1,0), 9),
         ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
         ('FONTSIZE', (0,1), (-1,1), 18),
-        ('TEXTCOLOR', (0,1), (-1,1), colors.HexColor('#e63946')),
+        ('TEXTCOLOR', (0,1), (-1,1), colors.HexColor('#4A3AFF')),
         ('ALIGN', (0,0), (-1,-1), 'CENTER'),
         ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
         ('TOPPADDING', (0,0), (-1,-1), 12),
@@ -97,7 +97,7 @@ def exportar_pdf():
             cat_data.append([cat, f'{val:.2f} €', f'{pct:.1f}%'])
         ct = Table(cat_data, colWidths=[8*cm, 4*cm, 4.5*cm])
         ct.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#e63946')),
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4A3AFF')),
             ('TEXTCOLOR', (0,0), (-1,0), colors.white),
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
             ('FONTSIZE', (0,0), (-1,-1), 9),
@@ -124,7 +124,7 @@ def exportar_pdf():
         ])
     ft = Table(fat_data, colWidths=[4*cm, 3.5*cm, 2.5*cm, 2.2*cm, 2*cm, 2.3*cm])
     ft.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1a1a2e')),
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
         ('TEXTCOLOR', (0,0), (-1,0), colors.white),
         ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
         ('FONTSIZE', (0,0), (-1,-1), 8),
@@ -143,12 +143,12 @@ def exportar_pdf():
     nota = ParagraphStyle('nota', fontSize=7, fontName='Helvetica',
                           textColor=colors.HexColor('#aaaaaa'), leading=10)
     story.append(Paragraph(
-        'Relatório gerado pelo Shopping Police · Unidade Anti-Gastos · '
+        'Relatório gerado pelo Verly · Track it. Verify it. Never lose a deadline. · '
         'Garantia legal: 3 anos (Diretiva EU 2019/771). Devolução: 30 dias.',
         nota))
 
     doc.build(story)
     buffer.seek(0)
 
-    filename = f'relatorio_shopping_police_{datetime.now().strftime("%Y%m%d")}.pdf'
+    filename = f'relatorio_verly_{datetime.now().strftime("%Y%m%d")}.pdf'
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')

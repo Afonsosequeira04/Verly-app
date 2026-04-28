@@ -24,7 +24,7 @@ def create_app():
     db.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = 'auth.login'
-    login_manager.login_message = 'Precisas de fazer login primeiro, recruta.'
+    login_manager.login_message = 'Precisas de fazer login primeiro.'
 
     from app.models import User
 
@@ -54,7 +54,6 @@ def create_app():
 
 
 def _migrate_db():
-    """Adiciona colunas novas se não existirem (para bases de dados antigas)."""
     from sqlalchemy import text
     from app import db
     

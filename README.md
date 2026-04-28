@@ -1,8 +1,8 @@
-# Shopping Police 👮‍♂️💰
+# Verly 💰
 
 **The ultimate shopping guardian and warranty tracker.**
 
-Shopping Police is a SaaS application that helps users manage their finances, track product warranties, and never miss a return deadline. By leveraging RAG (Retrieval-Augmented Generation), the "Police" analyzes your receipts and invoices to give you organized data with a touch of sarcastic humor.
+Verly is a SaaS application that helps users manage their finances, track product warranties, and never miss a return deadline. By leveraging RAG (Retrieval-Augmented Generation), the "Police" analyzes your receipts and invoices to give you organized data with a touch of sarcastic humor.
 
 ---
 
@@ -39,5 +39,5 @@ Before running the project, ensure you have:
 
 1. **Clone the repository**:
    ```bash
-   git clone [https://github.com/your-username/shopping-police.git](https://github.com/your-username/shopping-police.git)
+   git clone [https://github.com/your-username/shopping-police.git](https://github.com/your-username/verly.git)
    cd shopping-police

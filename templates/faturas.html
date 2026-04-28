@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
-{% block title %}Inventário · Shopping Police{% endblock %}
+{% block title %}Faturas · Verly{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">Inventário de Provas</h1>
+        <h1 class="page-title">Faturas</h1>
         <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
     </div>
     <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
@@ -12,7 +12,7 @@
 
 <!-- UPLOAD -->
 <div class="card" style="margin-bottom:24px;">
-    <div class="card-header"><h3>Submeter Nova Prova</h3></div>
+    <div class="card-header"><h3>Submeter Nova Fatura</h3></div>
     <div class="card-body">
         <div class="upload-zone" id="uploadZone">
             <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
@@ -20,8 +20,8 @@
             <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
             <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
         </div>
-        <button class="btn-primary" id="btnUpload" style="display:none;margin-top:12px;" onclick="uploadFile()">
-            Enviar para Análise →
+        <button class="btn-accent" id="btnUpload" style="display:none;margin-top:14px;" onclick="uploadFile()">
+            Analisar com IA →
         </button>
         <div class="upload-status" id="uploadStatus"></div>
     </div>
@@ -85,7 +85,7 @@
                             {% endfor %}
                         </select>
                     </td>
-                    <td>{{ f.data_compra or '—' }}</td>
+                    <td class="text-muted">{{ f.data_compra or '—' }}</td>
                     <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
                         <span class="editable" onclick="editarCampo({{ f.id }}, 'total', this)">
                             {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
@@ -145,7 +145,7 @@ async function uploadFile() {
     if (!selectedFile) return;
     const btn = document.getElementById('btnUpload');
     btn.disabled = true; btn.textContent = 'A analisar...';
-    setStatus('loading', '⏳ A Polícia está a analisar a fatura...');
+    setStatus('loading', '⏳ A analisar a fatura com IA...');
     const formData = new FormData();
     formData.append('file', selectedFile);
     try {
@@ -158,7 +158,7 @@ async function uploadFile() {
             setStatus('error', '✗ ' + data.message);
         }
     } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
-    btn.disabled = false; btn.textContent = 'Enviar para Análise →';
+    btn.disabled = false; btn.textContent = 'Analisar com IA →';
 }
 
 function setStatus(type, msg) {

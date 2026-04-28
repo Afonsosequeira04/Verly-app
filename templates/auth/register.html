@@ -3,39 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Registo · Shopping Police</title>
-    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <title>Criar conta · Verly</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body class="auth-body">
 <div class="auth-container">
     <div class="auth-left">
-        <div class="auth-brand">
-            <div class="auth-logo">🚔</div>
-            <h1>Shopping<br>Police</h1>
-            <p>Unidade Anti-Gastos · Porto Division</p>
+        <div class="auth-logo-wrap">
+            <div class="auth-logo-icon">🛡️</div>
+            <span class="auth-brand-name">Verly</span>
         </div>
-        <div class="auth-tagline">
-            <blockquote>"Bem-vindo à esquadra. Os teus gastos irão arrepender-se."</blockquote>
+
+        <div class="auth-hero">
+            <h1>Começa a <span>verificar</span> as tuas finanças hoje.</h1>
+            <p>Junta-te ao Verly e deixa a IA tratar das tuas faturas, garantias e prazos.</p>
+        </div>
+
+        <div class="auth-features">
+            <div class="auth-feature">
+                <div class="auth-feature-dot"></div>
+                <span>Upload de PDFs e imagens de faturas</span>
+            </div>
+            <div class="auth-feature">
+                <div class="auth-feature-dot"></div>
+                <span>Dados isolados e privados por utilizador</span>
+            </div>
+            <div class="auth-feature">
+                <div class="auth-feature-dot"></div>
+                <span>Assistente IA para dúvidas sobre os teus gastos</span>
+            </div>
         </div>
     </div>
+
     <div class="auth-right">
         <div class="auth-card">
-            <h2>Alistamento</h2>
-            <p class="auth-sub">Cria a tua ficha de recruta.</p>
+            <p class="auth-sub" style="margin-bottom:4px;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--text-sub);font-weight:600;">Novo utilizador</p>
+            <h2 class="auth-card-title">Criar conta</h2>
+            <p class="auth-sub">É rápido e gratuito. Começa agora.</p>
+
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}{% for category, message in messages %}
                     <div class="flash flash-{{ category }}">{{ message }}</div>
                 {% endfor %}{% endif %}
             {% endwith %}
+
             <form method="POST">
                 <div class="form-group">
                     <label>Nome</label>
-                    <input type="text" name="nome" placeholder="O teu nome, recruta" required autofocus>
+                    <input type="text" name="nome" placeholder="O teu nome" required autofocus>
                 </div>
                 <div class="form-group">
                     <label>Email</label>
-                    <input type="email" name="email" placeholder="recruta@exemplo.com" required>
+                    <input type="email" name="email" placeholder="o.teu@email.com" required>
                 </div>
                 <div class="form-group">
                     <label>Password</label>
@@ -45,9 +65,10 @@
                     <label>Confirmar Password</label>
                     <input type="password" name="confirm_password" placeholder="Repete a password" required>
                 </div>
-                <button type="submit" class="btn-primary">Alistar-me →</button>
+                <button type="submit" class="btn-primary">Criar conta →</button>
             </form>
-            <p class="auth-switch">Já tens conta? <a href="{{ url_for('auth.login') }}">Faz login</a></p>
+
+            <p class="auth-switch">Já tens conta? <a href="{{ url_for('auth.login') }}">Iniciar sessão</a></p>
         </div>
     </div>
 </div>
