@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from datetime import datetime, timedelta
 from llama_index.core import (
@@ -16,36 +17,42 @@ Settings.llm = Groq(model="llama-3.3-70b-versatile", api_key=api_key)
 Settings.embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 
-# ─── SYSTEM PROMPTS POR PERSONALIDADE ────────────────────────────────────────
+# ─── SYSTEM PROMPTS ──────────────────────────────────────────────────────────
 
 SYSTEM_PROMPTS = {
-    'savage': """És a Verly, uma assistente financeira pessoal brutal e sem filtros.
-Tens acesso às faturas do utilizador e analisas os seus padrões de consumo com frieza cirúrgica.
-O teu tom é direto, cortante e honesto — nunca gentil desnecessariamente.
-Quando o utilizador gasta mal, dizes-lhe sem rodeios. Quando gasta bem, reconheces (raramente).
-Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), alternativas mais baratas.
-Respondes sempre em português de Portugal. Frases curtas. Zero floreados.""",
+    'savage': """És a Verly. Assistente financeira brutal e sem filtros.
+REGRAS:
+- Respostas CURTAS. Máximo 3-4 frases. Nunca mais.
+- Tom direto e cortante. Sem "Olá", sem "Estou aqui para ajudar".
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Quando o utilizador gasta mal, diz-lhe com exemplos concretos.
+- Português de Portugal.""",
 
-    'sarcastic': """És a Verly, uma assistente financeira com ironia refinada e sarcasmo inteligente.
-Tens acesso às faturas do utilizador e comentas os seus hábitos financeiros com humor ácido mas construtivo.
-Nunca és grosseiro — és espirituoso. O sarcasmo serve para fazer o utilizador pensar, não para magoar.
-Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), sugestões práticas.
-Respondes sempre em português de Portugal. Com estilo.""",
+    'sarcastic': """És a Verly. Assistente financeira sarcástica e irónica.
+REGRAS:
+- Respostas CURTAS. Máximo 3-4 frases. Nunca mais.
+- Tom irónico e espirituoso. Sem "Olá", sem introduções longas.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Sarcasmo inteligente que faça pensar.
+- Português de Portugal.""",
 
-    'calm': """És a Verly, uma coach financeira pessoal empática, inteligente e construtiva.
-Tens acesso às faturas do utilizador e ajudas-o a tomar decisões financeiras mais conscientes.
-O teu tom é gentil, encorajador e honesto. Celebras as boas decisões. Ajudas a melhorar as más sem julgamento.
-Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), dicas práticas de poupança.
-Respondes sempre em português de Portugal. Com clareza e calor humano.""",
+    'calm': """És a Verly. Coach financeira empática e direta.
+REGRAS:
+- Respostas CURTAS e úteis. Máximo 3-4 frases. Nunca mais.
+- Vai direto ao ponto. Sem "Olá", sem parágrafos longos.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Sê concreto: números, categorias, datas reais.
+- Português de Portugal.""",
 
-    'pro': """És a Verly, um CFO pessoal altamente analítico e orientado a dados.
-Tens acesso às faturas do utilizador e fazes análises de custo-benefício objetivas e rigorosas.
-O teu tom é profissional, preciso e factual. Zero emoções, máximo rigor. Usas dados concretos das faturas.
-Dás sempre informação útil: prazos de devolução (30 dias), garantias (3 anos EU), análise de ROI de compras.
-Respondes sempre em português de Portugal. Com precisão e objetividade.""",
+    'pro': """És a Verly. CFO pessoal analítico e preciso.
+REGRAS:
+- Respostas CURTAS e factuais. Máximo 3-4 frases. Nunca mais.
+- Vai direto aos números. Sem introduções.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Foca em: totais, categorias, padrões de gasto.
+- Português de Portugal.""",
 }
 
-# Prompt padrão caso a personalidade não esteja definida
 DEFAULT_SYSTEM_PROMPT = SYSTEM_PROMPTS['calm']
 
 CATEGORIAS_VALIDAS = [
@@ -54,8 +61,137 @@ CATEGORIAS_VALIDAS = [
     'Educação', 'Outros'
 ]
 
+CATEGORIA_MAP = {
+    'tecnologia': 'Tecnologia',
+    'alimentacao': 'Alimentação', 'alimentação': 'Alimentação',
+    'vestuario': 'Vestuário', 'vestuário': 'Vestuário',
+    'casa e decoracao': 'Casa & Decoração', 'casa & decoracao': 'Casa & Decoração',
+    'casa & decoração': 'Casa & Decoração',
+    'saude e beleza': 'Saúde & Beleza', 'saúde e beleza': 'Saúde & Beleza',
+    'saude & beleza': 'Saúde & Beleza',
+    'desporto': 'Desporto',
+    'entretenimento': 'Entretenimento',
+    'transportes': 'Transportes',
+    'educacao': 'Educação', 'educação': 'Educação',
+    'outros': 'Outros',
+}
 
-# ─── FUNÇÕES DE ÍNDICE ────────────────────────────────────────────────────────
+
+# ─── EXTRAÇÃO DIRETA DO TEXTO ─────────────────────────────────────────────────
+
+def _extrair_campo(texto, *labels):
+    for label in labels:
+        pattern = rf'{re.escape(label)}\s*[:\-]\s*(.+)'
+        match = re.search(pattern, texto, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _extrair_total(texto):
+    patterns = [
+        r'TOTAL\s+A\s+PAGAR\s*[:\-]\s*([\d]+[.,][\d]{2})',
+        r'TOTAL\s*[:\-]\s*([\d]+[.,][\d]{2})\s*EUR',
+        r'TOTAL\s*[:\-]\s*€?\s*([\d]+[.,][\d]{2})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, texto, re.IGNORECASE)
+        if match:
+            try:
+                return float(match.group(1).replace(',', '.'))
+            except ValueError:
+                continue
+    return None
+
+
+def _normalizar_data(data_str):
+    if not data_str:
+        return None
+    data_str = data_str.strip()
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%y', '%Y/%m/%d']:
+        try:
+            return datetime.strptime(data_str, fmt).strftime('%d/%m/%Y')
+        except ValueError:
+            continue
+    return None
+
+
+def _calcular_datas(data_compra_str):
+    data_norm = _normalizar_data(data_compra_str)
+    if not data_norm:
+        return None, None
+    try:
+        data = datetime.strptime(data_norm, '%d/%m/%Y')
+        return (
+            (data + timedelta(days=30)).strftime('%d/%m/%Y'),
+            data.replace(year=data.year + 3).strftime('%d/%m/%Y'),
+        )
+    except Exception:
+        return None, None
+
+
+def _extrair_items(texto):
+    """
+    Extrai o produto/serviço — o texto está na linha SEGUINTE ao label.
+    Ex:
+        PRODUTO / SERVICO ADQUIRIDO:
+        Pack 3 T-Shirts mais Sweatshirt
+    """
+    patterns = [
+        r'PRODUTO\s*/\s*SERVICO\s+ADQUIRIDO\s*[:\-]?\s*\n\s*(.+)',
+        r'PRODUTO\s*[:\-]\s*\n\s*(.+)',
+        r'DESCRI[CÇ][AÃ]O\s*[:\-]\s*\n\s*(.+)',
+        r'ARTIGO\s*[:\-]\s*\n\s*(.+)',
+        # Também tenta na mesma linha
+        r'PRODUTO\s*/\s*SERVICO\s+ADQUIRIDO\s*[:\-]\s*(.+)',
+        r'PRODUTO\s*[:\-]\s*(.+)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, texto, re.IGNORECASE)
+        if match:
+            item = match.group(1).strip()
+            if len(item) > 3:
+                return [item]
+    return []
+
+
+def extract_invoice_info_from_text(texto, filename):
+    """Extrai info da fatura directamente por regex — sem IA."""
+    loja = _extrair_campo(texto, 'LOJA', 'Loja / Fornecedor', 'Fornecedor', 'Empresa')
+    if not loja or '@' in loja or '.pt' in loja or '.com' in loja:
+        loja = os.path.splitext(filename)[0].replace('_', ' ').title()
+
+    data_raw = _extrair_campo(texto, 'DATA DE COMPRA', 'Data de Compra', 'DATA', 'Data')
+    data_compra = _normalizar_data(data_raw)
+
+    total = _extrair_total(texto)
+
+    cat_raw = _extrair_campo(texto, 'CATEGORIA')
+    categoria = 'Outros'
+    if cat_raw:
+        cat_lower = cat_raw.lower().strip()
+        categoria = CATEGORIA_MAP.get(cat_lower, 'Outros')
+        if categoria == 'Outros':
+            for key, val in CATEGORIA_MAP.items():
+                if key in cat_lower:
+                    categoria = val
+                    break
+
+    items = _extrair_items(texto)
+    data_devolucao, data_garantia = _calcular_datas(data_compra)
+
+    return {
+        'loja': loja or 'Desconhecida',
+        'data_compra': data_compra,
+        'total': total or 0.0,
+        'items': json.dumps(items, ensure_ascii=False),
+        'categoria': categoria,
+        'data_garantia': data_garantia,
+        'data_devolucao': data_devolucao,
+    }
+
+
+# ─── ÍNDICE ───────────────────────────────────────────────────────────────────
 
 def get_user_paths(base_upload, base_storage, user_id):
     data_dir = os.path.join(base_upload, str(user_id))
@@ -94,48 +230,25 @@ def rebuild_index(data_dir, storage_dir):
 
 
 def chat_with_index(index, user_message, personalidade='calm'):
-    """
-    Faz uma query ao índice com o system prompt da personalidade escolhida.
-    """
     system = SYSTEM_PROMPTS.get(personalidade, DEFAULT_SYSTEM_PROMPT)
-    full_query = f"{system}\n\nPergunta do utilizador: {user_message}"
+    full_query = f"{system}\n\nPergunta: {user_message}"
     query_engine = index.as_query_engine(streaming=False)
     response = query_engine.query(full_query)
     return str(response)
 
 
-# ─── EXTRAÇÃO DE FATURAS ──────────────────────────────────────────────────────
-
-def _calcular_datas(data_compra_str):
-    """Calcula data de devolução (30 dias) e garantia (3 anos) a partir da data de compra."""
-    if not data_compra_str:
-        return None, None
-    formatos = ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%y']
-    data = None
-    for fmt in formatos:
-        try:
-            data = datetime.strptime(data_compra_str.strip(), fmt)
-            break
-        except ValueError:
-            continue
-    if not data:
-        return None, None
-    data_devolucao = (data + timedelta(days=30)).strftime('%d/%m/%Y')
-    data_garantia = data.replace(year=data.year + 3).strftime('%d/%m/%Y')
-    return data_devolucao, data_garantia
-
+# ─── EXTRAÇÃO COM IA (PDF / imagem) ──────────────────────────────────────────
 
 def extract_invoice_info(index, filename):
-    """Extrai informações estruturadas de uma fatura usando a IA."""
-    prompt = f"""Analisa esta fatura e responde APENAS com um objeto JSON válido, sem texto adicional, com esta estrutura exata:
-{{
-  "loja": "nome da loja ou empresa",
-  "data_compra": "data no formato DD/MM/YYYY ou null",
-  "total": valor numérico sem símbolo de moeda ou null,
-  "items": ["item1", "item2", "item3"],
-  "categoria": "uma das seguintes categorias exatas: {', '.join(CATEGORIAS_VALIDAS)}"
-}}
-Se não encontrares algum campo, usa null. Para a categoria, escolhe a mais adequada com base nos produtos."""
+    prompt = """Lê o documento e extrai APENAS dados escritos explicitamente. Não inventes nada.
+Responde APENAS com JSON válido:
+{
+  "loja": "nome exacto da loja (nunca um email ou URL)",
+  "data_compra": "DD/MM/YYYY ou null",
+  "total": numero decimal ou null,
+  "items": ["produto ou serviço comprado"],
+  "categoria": "Tecnologia|Alimentação|Vestuário|Casa & Decoração|Saúde & Beleza|Desporto|Entretenimento|Transportes|Educação|Outros"
+}"""
 
     try:
         query_engine = index.as_query_engine(streaming=False)
@@ -153,16 +266,19 @@ Se não encontrares algum campo, usa null. Para a categoria, escolhe a mais adeq
             text = text[start:end]
 
         data = json.loads(text)
-
-        data_compra = data.get('data_compra')
+        data_compra = _normalizar_data(data.get('data_compra'))
         data_devolucao, data_garantia = _calcular_datas(data_compra)
 
         categoria = data.get('categoria', 'Outros')
         if categoria not in CATEGORIAS_VALIDAS:
-            categoria = 'Outros'
+            categoria = CATEGORIA_MAP.get(categoria.lower(), 'Outros')
+
+        loja = data.get('loja') or ''
+        if not loja or '@' in loja or 'http' in loja or loja.endswith('.pt') or loja.endswith('.com'):
+            loja = os.path.splitext(filename)[0].replace('_', ' ').title()
 
         return {
-            'loja': data.get('loja') or 'Desconhecida',
+            'loja': loja,
             'data_compra': data_compra,
             'total': float(data.get('total') or 0),
             'items': json.dumps(data.get('items') or [], ensure_ascii=False),
@@ -172,7 +288,7 @@ Se não encontrares algum campo, usa null. Para a categoria, escolhe a mais adeq
         }
     except Exception:
         return {
-            'loja': 'Desconhecida',
+            'loja': os.path.splitext(filename)[0].replace('_', ' ').title(),
             'data_compra': None,
             'total': 0.0,
             'items': '[]',

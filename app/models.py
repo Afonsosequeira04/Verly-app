@@ -14,6 +14,7 @@ class User(UserMixin, db.Model):
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     notificacoes_email = db.Column(db.Boolean, default=False)
     email_notificacoes = db.Column(db.String(150))
+    personalidade = db.Column(db.String(20), default='calm')
 
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')

@@ -4,7 +4,7 @@ from flask import Blueprint, render_template, request, jsonify, current_app
 from flask_login import login_required, current_user
 from app import db
 from app.models import Fatura, CATEGORIAS
-from app.ai import get_user_paths, rebuild_index, extract_invoice_info
+from app.ai import get_user_paths, rebuild_index, extract_invoice_info, extract_invoice_info_from_text
 
 faturas_bp = Blueprint('faturas', __name__)
 
@@ -12,7 +12,6 @@ faturas_bp = Blueprint('faturas', __name__)
 @faturas_bp.route('/faturas')
 @login_required
 def faturas():
-    # Filtros
     search = request.args.get('q', '').strip()
     categoria = request.args.get('categoria', '')
     ordenar = request.args.get('ordenar', 'recente')
@@ -82,8 +81,18 @@ def upload():
     file.save(file_path)
 
     try:
-        index = rebuild_index(data_dir, storage_dir)
-        info = extract_invoice_info(index, file.filename)
+        if ext == '.txt':
+            # Lê directamente o texto — sem IA, 100% fiável
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f_txt:
+                texto = f_txt.read()
+            info = extract_invoice_info_from_text(texto, file.filename)
+        else:
+            # PDF / imagem — usa IA
+            index = rebuild_index(data_dir, storage_dir)
+            info = extract_invoice_info(index, file.filename)
+
+        # Reconstrói o índice para o chat ficar actualizado
+        rebuild_index(data_dir, storage_dir)
 
         fatura = Fatura(
             user_id=current_user.id,
@@ -101,7 +110,7 @@ def upload():
 
         return jsonify({
             'success': True,
-            'message': f'{file.filename} analisado!',
+            'message': f'{file.filename} analisado com sucesso!',
             'loja': info['loja'],
             'total': info['total'],
             'categoria': info['categoria'],

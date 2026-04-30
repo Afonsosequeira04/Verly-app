@@ -2,31 +2,31 @@
                               FATURA / RECIBO
 ================================================================================
 
-Loja / Fornecedor  : Spotify
-Data               : 2026-04-01
-Numero de Fatura   : FAT-70599-2026
+Loja / Fornecedor  : Uber
+Data               : 2026-04-10
+Numero de Fatura   : FAT-69944-2026
 
 --------------------------------------------------------------------------------
 DESCRICAO DO ARTIGO / SERVICO
 --------------------------------------------------------------------------------
 
-  Spotify Premium Individual - Abril 2026
+  Uber - Lisboa Oriente para Baixa-Chiado
 
 --------------------------------------------------------------------------------
 RESUMO DE VALORES
 --------------------------------------------------------------------------------
 
-  Subtotal (s/ IVA) : 8.93 EUR
-  IVA (23%)         : 2.06 EUR
+  Subtotal (s/ IVA) : 15.04 EUR
+  IVA (23%)         : 3.46 EUR
                       --------------------
-  TOTAL             : 10.99 EUR
+  TOTAL             : 18.50 EUR
 
 --------------------------------------------------------------------------------
   METODO DE PAGAMENTO : Cartao de Debito / Multibanco
-  CATEGORIA           : Entretenimento
+  CATEGORIA           : Transportes
 --------------------------------------------------------------------------------
 
   Obrigado pela sua compra!
-  Spotify - Servico ao Cliente: support@spotify.pt
+  Uber - Servico ao Cliente: support@uber.pt
 
 ================================================================================
