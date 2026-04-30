@@ -77,6 +77,42 @@ CATEGORIA_MAP = {
 }
 
 
+# ─── CONTEXTO DE FATURAS PARA O CHAT ─────────────────────────────────────────
+
+def _build_faturas_context(faturas) -> str:
+    """Constrói um resumo textual das faturas para injetar no system prompt do chat."""
+    if not faturas:
+        return "O utilizador ainda não tem faturas registadas."
+
+    linhas = [f"Total de faturas: {len(faturas)}"]
+
+    por_categoria: dict = {}
+    for f in faturas:
+        linha = f"- {f.loja or 'Loja desconhecida'}"
+        if f.data_compra:
+            linha += f" | {f.data_compra}"
+        if f.total:
+            linha += f" | {f.total:.2f}€"
+        if f.categoria:
+            linha += f" | {f.categoria}"
+        if f.data_garantia:
+            linha += f" | garantia até {f.data_garantia}"
+        linhas.append(linha)
+
+        cat = f.categoria or 'Outros'
+        por_categoria[cat] = por_categoria.get(cat, 0) + (f.total or 0)
+
+    total = sum(f.total or 0 for f in faturas)
+    linhas.append(f"\nTotal gasto (todas as faturas): {total:.2f}€")
+
+    if por_categoria:
+        linhas.append("\nGastos por categoria:")
+        for cat, val in sorted(por_categoria.items(), key=lambda x: x[1], reverse=True):
+            linhas.append(f"  {cat}: {val:.2f}€")
+
+    return "\n".join(linhas)
+
+
 # ─── EXTRAÇÃO DIRETA DO TEXTO ─────────────────────────────────────────────────
 
 def _extrair_campo(texto, *labels):

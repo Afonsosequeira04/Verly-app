@@ -27,13 +27,13 @@
         <div class="empty-chat" id="emptyChat">
             <div class="empty-chat-icon">✦</div>
             <h3>Assistente Verly</h3>
-            <p>Faz perguntas sobre as tuas faturas, garantias ou gastos. Primeiro carrega uma fatura em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
+            <p>Faz perguntas sobre as tuas faturas ou gastos.</p>
         </div>
         {% endif %}
     </div>
 
     <div class="chat-input-area">
-        <textarea id="userInput" placeholder="Pergunta algo sobre as tuas faturas..."
+        <textarea id="userInput" placeholder="Pergunta algo..."
             onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
         <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
     </div>
@@ -42,51 +42,129 @@
 
 {% block extra_scripts %}
 <script>
-let emptyRemoved = {{ 'false' if not conversas else 'true' }};
-window.addEventListener('load', () => { const m = document.getElementById('messages'); m.scrollTop = m.scrollHeight; });
+let emptyRemoved = {{ 'true' if conversas else 'false' }};
+
+window.addEventListener('load', () => {
+    const m = document.getElementById('messages');
+    m.scrollTop = m.scrollHeight;
+});
 
 function removeEmpty() {
-    if (!emptyRemoved) { const el = document.getElementById('emptyChat'); if (el) el.remove(); emptyRemoved = true; }
+    if (!emptyRemoved) {
+        const el = document.getElementById('emptyChat');
+        if (el) el.remove();
+        emptyRemoved = true;
+    }
 }
+
 function addMsg(role, text, avatar) {
     removeEmpty();
+
     const m = document.getElementById('messages');
     const d = document.createElement('div');
     d.className = 'msg ' + role;
-    d.innerHTML = `<div class="msg-avatar">${avatar}</div><div class="msg-bubble">${text}</div>`;
-    m.appendChild(d); m.scrollTop = m.scrollHeight;
-}
-function showTyping() {
-    removeEmpty();
-    const m = document.getElementById('messages');
-    const d = document.createElement('div');
-    d.className = 'msg bot'; d.id = 'typing';
-    d.innerHTML = `<div class="msg-avatar">✦</div><div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    m.appendChild(d); m.scrollTop = m.scrollHeight;
-}
-function removeTyping() { const t = document.getElementById('typing'); if (t) t.remove(); }
 
+    d.innerHTML = `
+        <div class="msg-avatar">${avatar}</div>
+        <div class="msg-bubble">${text}</div>
+    `;
+
+    m.appendChild(d);
+    m.scrollTop = m.scrollHeight;
+
+    return d.querySelector('.msg-bubble');
+}
+
+// 🔥 STREAMING REAL
 async function sendMessage() {
     const input = document.getElementById('userInput');
     const btn = document.getElementById('btnSend');
+
     const text = input.value.trim();
     if (!text) return;
+
     addMsg('user', text, '{{ current_user.nome[0].upper() }}');
-    input.value = ''; input.style.height = 'auto'; btn.disabled = true;
-    showTyping();
+
+    input.value = '';
+    input.style.height = 'auto';
+    btn.disabled = true;
+
+    // cria mensagem vazia do bot
+    const bubble = addMsg('bot', '', '✦');
+
+    let fullText = "";
+
     try {
-        const res = await fetch('/chat/send', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({message: text}) });
-        const data = await res.json();
-        removeTyping(); addMsg('bot', data.response, '✦');
-    } catch(e) { removeTyping(); addMsg('bot', 'Erro de ligação.', '✦'); }
+        const res = await fetch('/chat/stream', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({message: text})
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split("\n");
+
+            lines.forEach(line => {
+                if (line.startsWith("data: ")) {
+                    const t = line.replace("data: ", "");
+                    fullText += t;
+
+                    // efeito cursor
+                    bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
+
+                    const m = document.getElementById('messages');
+                    m.scrollTop = m.scrollHeight;
+                }
+            });
+        }
+
+        // remove cursor no fim
+        bubble.innerHTML = fullText;
+
+    } catch (e) {
+        bubble.innerHTML = "Erro de ligação.";
+    }
+
     btn.disabled = false;
 }
+
 async function clearChat() {
     if (!confirm('Apagar todo o histórico?')) return;
     await fetch('/chat/clear', {method:'POST'});
     location.reload();
 }
-function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+
+function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+}
+
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
 </script>
+
+<style>
+.cursor {
+    display: inline-block;
+    margin-left: 2px;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0% {opacity: 1;}
+    50% {opacity: 0;}
+    100% {opacity: 1;}
+}
+</style>
 {% endblock %}
