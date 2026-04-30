@@ -1,43 +1,71 @@
-# Verly 💰
+Verly 💰
+The ultimate shopping guardian and warranty tracker.
 
-**The ultimate shopping guardian and warranty tracker.**
+Verly is a SaaS application designed to help users manage their finances, track product warranties, and never miss a return deadline. By leveraging RAG (Retrieval-Augmented Generation), the "Police" analyzes your receipts and invoices to extract organized data, delivered with a touch of sarcastic humor (or professional insight—the choice is yours).
 
-Verly is a SaaS application that helps users manage their finances, track product warranties, and never miss a return deadline. By leveraging RAG (Retrieval-Augmented Generation), the "Police" analyzes your receipts and invoices to give you organized data with a touch of sarcastic humor.
+🚀 Features
+Smart Invoice Upload: Upload PDFs or images of your receipts with automated extraction via OCR and AI.
 
----
+AI-Powered Analysis: Uses Llama 3.3 (via Groq) to identify stores, prices, dates, items, and categories.
 
-## 🚀 Features
+Personality System (Roasting): Choose between 4 profiles (Savage, Sarcastic, Calm, Pro) to receive feedback on your spending habits.
 
-- **Smart Invoice Upload**: Upload PDFs or images of your receipts directly to the platform.
-- **AI-Powered Analysis**: Uses Llama 3 (via Groq) to extract store names, prices, dates, and items.
-- **Warranty Tracking**: Automatically calculates warranty periods (standard 3 years in the EU) and return windows.
-- **Financial "Roasting"**: A unique personality that gives you a hard time if you spend too much on useless stuff.
-- **Privacy First**: Multi-user support with isolated data folders for each user.
+Impulse Control Module: Ask Verly before you buy. It performs a cost-benefit analysis and suggests whether you should pull the trigger or save your money.
 
----
+Subscription Detector: Identifies financial "leaks" in recurring services (Netflix, Spotify, etc.) and warns you if you're paying for something you don't use.
 
-## 🛠️ Tech Stack
+Financial Damage Report: Detailed monthly reports featuring "estimated waste" calculations and spending trend analysis.
 
-- **Backend**: Python / Flask
-- **AI Orchestration**: [LlamaIndex](https://www.llamaindex.ai/)
-- **LLM**: Meta Llama 3.3 (via [Groq](https://groq.com/))
-- **Embeddings**: HuggingFace (BGE Small)
-- **OCR**: SimpleDirectoryReader (Image/PDF support)
-- **Deployment**: Ready for Render/Railway
+Warranty & Returns: Automatic calculation of warranty periods (EU standard 3 years) and return windows.
 
----
+PDF Export: Generate professional reports of your expenses using ReportLab.
 
-## 📋 Prerequisites
+🛠️ Tech Stack
+Backend & AI
+Language: Python 3.10+
 
-Before running the project, ensure you have:
-- Python 3.10+
-- A Groq API Key
+Web Framework: Flask (with Flask-Login & SQLAlchemy)
 
----
+AI Orchestration: LlamaIndex
 
-## 🔧 Installation & Setup
+LLM: Meta Llama 3.3 via Groq
 
-1. **Clone the repository**:
-   ```bash
-   git clone [https://github.com/your-username/shopping-police.git](https://github.com/your-username/verly.git)
-   cd shopping-police
+Embeddings: HuggingFace (BGE Small)
+
+Database: SQLite (with automatic migration system for new schema fields)
+
+Frontend
+Engine: Jinja2 Templates
+
+Design: Modern "Dark Mode" UI with pure CSS and dynamic variables.
+
+Typography: Sora & Inter.
+
+🔧 Installation & Setup
+Clone the repository:
+
+Bash
+git clone https://github.com/your-username/verly.git
+cd verly
+Set up Environment:
+
+Bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+Environment Variables:
+Create a .env file in the root directory:
+
+Code snippet
+GROQ_API_KEY=your_api_key_here
+FLASK_SECRET_KEY=your_secure_secret_key
+Run the Application:
+
+📋 Project Structure (Summary)
+/app: Core logic (Blueprints for invoices, chat, scoring, subscriptions, etc.).
+
+/templates: HTML interfaces organized by module (Jinja2).
+
+/static: Assets, including custom CSS and inline SVG icons.
+
+/user_data: Isolated storage for text data and vector indices per user (Privacy First).

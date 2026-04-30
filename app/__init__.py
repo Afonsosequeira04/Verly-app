@@ -1,7 +1,7 @@
 import os
-from flask import Flask
+from flask import Flask, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager
+from flask_login import LoginManager, current_user
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -43,6 +43,9 @@ def create_app():
     from app.impulse import impulse_bp
     from app.reports import reports_bp
     from app.personality import personality_bp
+    from app.onboarding import onboarding_bp
+    from app.metas import metas_bp
+    from app.fatura_detalhe import fatura_detalhe_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -55,6 +58,9 @@ def create_app():
     app.register_blueprint(impulse_bp)
     app.register_blueprint(reports_bp)
     app.register_blueprint(personality_bp)
+    app.register_blueprint(onboarding_bp)
+    app.register_blueprint(metas_bp)
+    app.register_blueprint(fatura_detalhe_bp)
 
     with app.app_context():
         db.create_all()
@@ -66,7 +72,7 @@ def create_app():
 def _migrate_db():
     from sqlalchemy import text
     from app import db
-    
+
     migrations = [
         ("faturas", "categoria", "VARCHAR(50) DEFAULT 'Outros'"),
         ("faturas", "data_garantia", "VARCHAR(50)"),
@@ -74,8 +80,10 @@ def _migrate_db():
         ("users", "notificacoes_email", "BOOLEAN DEFAULT 0"),
         ("users", "email_notificacoes", "VARCHAR(150)"),
         ("users", "personalidade", "VARCHAR(20) DEFAULT 'calm'"),
+        ("users", "orcamento_mensal", "FLOAT DEFAULT 0"),
+        ("users", "onboarding_completo", "BOOLEAN DEFAULT 0"),
     ]
-    
+
     for table, column, col_type in migrations:
         try:
             db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))

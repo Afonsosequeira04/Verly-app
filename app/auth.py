@@ -24,7 +24,7 @@ def login():
         if user and user.check_password(password):
             login_user(user, remember=request.form.get('remember') == 'on')
             return redirect(url_for('dashboard.dashboard'))
-        flash('Email ou password incorretos, recruta.', 'error')
+        flash('Email ou password incorretos.', 'error')
     return render_template('auth/login.html')
 
 
@@ -46,12 +46,13 @@ def register():
         elif User.query.filter_by(email=email).first():
             flash('Este email já está registado.', 'error')
         else:
-            user = User(nome=nome, email=email)
+            user = User(nome=nome, email=email, onboarding_completo=False)
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
             login_user(user)
-            return redirect(url_for('dashboard.dashboard'))
+            # Redirecionar para onboarding em vez do dashboard
+            return redirect(url_for('onboarding.onboarding'))
     return render_template('auth/register.html')
 
 

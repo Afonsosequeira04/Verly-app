@@ -2,31 +2,31 @@
                               FATURA / RECIBO
 ================================================================================
 
-Loja / Fornecedor  : Uber
-Data               : 2026-04-10
-Numero de Fatura   : FAT-69944-2026
+Loja / Fornecedor  : PlayStation Store
+Data               : 2026-03-15
+Numero de Fatura   : FAT-90807-2026
 
 --------------------------------------------------------------------------------
 DESCRICAO DO ARTIGO / SERVICO
 --------------------------------------------------------------------------------
 
-  Uber - Lisboa Oriente para Baixa-Chiado
+  GTA VI - PS5 Digital Edition
 
 --------------------------------------------------------------------------------
 RESUMO DE VALORES
 --------------------------------------------------------------------------------
 
-  Subtotal (s/ IVA) : 15.04 EUR
-  IVA (23%)         : 3.46 EUR
+  Subtotal (s/ IVA) : 65.03 EUR
+  IVA (23%)         : 14.96 EUR
                       --------------------
-  TOTAL             : 18.50 EUR
+  TOTAL             : 79.99 EUR
 
 --------------------------------------------------------------------------------
   METODO DE PAGAMENTO : Cartao de Debito / Multibanco
-  CATEGORIA           : Transportes
+  CATEGORIA           : Entretenimento
 --------------------------------------------------------------------------------
 
   Obrigado pela sua compra!
-  Uber - Servico ao Cliente: support@uber.pt
+  PlayStation Store - Servico ao Cliente: support@playstation-store.pt
 
 ================================================================================

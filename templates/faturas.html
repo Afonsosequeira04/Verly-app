@@ -1,13 +1,30 @@
 {% extends 'base.html' %}
 {% block title %}Faturas · Verly{% endblock %}
 
+{% block extra_head %}
+<style>
+.items-chip { position:relative; display:inline-flex; align-items:center; gap:5px; background:var(--surface3); border:1px solid var(--border); border-radius:6px; padding:3px 10px; font-size:12px; color:var(--text-muted); cursor:default; }
+.items-chip:hover { border-color:var(--border-hover); color:var(--text); }
+.items-tooltip { display:none; position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; min-width:180px; max-width:260px; z-index:100; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+.items-chip:hover .items-tooltip { display:block; }
+.items-tooltip li { list-style:none; font-size:12px; color:var(--text); padding:3px 0; display:flex; align-items:center; gap:6px; }
+.items-tooltip li::before { content:''; width:5px; height:5px; border-radius:50%; background:var(--brand); flex-shrink:0; }
+
+.row-link { cursor:pointer; }
+.row-link:hover td { background:rgba(74,58,255,0.04); }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
         <h1 class="page-title">Faturas</h1>
         <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
     </div>
-    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">⬇ Exportar PDF</a>
+    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Exportar PDF
+    </a>
 </div>
 
 <!-- UPLOAD -->
@@ -16,7 +33,9 @@
     <div class="card-body">
         <div class="upload-zone" id="uploadZone">
             <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
-            <div class="upload-icon">📁</div>
+            <div class="upload-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
             <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
             <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
         </div>
@@ -31,7 +50,7 @@
 <div class="card" style="margin-bottom:24px;">
     <div class="card-body" style="padding:16px 20px;">
         <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
-            <input type="text" name="q" value="{{ search }}" placeholder="🔍 Pesquisar loja, item..." class="filtro-input">
+            <input type="text" name="q" value="{{ search }}" placeholder="Pesquisar loja, item..." class="filtro-input">
             <select name="categoria" class="filtro-select">
                 <option value="">Todas as categorias</option>
                 {% for cat in categorias %}
@@ -60,52 +79,86 @@
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Ficheiro</th>
                     <th>Loja</th>
                     <th>Categoria</th>
                     <th>Data Compra</th>
                     <th>Total</th>
-                    <th>Devolução</th>
-                    <th>Garantia</th>
                     <th>Items</th>
+                    <th>Prazos</th>
                     <th></th>
                 </tr>
             </thead>
             <tbody>
                 {% for f in faturas %}
-                <tr id="row-{{ f.id }}">
-                    <td><span class="file-badge">{{ f.nome_ficheiro }}</span></td>
+                <tr id="row-{{ f.id }}" class="row-link" onclick="goToDetail(event, {{ f.id }})">
                     <td>
-                        <span class="editable" onclick="editarCampo({{ f.id }}, 'loja', this)">{{ f.loja or '—' }}</span>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <span style="font-weight:600;color:var(--text);">{{ f.loja or '—' }}</span>
+                            <span style="font-size:11px;color:var(--text-sub);">{{ f.nome_ficheiro }}</span>
+                        </div>
                     </td>
                     <td>
-                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)">
+                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)" onclick="event.stopPropagation()">
                             {% for cat in categorias %}
                             <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
                             {% endfor %}
                         </select>
                     </td>
                     <td class="text-muted">{{ f.data_compra or '—' }}</td>
-                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}">
-                        <span class="editable" onclick="editarCampo({{ f.id }}, 'total', this)">
-                            {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
-                        </span>
+                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}" style="font-weight:600;">
+                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
                     </td>
-                    <td class="{% if f.data_devolucao %}text-warning{% endif %}">{{ f.data_devolucao or '—' }}</td>
-                    <td class="text-muted">{{ f.data_garantia or '—' }}</td>
-                    <td>
+                    <td onclick="event.stopPropagation()">
                         {% if f.items_list %}
-                        <span class="items-preview" title="{{ f.items_list|join(', ') }}">{{ f.items_list|length }} item(s)</span>
-                        {% else %}—{% endif %}
+                        <div class="items-chip">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                            {{ f.items_list|length }}
+                            <div class="items-tooltip">
+                                <ul>
+                                {% for item in f.items_list[:6] %}
+                                    <li>{{ item }}</li>
+                                {% endfor %}
+                                {% if f.items_list|length > 6 %}
+                                    <li style="color:var(--text-muted);">+{{ f.items_list|length - 6 }} mais...</li>
+                                {% endif %}
+                                </ul>
+                            </div>
+                        </div>
+                        {% else %}
+                        <span style="color:var(--text-sub);font-size:12px;">—</span>
+                        {% endif %}
                     </td>
-                    <td><button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button></td>
+                    <td>
+                        <div style="display:flex;flex-direction:column;gap:3px;">
+                            {% if f.data_devolucao %}
+                            <span style="font-size:11px;color:var(--yellow);">Dev: {{ f.data_devolucao }}</span>
+                            {% endif %}
+                            {% if f.data_garantia %}
+                            <span style="font-size:11px;color:var(--green);">Gar: {{ f.data_garantia }}</span>
+                            {% endif %}
+                            {% if not f.data_devolucao and not f.data_garantia %}
+                            <span style="color:var(--text-sub);font-size:12px;">—</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td onclick="event.stopPropagation()">
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <a href="/faturas/{{ f.id }}" style="display:flex;align-items:center;padding:5px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:7px;color:var(--text-muted);font-size:12px;text-decoration:none;gap:4px;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--brand)';this.style.color='var(--brand)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                Ver
+                            </a>
+                            <button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button>
+                        </div>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
         {% else %}
         <div class="empty-card">
-            <span>🧾</span>
+            <div style="width:48px;height:48px;background:var(--surface2);border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
             <p>Nenhuma fatura encontrada.<br>
             {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
         </div>
@@ -117,6 +170,10 @@
 {% block extra_scripts %}
 <script>
 let selectedFile = null;
+
+function goToDetail(e, id) {
+    window.location.href = '/faturas/' + id;
+}
 
 function handleFileSelect(input) {
     selectedFile = input.files[0];
@@ -145,7 +202,7 @@ async function uploadFile() {
     if (!selectedFile) return;
     const btn = document.getElementById('btnUpload');
     btn.disabled = true; btn.textContent = 'A analisar...';
-    setStatus('loading', '⏳ A analisar a fatura com IA...');
+    setStatus('loading', 'A analisar a fatura com IA...');
     const formData = new FormData();
     formData.append('file', selectedFile);
     try {
@@ -173,27 +230,6 @@ async function editarCategoria(id, valor) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ categoria: valor })
     });
-}
-
-function editarCampo(id, campo, el) {
-    const valor = el.textContent.replace(' €', '').trim();
-    const input = document.createElement('input');
-    input.type = 'text'; input.value = valor === '—' ? '' : valor;
-    input.className = 'inline-edit';
-    el.replaceWith(input);
-    input.focus();
-    input.addEventListener('blur', async () => {
-        const novo = input.value.trim();
-        const body = {};
-        body[campo] = novo;
-        await fetch(`/faturas/editar/${id}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        location.reload();
-    });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); });
 }
 
 async function deleteFatura(id) {

@@ -1,0 +1,163 @@
+{% extends 'base.html' %}
+{% block title %}Metas · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Metas de Poupança</h1>
+        <p class="page-sub">{{ mes_atual }} · {{ "%.2f"|format(total_gasto) }} € gastos de {{ "%.2f"|format(total_orcado) }} € orçamentados</p>
+    </div>
+    <button class="btn-accent" onclick="openAddMeta()">+ Nova Meta</button>
+</div>
+
+{% if metas %}
+<!-- Barra de progresso global -->
+{% set pct_global = [(total_gasto / total_orcado * 100)|round|int, 100]|min if total_orcado > 0 else 0 %}
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-body" style="padding:20px 24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-weight:600;font-size:14px;">Orçamento Global do Mês</span>
+            <span style="font-size:13px;color:var(--text-muted);">{{ "%.2f"|format(total_gasto) }} € / {{ "%.2f"|format(total_orcado) }} €</span>
+        </div>
+        <div style="background:var(--surface3);border-radius:100px;height:10px;overflow:hidden;">
+            <div style="height:100%;width:{{ pct_global }}%;border-radius:100px;background:{% if pct_global > 90 %}var(--red){% elif pct_global > 70 %}var(--yellow){% else %}var(--brand){% endif %};transition:width 0.6s ease;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;">
+            <span style="font-size:12px;color:var(--text-muted);">{{ pct_global }}% utilizado</span>
+            <span style="font-size:12px;color:var(--green);">{{ "%.2f"|format([total_orcado - total_gasto, 0]|max) }} € disponíveis</span>
+        </div>
+    </div>
+</div>
+
+<!-- Grid de metas -->
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:24px;">
+    {% for m in metas %}
+    <div class="card meta-card" data-id="{{ m.id }}">
+        <div class="card-body" style="padding:22px 24px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+                <div>
+                    <div style="font-size:12px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">{{ m.categoria }}</div>
+                    <div style="font-size:22px;font-weight:700;color:{% if m.ultrapassou %}var(--red){% else %}var(--text){% endif %};">{{ "%.2f"|format(m.gasto) }} €</div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">de {{ "%.0f"|format(m.limite) }} €</div>
+                    {% if m.ultrapassou %}
+                    <div style="font-size:11px;font-weight:700;color:var(--red);background:rgba(255,71,87,0.12);padding:3px 8px;border-radius:6px;">ULTRAPASSADO</div>
+                    {% else %}
+                    <div style="font-size:11px;font-weight:700;color:var(--green);background:rgba(0,214,143,0.1);padding:3px 8px;border-radius:6px;">{{ "%.2f"|format(m.sobra) }} € livres</div>
+                    {% endif %}
+                </div>
+            </div>
+            <!-- Progress bar -->
+            <div style="background:var(--surface3);border-radius:100px;height:6px;overflow:hidden;margin-bottom:14px;">
+                <div style="height:100%;width:{{ m.pct }}%;border-radius:100px;background:{% if m.ultrapassou %}var(--red){% elif m.pct > 80 %}var(--yellow){% else %}var(--brand){% endif %};transition:width 0.6s ease;"></div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:12px;color:var(--text-muted);">{{ m.pct }}% utilizado</span>
+                <div style="display:flex;gap:8px;">
+                    <button onclick="editMeta({{ m.id }}, '{{ m.categoria }}', {{ m.limite }})" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;transition:all 0.2s;font-family:'Outfit',sans-serif;" onmouseover="this.style.borderColor='var(--border-hover)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">Editar</button>
+                    <button onclick="deleteMeta({{ m.id }})" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;transition:all 0.2s;font-family:'Outfit',sans-serif;" onmouseover="this.style.borderColor='var(--red)';this.style.color='var(--red)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">Remover</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-body" style="padding:60px;text-align:center;">
+        <div style="width:56px;height:56px;background:var(--surface2);border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </div>
+        <h3 style="font-size:16px;font-weight:600;margin-bottom:8px;">Sem metas definidas</h3>
+        <p style="color:var(--text-muted);font-size:14px;margin-bottom:20px;">Define um orçamento por categoria e controla os teus gastos em tempo real.</p>
+        <button class="btn-accent" onclick="openAddMeta()">Criar primeira meta</button>
+    </div>
+</div>
+{% endif %}
+
+{% if sem_meta %}
+<div class="card">
+    <div class="card-header"><h3>Categorias sem meta</h3></div>
+    <div class="card-body" style="padding:0;">
+        <table class="data-table">
+            <thead>
+                <tr><th>Categoria</th><th>Gasto este mês</th><th></th></tr>
+            </thead>
+            <tbody>
+                {% for s in sem_meta %}
+                <tr>
+                    <td style="font-weight:500;">{{ s.categoria }}</td>
+                    <td style="color:var(--yellow);font-weight:600;">{{ "%.2f"|format(s.gasto) }} €</td>
+                    <td><button onclick="openAddMetaFor('{{ s.categoria }}')" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:5px 14px;border-radius:6px;font-size:12px;cursor:pointer;font-family:'Outfit',sans-serif;">Definir meta</button></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Modal Add/Edit Meta -->
+<div id="metaModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:none;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:36px;width:420px;max-width:90vw;animation:fadeUp 0.25s ease;">
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:6px;" id="modalTitle">Nova Meta</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin-bottom:28px;">Define o limite de gastos mensais para esta categoria.</p>
+
+        <div style="margin-bottom:16px;">
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px;">Categoria</label>
+            <select id="metaCat" style="width:100%;background:var(--surface2);border:1.5px solid var(--border);color:var(--text);padding:12px 14px;border-radius:10px;font-size:14px;font-family:'Outfit',sans-serif;outline:none;">
+                {% for cat in categorias %}
+                <option value="{{ cat }}">{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="margin-bottom:28px;">
+            <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:8px;">Limite Mensal (€)</label>
+            <input type="number" id="metaValor" placeholder="ex: 150" min="1" step="5" style="width:100%;background:var(--surface2);border:1.5px solid var(--border);color:var(--text);padding:12px 14px;border-radius:10px;font-size:15px;font-weight:600;font-family:'Outfit',sans-serif;outline:none;">
+        </div>
+        <div style="display:flex;gap:12px;justify-content:flex-end;">
+            <button onclick="closeModal()" style="background:transparent;border:1.5px solid var(--border);color:var(--text-muted);padding:11px 20px;border-radius:10px;font-family:'Outfit',sans-serif;font-size:14px;cursor:pointer;">Cancelar</button>
+            <button onclick="saveMeta()" class="btn-accent">Guardar</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let editingMetaId = null;
+
+function openAddMeta() { editingMetaId = null; document.getElementById('modalTitle').textContent = 'Nova Meta'; document.getElementById('metaValor').value = ''; showModal(); }
+function openAddMetaFor(cat) { editingMetaId = null; document.getElementById('modalTitle').textContent = 'Nova Meta — ' + cat; document.getElementById('metaCat').value = cat; document.getElementById('metaValor').value = ''; showModal(); }
+function editMeta(id, cat, val) { editingMetaId = id; document.getElementById('modalTitle').textContent = 'Editar Meta'; document.getElementById('metaCat').value = cat; document.getElementById('metaValor').value = val; showModal(); }
+function showModal() { document.getElementById('metaModal').style.display = 'flex'; }
+function closeModal() { document.getElementById('metaModal').style.display = 'none'; }
+
+async function saveMeta() {
+    const cat = document.getElementById('metaCat').value;
+    const val = parseFloat(document.getElementById('metaValor').value);
+    if (!val || val <= 0) { alert('Insere um valor válido.'); return; }
+
+    const res = await fetch('/metas/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria: cat, valor: val })
+    });
+    const data = await res.json();
+    if (data.success) location.reload();
+}
+
+async function deleteMeta(id) {
+    if (!confirm('Remover esta meta?')) return;
+    const res = await fetch('/metas/delete/' + id, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) location.reload();
+}
+
+// Close modal on backdrop click
+document.getElementById('metaModal').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+});
+</script>
+{% endblock %}

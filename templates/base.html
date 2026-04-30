@@ -30,7 +30,7 @@
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('faturas.faturas') }}" class="nav-link {% if request.endpoint == 'faturas.faturas' %}active{% endif %}">
+                <a href="{{ url_for('faturas.faturas') }}" class="nav-link {% if request.endpoint and 'faturas' in request.endpoint %}active{% endif %}">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
@@ -48,6 +48,16 @@
                         </svg>
                     </span>
                     <span>Assistente IA</span>
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('metas.metas') }}" class="nav-link {% if request.endpoint and 'metas' in request.endpoint %}active{% endif %}">
+                    <span class="nav-icon">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                        </svg>
+                    </span>
+                    <span>Metas</span>
                 </a>
             </li>
         </ul>
@@ -88,7 +98,8 @@
                 <a href="{{ url_for('reports.relatorio') }}" class="nav-link {% if request.endpoint and 'reports' in request.endpoint %}active{% endif %}">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
                         </svg>
                     </span>
                     <span>Relatório Mensal</span>
@@ -125,7 +136,7 @@
                 <div class="user-avatar">{{ current_user.nome[0].upper() }}</div>
                 <div class="user-details">
                     <span class="user-name">{{ current_user.nome }}</span>
-                    <span class="user-role">Utilizador</span>
+                    <span class="user-role">{{ current_user.personalidade|capitalize if current_user.personalidade else 'Calmo' }}</span>
                 </div>
             </div>
             <a href="{{ url_for('auth.logout') }}" class="btn-logout" title="Sair">

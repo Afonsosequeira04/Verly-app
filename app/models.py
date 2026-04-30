@@ -15,9 +15,12 @@ class User(UserMixin, db.Model):
     notificacoes_email = db.Column(db.Boolean, default=False)
     email_notificacoes = db.Column(db.String(150))
     personalidade = db.Column(db.String(20), default='calm')
+    orcamento_mensal = db.Column(db.Float, default=0)
+    onboarding_completo = db.Column(db.Boolean, default=False)
 
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
+    metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -58,3 +61,13 @@ class Conversa(db.Model):
     pergunta = db.Column(db.Text, nullable=False)
     resposta = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Meta(db.Model):
+    __tablename__ = 'metas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    categoria = db.Column(db.String(50), nullable=False)
+    valor_limite = db.Column(db.Float, nullable=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)

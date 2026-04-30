@@ -1,0 +1,264 @@
+{% extends 'base.html' %}
+{% block title %}{{ fatura.loja or fatura.nome_ficheiro }} · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div style="display:flex;align-items:center;gap:14px;">
+        <a href="{{ url_for('faturas.faturas') }}" style="display:flex;align-items:center;gap:6px;color:var(--text-muted);font-size:13px;text-decoration:none;transition:color 0.2s;" onmouseover="this.style.color='var(--text)'" onmouseout="this.style.color='var(--text-muted)'">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 5 5 12 12 19"/></svg>
+            Faturas
+        </a>
+        <span style="color:var(--border);">/</span>
+        <h1 class="page-title" style="margin:0;">{{ fatura.loja or fatura.nome_ficheiro }}</h1>
+    </div>
+    <div style="display:flex;gap:10px;">
+        <button id="btnSave" onclick="saveAll()" class="btn-accent" style="display:none;">Guardar alterações</button>
+        <button onclick="confirmDelete()" style="background:transparent;border:1px solid rgba(255,71,87,0.3);color:var(--red);padding:9px 18px;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,71,87,0.1)'" onmouseout="this.style.background='transparent'">Eliminar</button>
+    </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 360px;gap:20px;">
+    <!-- Coluna principal -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+
+        <!-- Info principal -->
+        <div class="card">
+            <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+                <h3>Informação da Fatura</h3>
+                <span style="font-size:11px;color:var(--text-muted);">Clica em qualquer campo para editar</span>
+            </div>
+            <div class="card-body">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+                    <div class="detail-field">
+                        <label>Loja / Fornecedor</label>
+                        <div class="editable-field" data-field="loja" contenteditable="true" oninput="markDirty()">{{ fatura.loja or '' }}</div>
+                    </div>
+
+                    <div class="detail-field">
+                        <label>Total Pago</label>
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <div class="editable-field" data-field="total" contenteditable="true" oninput="markDirty()" style="font-size:22px;font-weight:700;color:var(--text);">{{ "%.2f"|format(fatura.total or 0) }}</div>
+                            <span style="color:var(--text-muted);font-size:16px;">€</span>
+                        </div>
+                    </div>
+
+                    <div class="detail-field">
+                        <label>Data de Compra</label>
+                        <div class="editable-field" data-field="data_compra" contenteditable="true" oninput="markDirty()">{{ fatura.data_compra or '' }}</div>
+                    </div>
+
+                    <div class="detail-field">
+                        <label>Categoria</label>
+                        <select id="catSelect" onchange="markDirty()" style="background:var(--surface2);border:1.5px solid transparent;color:var(--text);padding:10px 12px;border-radius:10px;font-size:14px;font-family:'Outfit',sans-serif;outline:none;cursor:pointer;width:100%;transition:border-color 0.2s;" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='transparent'">
+                            {% for cat in categorias %}
+                            <option value="{{ cat }}" {% if cat == fatura.categoria %}selected{% endif %}>{{ cat }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Items -->
+        <div class="card">
+            <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
+                <h3>Items / Produtos</h3>
+                <button onclick="addItem()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--brand)';this.style.color='var(--brand)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">+ Adicionar item</button>
+            </div>
+            <div class="card-body" style="padding:16px 24px;">
+                <div id="itemsList">
+                    {% if items_list %}
+                        {% for item in items_list %}
+                        <div class="item-row" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+                            <div style="width:6px;height:6px;border-radius:50%;background:var(--brand);flex-shrink:0;margin-top:1px;"></div>
+                            <div class="editable-field item-field" contenteditable="true" oninput="markDirty()" style="flex:1;padding:6px 10px;">{{ item }}</div>
+                            <button onclick="removeItem(this)" style="background:transparent;border:none;color:var(--text-sub);cursor:pointer;padding:4px;display:flex;align-items:center;transition:color 0.2s;" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-sub)'">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            </button>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                    <div id="emptyItems" style="text-align:center;padding:28px;color:var(--text-muted);font-size:13px;">
+                        Sem items registados. Adiciona manualmente ou faz re-upload com um ficheiro mais detalhado.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Notas -->
+        <div class="card">
+            <div class="card-header"><h3>Notas</h3></div>
+            <div class="card-body">
+                <textarea id="notasField" placeholder="Adiciona notas sobre esta compra..." oninput="markDirty()" style="width:100%;min-height:100px;background:var(--surface2);border:1.5px solid transparent;color:var(--text);padding:14px;border-radius:10px;font-size:14px;font-family:'Outfit',sans-serif;outline:none;resize:vertical;line-height:1.6;transition:border-color 0.2s;" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='transparent'">{{ fatura.notas or '' }}</textarea>
+            </div>
+        </div>
+    </div>
+
+    <!-- Coluna lateral -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
+
+        <!-- Garantia & Devolução -->
+        <div class="card">
+            <div class="card-header"><h3>Prazos</h3></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+
+                <div class="detail-field">
+                    <label style="display:flex;align-items:center;gap:6px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        Garantia até
+                    </label>
+                    <div class="editable-field" data-field="data_garantia" contenteditable="true" oninput="markDirty()" placeholder="dd/mm/aaaa">{{ fatura.data_garantia or '' }}</div>
+                </div>
+
+                <div class="detail-field">
+                    <label style="display:flex;align-items:center;gap:6px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></svg>
+                        Devolução até
+                    </label>
+                    <div class="editable-field" data-field="data_devolucao" contenteditable="true" oninput="markDirty()" placeholder="dd/mm/aaaa">{{ fatura.data_devolucao or '' }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Meta desta categoria -->
+        <div class="card" id="metaCard" style="display:none;">
+            <div class="card-header"><h3>Meta da Categoria</h3></div>
+            <div class="card-body" id="metaCardBody"></div>
+        </div>
+
+        <!-- Metadados -->
+        <div class="card">
+            <div class="card-header"><h3>Detalhes do Ficheiro</h3></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:12px;">
+                <div>
+                    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Ficheiro</div>
+                    <div style="font-size:13px;color:var(--text);word-break:break-all;">{{ fatura.nome_ficheiro }}</div>
+                </div>
+                <div>
+                    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Carregado em</div>
+                    <div style="font-size:13px;color:var(--text);">{{ fatura.data_upload.strftime('%d/%m/%Y %H:%M') }}</div>
+                </div>
+                <div>
+                    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">ID</div>
+                    <div style="font-size:13px;color:var(--text-muted);">#{{ fatura.id }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ações rápidas -->
+        <div class="card">
+            <div class="card-header"><h3>Ações Rápidas</h3></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:8px;">
+                <a href="{{ url_for('chat.chat') }}" style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border);text-decoration:none;color:var(--text);transition:all 0.2s;font-size:13px;" onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='var(--border)'">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--brand-2)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    Perguntar à Verly sobre esta compra
+                </a>
+                <a href="{{ url_for('scoring.analisar') }}" style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border);text-decoration:none;color:var(--text);transition:all 0.2s;font-size:13px;" onmouseover="this.style.borderColor='var(--brand)'" onmouseout="this.style.borderColor='var(--border)'">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Avaliar score desta compra
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.detail-field { display:flex;flex-direction:column;gap:6px; }
+.detail-field label { font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px; }
+.editable-field { background:var(--surface2);border:1.5px solid transparent;color:var(--text);padding:10px 12px;border-radius:10px;font-size:14px;font-family:'Outfit',sans-serif;outline:none;min-height:42px;line-height:1.4;cursor:text;transition:border-color 0.2s; }
+.editable-field:focus { border-color:var(--brand); }
+.editable-field:empty:before { content:attr(placeholder);color:var(--text-sub); }
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let isDirty = false;
+
+function markDirty() {
+    isDirty = true;
+    document.getElementById('btnSave').style.display = 'inline-flex';
+}
+
+function addItem() {
+    const empty = document.getElementById('emptyItems');
+    if (empty) empty.remove();
+    const list = document.getElementById('itemsList');
+    const row = document.createElement('div');
+    row.className = 'item-row';
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);';
+    row.innerHTML = `
+        <div style="width:6px;height:6px;border-radius:50%;background:var(--brand);flex-shrink:0;"></div>
+        <div class="editable-field item-field" contenteditable="true" oninput="markDirty()" style="flex:1;padding:6px 10px;" placeholder="Descreve o item..."></div>
+        <button onclick="removeItem(this)" style="background:transparent;border:none;color:var(--text-sub);cursor:pointer;padding:4px;display:flex;align-items:center;transition:color 0.2s;" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-sub)'">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>`;
+    list.appendChild(row);
+    row.querySelector('.item-field').focus();
+    markDirty();
+}
+
+function removeItem(btn) {
+    btn.closest('.item-row').remove();
+    markDirty();
+}
+
+async function saveAll() {
+    const btn = document.getElementById('btnSave');
+    btn.textContent = 'A guardar...';
+    btn.disabled = true;
+
+    const fields = {};
+    document.querySelectorAll('.editable-field[data-field]').forEach(el => {
+        fields[el.dataset.field] = el.textContent.trim();
+    });
+
+    fields['categoria'] = document.getElementById('catSelect').value;
+    fields['notas'] = document.getElementById('notasField').value;
+
+    // Items
+    const items = [];
+    document.querySelectorAll('.item-field').forEach(el => {
+        const t = el.textContent.trim();
+        if (t) items.push(t);
+    });
+    fields['items'] = items;
+
+    const res = await fetch(window.location.pathname + '/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields)
+    });
+    const data = await res.json();
+
+    if (data.success) {
+        btn.textContent = 'Guardado';
+        btn.style.background = 'var(--green)';
+        isDirty = false;
+        setTimeout(() => {
+            btn.textContent = 'Guardar alterações';
+            btn.style.background = '';
+            btn.disabled = false;
+            btn.style.display = 'none';
+        }, 2000);
+    } else {
+        btn.textContent = 'Erro — tenta novamente';
+        btn.disabled = false;
+    }
+}
+
+async function confirmDelete() {
+    if (!confirm('Eliminar esta fatura permanentemente?')) return;
+    const res = await fetch('/faturas/{{ fatura.id }}/delete', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) window.location.href = '/faturas';
+}
+
+// Warn before leaving with unsaved changes
+window.addEventListener('beforeunload', e => {
+    if (isDirty) { e.preventDefault(); e.returnValue = ''; }
+});
+</script>
+{% endblock %}
