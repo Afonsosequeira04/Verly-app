@@ -129,8 +129,10 @@
         <!-- Logo + botão hambúrguer -->
         <div class="sidenav-logo">
             <div class="sidenav-logo-left">
-                <img src="{{ url_for('static', filename='img/logo.png') }}"
-                     alt="Verly" style="height:32px;width:auto;flex-shrink:0;">
+                <div class="logo-mark" style="background:none;box-shadow:none;overflow:hidden;">
+                    <img src="{{ url_for('static', filename='img/logo.png') }}"
+                         alt="Verly" style="width:36px;height:36px;object-fit:contain;display:block;">
+                </div>
                 <span class="logo-text">Verly</span>
             </div>
             <button class="nav-toggle" id="navToggle" title="Colapsar menu" aria-label="Toggle menu">

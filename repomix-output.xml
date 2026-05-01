@@ -1748,6 +1748,756 @@ async function finalizar() {
 </html>
 </file>
 
+<file path=".gitignore">
+venv/
+storage/
+__pycache__/
+finetune/
+dados_reduzidos/
+*.pyc
+</file>
+
+<file path="app/exportar.py">
+import io
+import json
+from datetime import datetime
+from flask import Blueprint, send_file, current_app
+from flask_login import login_required, current_user
+from app.models import Fatura, Conversa
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER
+
+exportar_bp = Blueprint('exportar', __name__)
+
+
+@exportar_bp.route('/exportar/pdf')
+@login_required
+def exportar_pdf():
+    faturas = Fatura.query.filter_by(user_id=current_user.id).order_by(Fatura.data_upload.desc()).all()
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    # Estilos
+    title_s = ParagraphStyle('t', fontSize=26, fontName='Helvetica-Bold',
+                              textColor=colors.HexColor('#4A3AFF'), spaceAfter=4)
+    sub_s = ParagraphStyle('s', fontSize=10, fontName='Helvetica',
+                            textColor=colors.HexColor('#6B6B80'), spaceAfter=2)
+    label_s = ParagraphStyle('l', fontSize=8, fontName='Helvetica',
+                              textColor=colors.HexColor('#9999AA'))
+    h2_s = ParagraphStyle('h2', fontSize=13, fontName='Helvetica-Bold',
+                           textColor=colors.HexColor('#111118'), spaceBefore=16, spaceAfter=8)
+    normal_s = ParagraphStyle('n', fontSize=9, fontName='Helvetica', leading=14)
+
+    # Header
+    total_gasto = sum(f.total or 0 for f in faturas)
+    data_relatorio = datetime.now().strftime('%d/%m/%Y %H:%M')
+
+    header_data = [[
+        [Paragraph('Verly', title_s),
+         Paragraph('Relatório Financeiro · Track it. Verify it.', sub_s)],
+        [Paragraph('GERADO EM', label_s),
+         Paragraph(data_relatorio, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold')),
+         Spacer(1, 4),
+         Paragraph('UTILIZADOR', label_s),
+         Paragraph(current_user.nome, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold'))]
+    ]]
+    ht = Table(header_data, colWidths=[10*cm, 7*cm])
+    ht.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
+    story.append(ht)
+    story.append(Spacer(1, 0.3*cm))
+    story.append(HRFlowable(width='100%', thickness=2, color=colors.HexColor('#4A3AFF')))
+    story.append(Spacer(1, 0.5*cm))
+
+    # Resumo
+    story.append(Paragraph('Resumo', h2_s))
+    resumo_data = [
+        ['Total de Faturas', 'Total Gasto', 'Maior Despesa'],
+        [str(len(faturas)), f'{total_gasto:.2f} €',
+         f'{max((f.total or 0) for f in faturas):.2f} €' if faturas else '—'],
+    ]
+    rt = Table(resumo_data, colWidths=[5.5*cm, 5.5*cm, 5.5*cm])
+    rt.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 9),
+        ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,1), (-1,1), 18),
+        ('TEXTCOLOR', (0,1), (-1,1), colors.HexColor('#4A3AFF')),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 12),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e0e0e0')),
+    ]))
+    story.append(rt)
+    story.append(Spacer(1, 0.8*cm))
+
+    # Gastos por categoria
+    categorias = {}
+    for f in faturas:
+        cat = f.categoria or 'Outros'
+        categorias[cat] = categorias.get(cat, 0) + (f.total or 0)
+
+    if categorias:
+        story.append(Paragraph('Gastos por Categoria', h2_s))
+        cat_data = [['Categoria', 'Total (€)', '% do Gasto']]
+        for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
+            pct = (val / total_gasto * 100) if total_gasto > 0 else 0
+            cat_data.append([cat, f'{val:.2f} €', f'{pct:.1f}%'])
+        ct = Table(cat_data, colWidths=[8*cm, 4*cm, 4.5*cm])
+        ct.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4A3AFF')),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 9),
+            ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#fafafa')]),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#eeeeee')),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        ]))
+        story.append(ct)
+        story.append(Spacer(1, 0.8*cm))
+
+    # Lista de faturas
+    story.append(Paragraph('Detalhe das Faturas', h2_s))
+    fat_data = [['Ficheiro', 'Loja', 'Categoria', 'Data Compra', 'Total', 'Garantia até']]
+    for f in faturas:
+        fat_data.append([
+            f.nome_ficheiro[:30] + ('...' if len(f.nome_ficheiro) > 30 else ''),
+            (f.loja or '—')[:20],
+            f.categoria or '—',
+            f.data_compra or '—',
+            f'{f.total:.2f} €' if f.total else '—',
+            f.data_garantia or '—',
+        ])
+    ft = Table(fat_data, colWidths=[4*cm, 3.5*cm, 2.5*cm, 2.2*cm, 2*cm, 2.3*cm])
+    ft.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 8),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8f8f8')]),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e0e0e0')),
+        ('TOPPADDING', (0,0), (-1,-1), 7),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 7),
+        ('ALIGN', (4,0), (4,-1), 'RIGHT'),
+    ]))
+    story.append(ft)
+
+    # Rodapé
+    story.append(Spacer(1, 1*cm))
+    story.append(HRFlowable(width='100%', thickness=0.5, color=colors.HexColor('#cccccc')))
+    story.append(Spacer(1, 0.3*cm))
+    nota = ParagraphStyle('nota', fontSize=7, fontName='Helvetica',
+                          textColor=colors.HexColor('#aaaaaa'), leading=10)
+    story.append(Paragraph(
+        'Relatório gerado pelo Verly · Track it. Verify it. Never lose a deadline. · '
+        'Garantia legal: 3 anos (Diretiva EU 2019/771). Devolução: 30 dias.',
+        nota))
+
+    doc.build(story)
+    buffer.seek(0)
+
+    filename = f'relatorio_verly_{datetime.now().strftime("%Y%m%d")}.pdf'
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
+</file>
+
+<file path="app/perfil.py">
+import os
+import uuid
+from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for, current_app
+from flask_login import login_required, current_user
+from werkzeug.utils import secure_filename
+from app import db
+from app.models import Fatura, Conversa
+
+perfil_bp = Blueprint('perfil', __name__)
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+def _allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@perfil_bp.route('/perfil')
+@login_required
+def perfil():
+    num_faturas   = Fatura.query.filter_by(user_id=current_user.id).count()
+    num_conversas = Conversa.query.filter_by(user_id=current_user.id).count()
+    total_gasto   = db.session.query(db.func.sum(Fatura.total)).filter_by(user_id=current_user.id).scalar() or 0
+    return render_template('perfil.html',
+        num_faturas=num_faturas,
+        num_conversas=num_conversas,
+        total_gasto=total_gasto,
+    )
+
+
+@perfil_bp.route('/perfil/atualizar', methods=['POST'])
+@login_required
+def atualizar():
+    nome       = request.form.get('nome', '').strip()
+    email_notif = request.form.get('email_notificacoes', '').strip()
+    notif      = request.form.get('notificacoes_email') == 'on'
+
+    if nome:
+        current_user.nome = nome
+    current_user.email_notificacoes = email_notif if email_notif else None
+    current_user.notificacoes_email = notif
+    db.session.commit()
+    flash('Perfil atualizado com sucesso!', 'success')
+    return redirect(url_for('perfil.perfil'))
+
+
+@perfil_bp.route('/perfil/upload-avatar', methods=['POST'])
+@login_required
+def upload_avatar():
+    if 'avatar' not in request.files:
+        return jsonify({'success': False, 'message': 'Nenhum ficheiro enviado.'})
+
+    file = request.files['avatar']
+    if not file or file.filename == '':
+        return jsonify({'success': False, 'message': 'Nenhum ficheiro selecionado.'})
+
+    if not _allowed_file(file.filename):
+        return jsonify({'success': False, 'message': 'Formato inválido. Usa PNG, JPG ou WebP.'})
+
+    # Garante pasta do utilizador
+    user_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], str(current_user.id))
+    os.makedirs(user_dir, exist_ok=True)
+
+    # Apaga avatar anterior se existir
+    if current_user.avatar:
+        old_path = os.path.join(current_app.config['UPLOAD_FOLDER'], current_user.avatar.lstrip('/'))
+        if os.path.exists(old_path):
+            os.remove(old_path)
+
+    ext      = file.filename.rsplit('.', 1)[1].lower()
+    filename = f"avatar_{uuid.uuid4().hex[:8]}.{ext}"
+    filepath = os.path.join(user_dir, filename)
+    file.save(filepath)
+
+    # Guarda o path relativo ao UPLOAD_FOLDER
+    current_user.avatar = f"{current_user.id}/{filename}"
+    db.session.commit()
+
+    avatar_url = url_for('static', filename='') # não usado — devolve via route dedicado
+    return jsonify({'success': True, 'avatar_url': url_for('perfil.get_avatar', user_id=current_user.id)})
+
+
+@perfil_bp.route('/perfil/avatar/<int:user_id>')
+@login_required
+def get_avatar(user_id):
+    from flask import send_file, abort
+    if user_id != current_user.id:
+        abort(403)
+    if not current_user.avatar:
+        abort(404)
+    path = os.path.join(current_app.config['UPLOAD_FOLDER'], current_user.avatar)
+    if not os.path.exists(path):
+        abort(404)
+    return send_file(path)
+
+
+@perfil_bp.route('/perfil/alterar-password', methods=['POST'])
+@login_required
+def alterar_password():
+    atual     = request.form.get('password_atual', '')
+    nova      = request.form.get('password_nova', '')
+    confirmar = request.form.get('confirmar_password', '')
+
+    if not current_user.check_password(atual):
+        flash('Password atual incorreta.', 'error')
+    elif len(nova) < 6:
+        flash('A nova password deve ter pelo menos 6 caracteres.', 'error')
+    elif nova != confirmar:
+        flash('As passwords não coincidem.', 'error')
+    else:
+        current_user.set_password(nova)
+        db.session.commit()
+        flash('Password alterada com sucesso!', 'success')
+    return redirect(url_for('perfil.perfil'))
+
+
+@perfil_bp.route('/perfil/eliminar-conta', methods=['POST'])
+@login_required
+def eliminar_conta():
+    from flask_login import logout_user
+    import shutil
+
+    user_id = current_user.id
+    data_dir    = os.path.join(current_app.config['UPLOAD_FOLDER'],  str(user_id))
+    storage_dir = os.path.join(current_app.config['STORAGE_FOLDER'], str(user_id))
+    for d in [data_dir, storage_dir]:
+        if os.path.exists(d):
+            shutil.rmtree(d)
+
+    logout_user()
+    from app.models import User
+    User.query.filter_by(id=user_id).delete()
+    db.session.commit()
+    flash('Conta eliminada.', 'success')
+    return redirect(url_for('auth.login'))
+</file>
+
+<file path="app/personality.py">
+"""
+personality.py — Roast / Personality Engine
+"""
+from flask import Blueprint, request, jsonify, render_template, flash, redirect, url_for
+from flask_login import login_required, current_user
+from app import db
+from app.models import User
+
+personality_bp = Blueprint('personality', __name__)
+
+PERSONALIDADES = {
+    'savage': {
+        'nome':     'Savage',
+        'descricao':'Sem filtros. Verdade nua e crua. A Verly não te vai poupar.',
+        'preview':  'Gastaste 243€ em lixo financeiro este mês. Parabéns pela consistência.',
+        'cor':      '#FF4757',
+    },
+    'sarcastic': {
+        'nome':     'Sarcástico',
+        'descricao':'Ironia refinada. Construtivo, mas com estilo.',
+        'preview':  'Ah, só 243€ desperdiçados. Modesto para os teus padrões habituais.',
+        'cor':      '#FFB800',
+    },
+    'calm': {
+        'nome':     'Calmo',
+        'descricao':'Coach financeiro gentil. Honesto sem ser brutal.',
+        'preview':  'Identificámos 243€ de oportunidades de poupança. Vamos melhorar juntos.',
+        'cor':      '#00D68F',
+    },
+    'pro': {
+        'nome':     'Profissional',
+        'descricao':'CFO pessoal. Dados, análise, zero drama.',
+        'preview':  'Índice de desperdício: 29.1% (243€). Acção requerida: optimizar 2 categorias.',
+        'cor':      '#7B61FF',
+    },
+}
+
+
+def get_personalidade_user():
+    """Lê a personalidade directamente da BD — nunca usa cache."""
+    user = User.query.get(current_user.id)
+    return (user.personalidade or 'calm') if user else 'calm'
+
+
+@personality_bp.route('/personality')
+@login_required
+def personality():
+    atual = get_personalidade_user()
+    return render_template('personality.html', personalidades=PERSONALIDADES, atual=atual)
+
+
+@personality_bp.route('/personality/set', methods=['POST'])
+@login_required
+def set_personality():
+    data = request.json or request.form
+    nova = data.get('personalidade', 'calm')
+
+    if nova not in PERSONALIDADES:
+        if request.is_json:
+            return jsonify({'success': False, 'message': 'Personalidade inválida.'})
+        flash('Personalidade inválida.', 'error')
+        return redirect(url_for('personality.personality'))
+
+    # Actualiza directamente na BD sem depender do current_user em cache
+    User.query.filter_by(id=current_user.id).update({'personalidade': nova})
+    db.session.commit()
+
+    if request.is_json:
+        return jsonify({
+            'success': True,
+            'personalidade': nova,
+            'info': PERSONALIDADES[nova],
+        })
+
+    flash(f'Personalidade alterada para {PERSONALIDADES[nova]["nome"]}.', 'success')
+    return redirect(url_for('personality.personality'))
+
+
+@personality_bp.route('/personality/preview/<string:modo>')
+@login_required
+def preview(modo):
+    if modo not in PERSONALIDADES:
+        return jsonify({'success': False})
+    return jsonify({'success': True, 'preview': PERSONALIDADES[modo]['preview'], 'info': PERSONALIDADES[modo]})
+</file>
+
+<file path="NOTAS.md">
+# Notas do Projeto
+
+## Como instalar noutro PC
+1. python -m venv venv
+2. venv\Scripts\activate
+3. pip install -r requirements.txt
+</file>
+
+<file path="templates/impulse.html">
+{% extends 'base.html' %}
+{% block title %}Impulse Control · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Impulse Control</h1>
+        <p class="page-sub">Antes de comprar, pergunta à Verly. Ela vai ser honesta.</p>
+    </div>
+</div>
+
+<div style="max-width:680px;">
+
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header">
+            <h3>Modo de Resposta</h3>
+            <a href="{{ url_for('personality.personality') }}" class="card-link">Alterar →</a>
+        </div>
+        <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;">
+            {% set modos = [('savage','Savage'),('sarcastic','Sarcástico'),('calm','Calmo'),('pro','Profissional')] %}
+            {% for key, nome in modos %}
+            <button class="pers-pill {% if key == personalidade_atual %}pers-pill--active{% endif %}"
+                data-p="{{ key }}"
+                onclick="selecionarPersonalidade('{{ key }}', this)"
+                style="padding:7px 16px;border-radius:6px;border:1px solid {% if key == personalidade_atual %}var(--brand-2){% else %}var(--border){% endif %};
+                background:{% if key == personalidade_atual %}rgba(123,97,255,0.1){% else %}var(--surface2){% endif %};
+                color:{% if key == personalidade_atual %}var(--brand-2){% else %}var(--text-muted){% endif %};
+                font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.2s;">
+                {{ nome }}
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+        <div class="card-header"><h3>O que queres comprar?</h3></div>
+        <div class="card-body">
+            <textarea id="impulseInput"
+                placeholder="Ex: Adidas Samba 120€ · iPhone 16 Pro 1299€ · Sofá IKEA 800€"
+                rows="3"
+                style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+                color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:12px 16px;
+                resize:none;outline:none;transition:border-color 0.2s;line-height:1.5;"
+                onfocus="this.style.borderColor='var(--brand)'"
+                onblur="this.style.borderColor='var(--border)'"></textarea>
+            <button class="btn-primary" style="margin-top:12px;" onclick="analisarImpulso()">
+                Analisar antes de comprar
+            </button>
+        </div>
+    </div>
+
+    <div id="impulseResult" style="display:none;">
+        <div id="impulseLoading" class="card" style="margin-bottom:20px;display:none;">
+            <div class="card-body" style="text-align:center;padding:32px;color:var(--text-muted);">
+                <div style="font-size:13px;">A analisar...</div>
+            </div>
+        </div>
+        <div id="impulseContent">
+            <div class="card" style="margin-bottom:12px;">
+                <div class="card-header"><h3>Análise</h3></div>
+                <div class="card-body"><p id="resAnalise" style="font-size:14px;line-height:1.7;color:var(--text);"></p></div>
+            </div>
+            <div class="card" style="margin-bottom:12px;">
+                <div class="card-header"><h3>Alternativa</h3></div>
+                <div class="card-body"><p id="resAlternativa" style="font-size:14px;line-height:1.7;color:var(--text);"></p></div>
+            </div>
+            <div id="bannerAguardar" style="background:rgba(255,184,0,0.06);border:1px solid rgba(255,184,0,0.15);
+                border-radius:10px;padding:16px 20px;text-align:center;margin-bottom:20px;">
+                <div id="resVeredicto" style="font-size:14px;font-weight:600;color:var(--yellow);"></div>
+            </div>
+            <div id="bannerOk" style="background:rgba(0,214,143,0.06);border:1px solid rgba(0,214,143,0.15);
+                border-radius:10px;padding:16px 20px;text-align:center;margin-bottom:20px;display:none;">
+                <div id="resVeredictoOk" style="font-size:14px;font-weight:600;color:var(--green);"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let personalidadeAtual = '{{ personalidade_atual }}';
+function selecionarPersonalidade(key, btn) {
+    personalidadeAtual = key;
+    document.querySelectorAll('.pers-pill').forEach(b => {
+        const active = b.dataset.p === key;
+        b.style.background  = active ? 'rgba(123,97,255,0.1)' : 'var(--surface2)';
+        b.style.color       = active ? 'var(--brand-2)' : 'var(--text-muted)';
+        b.style.borderColor = active ? 'var(--brand-2)' : 'var(--border)';
+    });
+    fetch('/personality/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({personalidade:key})});
+}
+async function analisarImpulso() {
+    const produto = document.getElementById('impulseInput').value.trim();
+    if (!produto) { alert('Descreve o que queres comprar.'); return; }
+    document.getElementById('impulseResult').style.display = 'block';
+    document.getElementById('impulseLoading').style.display = 'block';
+    document.getElementById('impulseContent').style.display = 'none';
+    try {
+        const res = await fetch('/impulse/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({produto,personalidade:personalidadeAtual})});
+        const data = await res.json();
+        document.getElementById('impulseLoading').style.display = 'none';
+        if (data.success) {
+            const r = data.resultado;
+            document.getElementById('resAnalise').textContent = r.analise;
+            document.getElementById('resAlternativa').textContent = r.alternativa;
+            if (r.aguardar) {
+                document.getElementById('bannerAguardar').style.display='block';
+                document.getElementById('bannerOk').style.display='none';
+                document.getElementById('resVeredicto').textContent=r.veredicto;
+            } else {
+                document.getElementById('bannerAguardar').style.display='none';
+                document.getElementById('bannerOk').style.display='block';
+                document.getElementById('resVeredictoOk').textContent=r.veredicto;
+            }
+            document.getElementById('impulseContent').style.display='block';
+        } else { alert('Erro: '+(data.message||'Tenta de novo.')); document.getElementById('impulseResult').style.display='none'; }
+    } catch(e) { alert('Erro de ligação.'); document.getElementById('impulseResult').style.display='none'; }
+}
+document.getElementById('impulseInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)analisarImpulso();});
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/personality.html">
+{% extends 'base.html' %}
+{% block title %}Personalidade · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Personalidade</h1>
+        <p class="page-sub">Escolhe como a Verly te fala. Muda quando quiseres.</p>
+    </div>
+</div>
+
+<div style="max-width:680px;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px;">
+        {% for key, p in personalidades.items() %}
+        <div class="pers-card" data-key="{{ key }}" data-cor="{{ p.cor }}"
+             onclick="selecionarPersonalidade('{{ key }}')"
+             style="background:var(--surface);border:2px solid {% if key == atual %}{{ p.cor }}{% else %}var(--border){% endif %};
+             border-radius:12px;padding:22px;cursor:pointer;transition:all 0.2s;position:relative;overflow:hidden;">
+
+            <div class="badge-ativo" style="display:{% if key == atual %}block{% else %}none{% endif %};
+                position:absolute;top:12px;right:12px;background:rgba(123,97,255,0.12);
+                color:var(--brand-2);font-size:10px;font-weight:700;padding:3px 9px;
+                border-radius:4px;letter-spacing:0.5px;">ATIVO</div>
+
+            <div style="font-family:'Sora',sans-serif;font-size:15px;font-weight:700;margin-bottom:6px;color:var(--text);">{{ p.nome }}</div>
+            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:14px;">{{ p.descricao }}</div>
+            <div style="background:var(--surface2);border-radius:6px;padding:10px 14px;
+                border:1px solid var(--border);font-size:12px;line-height:1.6;
+                color:var(--text-muted);font-style:italic;">
+                "{{ p.preview }}"
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="confirmMsg" style="display:none;background:rgba(0,214,143,0.06);
+        border:1px solid rgba(0,214,143,0.15);border-radius:8px;padding:12px 18px;
+        font-size:13px;color:var(--green);font-weight:600;text-align:center;"></div>
+
+    <p style="font-size:12px;color:var(--text-sub);text-align:center;margin-top:20px;">
+        Afeta o Chat, Score de Compras, Relatório Mensal e Impulse Control.
+    </p>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function selecionarPersonalidade(key) {
+    try {
+        const res = await fetch('/personality/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({personalidade:key})});
+        const data = await res.json();
+        if (!data.success) return;
+        document.querySelectorAll('.pers-card').forEach(card => {
+            const active = card.dataset.key === key;
+            card.style.borderColor = active ? card.dataset.cor : 'var(--border)';
+            card.querySelector('.badge-ativo').style.display = active ? 'block' : 'none';
+        });
+        const msg = document.getElementById('confirmMsg');
+        msg.textContent = `Personalidade "${data.info.nome}" ativada.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+    } catch(e) { console.error(e); }
+}
+</script>
+{% endblock %}
+</file>
+
+<file path="templates/relatorio.html">
+{% extends 'base.html' %}
+{% block title %}Relatório Mensal · Verly{% endblock %}
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Relatório Mensal</h1>
+        <p class="page-sub">{{ mes_nome }} {{ ano }}</p>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        {% for m in meses_nav %}
+        <a href="{{ url_for('reports.relatorio', mes=m.mes, ano=m.ano) }}"
+           class="btn-ghost {% if m.mes == mes and m.ano == ano %}btn-ghost--active{% endif %}"
+           style="{% if m.mes == mes and m.ano == ano %}border-color:var(--brand-2);color:var(--brand-2);{% endif %}padding:7px 12px;font-size:12px;">
+            {{ m.nome }}
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+{% if total_gasto > 0 %}
+<div class="metrics-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:28px;">
+    <div class="metric-card">
+        <div class="metric-icon" style="background:rgba(255,71,87,0.08);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+        </div>
+        <div class="metric-body">
+            <span class="metric-label">Total Gasto</span>
+            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_gasto) }}€</span>
+            {% if variacao != 0 %}
+            <span class="metric-trend {% if variacao > 0 %}trend-bad{% else %}trend-ok{% endif %}">
+                {% if variacao > 0 %}+{% endif %}{{ variacao|round(1) }}% vs mês anterior
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon" style="background:rgba(255,184,0,0.08);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+        </div>
+        <div class="metric-body">
+            <span class="metric-label">Estimativa Desperdício</span>
+            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ '%.2f'|format(desperdicado) }}€</span>
+            <span class="metric-trend trend-bad">{{ '%.0f'|format(desperdicado / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon" style="background:rgba(0,214,143,0.08);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+        </div>
+        <div class="metric-body">
+            <span class="metric-label">Boas Decisões</span>
+            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ '%.2f'|format(boas_decisoes) }}€</span>
+            <span class="metric-trend trend-ok">{{ '%.0f'|format(boas_decisoes / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
+        </div>
+    </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--brand-2);
+    border-radius:0 10px 10px 0;padding:16px 22px;margin-bottom:28px;
+    font-size:14px;line-height:1.7;color:var(--text);font-style:italic;">
+    "{{ roast_phrase }}"
+</div>
+
+<div class="dashboard-grid" style="margin-bottom:28px;">
+    <div class="card">
+        <div class="card-header"><h3>Por Categoria</h3></div>
+        <div class="card-body">
+            {% for b in barras %}
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
+                    <span style="font-size:12px;color:var(--text-muted);">{{ b.categoria }}</span>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        <span style="font-size:11px;color:var(--red);font-weight:600;">~{{ b.desperdicado }}€</span>
+                        <span style="font-size:13px;font-weight:700;color:var(--text);">{{ b.valor }}€</span>
+                    </div>
+                </div>
+                <div style="height:6px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+                    <div style="width:{{ b.percentagem }}%;height:100%;border-radius:4px;
+                        background:{% if b.regret_pct > 35 %}var(--red){% elif b.regret_pct > 20 %}var(--yellow){% else %}var(--green){% endif %};
+                        transition:width 0.8s ease;"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h3>Distribuição</h3></div>
+        <div class="card-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;">
+            <canvas id="donutChart" style="max-width:200px;max-height:200px;"></canvas>
+        </div>
+    </div>
+</div>
+
+{% if top_lojas %}
+<div class="card" style="margin-bottom:28px;">
+    <div class="card-header"><h3>Top Lojas</h3></div>
+    <div class="card-body" style="padding:0;">
+        <table class="data-table">
+            <thead><tr><th>#</th><th>Loja</th><th style="text-align:right;">Total</th></tr></thead>
+            <tbody>
+                {% for l in top_lojas %}
+                <tr>
+                    <td style="color:var(--text-sub);font-weight:700;">{{ loop.index }}</td>
+                    <td style="font-weight:600;">{{ l.loja }}</td>
+                    <td style="text-align:right;color:var(--brand-2);font-weight:700;">{{ l.valor }}€</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-card">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-sub)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;">
+        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+    </svg>
+    <p>Sem faturas em {{ mes_nome }} {{ ano }}.<br>
+       Carrega as tuas faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+{% if barras %}
+const ctx = document.getElementById('donutChart');
+if (ctx) {
+    new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: {{ barras | map(attribute='categoria') | list | tojson }},
+            datasets: [{
+                data: {{ barras | map(attribute='valor') | list | tojson }},
+                backgroundColor: ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#FF6B35'],
+                borderWidth: 0, hoverOffset: 6,
+            }]
+        },
+        options: { responsive:true, cutout:'65%', plugins:{ legend:{display:false}, tooltip:{callbacks:{label:(c)=>` ${c.label}: ${c.parsed.toFixed(2)}€`}} } }
+    });
+}
+{% endif %}
+</script>
+{% endblock %}
+</file>
+
 <file path="templates/scoring.html">
 {% extends 'base.html' %}
 {% block title %}Score de Compras · Verly{% endblock %}
@@ -2142,100 +2892,158 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
-<file path=".gitignore">
-venv/
-storage/
-__pycache__/
-finetune/
-dados_reduzidos/
-*.pyc
+<file path="templates/subscriptions.html">
+{% extends 'base.html' %}
+{% block title %}Subscription Leak · Verly{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Subscription Leak Detector</h1>
+        <p class="page-sub">Subscrições detetadas nas tuas faturas — ordenadas por risco financeiro</p>
+    </div>
+</div>
+
+<!-- RESUMO -->
+<div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:28px;">
+    <div class="metric-card">
+        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+        <div class="metric-body">
+            <span class="metric-label">Desperdiçado / mês</span>
+            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€</span>
+            <span class="metric-trend trend-bad">≈ {{ '%.0f'|format(total_anual_desperdicado) }}€/ano</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <div class="metric-body">
+            <span class="metric-label">Subscr. saudáveis</span>
+            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ count_ok }}</span>
+            <span class="metric-trend trend-ok">{{ '%.2f'|format(total_mensal_ok) }}€/mês</span>
+        </div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+        <div class="metric-body">
+            <span class="metric-label">Em risco</span>
+            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ count_danger + count_warning }}</span>
+            <span class="metric-trend trend-bad">{{ count_danger }} para cancelar</span>
+        </div>
+    </div>
+</div>
+
+{% if subscriptions %}
+<!-- LISTA DE SUBSCRIÇÕES -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h3>Subscrições Detetadas</h3>
+        <span style="font-size:12px;color:var(--text-sub)">{{ subscriptions|length }} serviço(s)</span>
+    </div>
+    <div class="card-body" style="padding:0;">
+        {% for sub in subscriptions %}
+        <div class="sub-leak-item sub-risk-{{ sub.risk }}" style="
+            display:flex; align-items:center; gap:16px;
+            padding:16px 20px;
+            border-bottom:1px solid var(--border);
+            transition: background 0.15s;
+        ">
+            <!-- Ícone -->
+            <div style="
+                width:42px; height:42px; border-radius:10px;
+                background:{% if sub.risk == 'danger' %}rgba(255,71,87,0.1){% elif sub.risk == 'warning' %}rgba(255,184,0,0.1){% else %}rgba(0,214,143,0.08){% endif %};
+                display:flex; align-items:center; justify-content:center;
+                font-size:20px; flex-shrink:0;
+            ">{{ sub.icone }}</div>
+
+            <!-- Info -->
+            <div style="flex:1;">
+                <div style="font-size:14px;font-weight:600;color:var(--text);">{{ sub.nome }}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                    {{ sub.alerta }}
+                </div>
+            </div>
+
+            <!-- Preço + Badge -->
+            <div style="text-align:right; flex-shrink:0;">
+                <div style="font-size:15px; font-weight:700;
+                    color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
+                    {{ '%.2f'|format(sub.preco_mensal) }}€/mês
+                </div>
+                <div style="margin-top:4px;">
+                    <span style="
+                        font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; letter-spacing:0.5px;
+                        {% if sub.risk == 'danger' %}background:rgba(255,71,87,0.15);color:var(--red);
+                        {% elif sub.risk == 'warning' %}background:rgba(255,184,0,0.15);color:var(--yellow);
+                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}
+                    ">{{ sub.risk_label }}</span>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- FRASE DE IMPACTO -->
+{% if total_mensal_desperdicado > 0 %}
+<div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;margin-bottom:24px;">
+    <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
+    <div style="font-size:15px;color:var(--text);line-height:1.6;">
+        Estás a desperdiçar <strong style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€/mês</strong>
+        em subscrições que não usas. Isso é
+        <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong>
+        a ir pelo cano.
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<!-- EMPTY STATE -->
+<div class="empty-card">
+    <span>✅</span>
+    <p>Nenhuma subscrição detetada nas tuas faturas.<br>
+    Carrega mais faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para uma análise mais completa.</p>
+</div>
+{% endif %}
+{% endblock %}
 </file>
 
-<file path="app/exportar.py">
-import io
+<file path="app/dashboard.py">
 import json
 from datetime import datetime
-from flask import Blueprint, send_file, current_app
+from flask import Blueprint, render_template
 from flask_login import login_required, current_user
 from app.models import Fatura, Conversa
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import cm
-from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 
-exportar_bp = Blueprint('exportar', __name__)
+dashboard_bp = Blueprint('dashboard', __name__)
 
 
-@exportar_bp.route('/exportar/pdf')
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@dashboard_bp.route('/dashboard')
 @login_required
-def exportar_pdf():
+def dashboard():
     faturas = Fatura.query.filter_by(user_id=current_user.id).order_by(Fatura.data_upload.desc()).all()
-    
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4,
-                            leftMargin=2*cm, rightMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+    conversas = Conversa.query.filter_by(user_id=current_user.id).order_by(Conversa.timestamp.desc()).limit(5).all()
 
-    styles = getSampleStyleSheet()
-    story = []
-
-    # Estilos
-    title_s = ParagraphStyle('t', fontSize=26, fontName='Helvetica-Bold',
-                              textColor=colors.HexColor('#4A3AFF'), spaceAfter=4)
-    sub_s = ParagraphStyle('s', fontSize=10, fontName='Helvetica',
-                            textColor=colors.HexColor('#6B6B80'), spaceAfter=2)
-    label_s = ParagraphStyle('l', fontSize=8, fontName='Helvetica',
-                              textColor=colors.HexColor('#9999AA'))
-    h2_s = ParagraphStyle('h2', fontSize=13, fontName='Helvetica-Bold',
-                           textColor=colors.HexColor('#111118'), spaceBefore=16, spaceAfter=8)
-    normal_s = ParagraphStyle('n', fontSize=9, fontName='Helvetica', leading=14)
-
-    # Header
     total_gasto = sum(f.total or 0 for f in faturas)
-    data_relatorio = datetime.now().strftime('%d/%m/%Y %H:%M')
+    num_faturas = len(faturas)
+    num_conversas = Conversa.query.filter_by(user_id=current_user.id).count()
 
-    header_data = [[
-        [Paragraph('Verly', title_s),
-         Paragraph('Relatório Financeiro · Track it. Verify it.', sub_s)],
-        [Paragraph('GERADO EM', label_s),
-         Paragraph(data_relatorio, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold')),
-         Spacer(1, 4),
-         Paragraph('UTILIZADOR', label_s),
-         Paragraph(current_user.nome, ParagraphStyle('v', fontSize=10, fontName='Helvetica-Bold'))]
-    ]]
-    ht = Table(header_data, colWidths=[10*cm, 7*cm])
-    ht.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP')]))
-    story.append(ht)
-    story.append(Spacer(1, 0.3*cm))
-    story.append(HRFlowable(width='100%', thickness=2, color=colors.HexColor('#4A3AFF')))
-    story.append(Spacer(1, 0.5*cm))
-
-    # Resumo
-    story.append(Paragraph('Resumo', h2_s))
-    resumo_data = [
-        ['Total de Faturas', 'Total Gasto', 'Maior Despesa'],
-        [str(len(faturas)), f'{total_gasto:.2f} €',
-         f'{max((f.total or 0) for f in faturas):.2f} €' if faturas else '—'],
-    ]
-    rt = Table(resumo_data, colWidths=[5.5*cm, 5.5*cm, 5.5*cm])
-    rt.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,0), 9),
-        ('FONTNAME', (0,1), (-1,1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,1), (-1,1), 18),
-        ('TEXTCOLOR', (0,1), (-1,1), colors.HexColor('#4A3AFF')),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 12),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 12),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e0e0e0')),
-    ]))
-    story.append(rt)
-    story.append(Spacer(1, 0.8*cm))
+    # Top loja
+    lojas = {}
+    for f in faturas:
+        loja = f.loja or 'Desconhecida'
+        lojas[loja] = lojas.get(loja, 0) + (f.total or 0)
+    top_loja = max(lojas, key=lojas.get) if lojas else '—'
 
     # Gastos por categoria
     categorias = {}
@@ -2243,240 +3051,60 @@ def exportar_pdf():
         cat = f.categoria or 'Outros'
         categorias[cat] = categorias.get(cat, 0) + (f.total or 0)
 
-    if categorias:
-        story.append(Paragraph('Gastos por Categoria', h2_s))
-        cat_data = [['Categoria', 'Total (€)', '% do Gasto']]
-        for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
-            pct = (val / total_gasto * 100) if total_gasto > 0 else 0
-            cat_data.append([cat, f'{val:.2f} €', f'{pct:.1f}%'])
-        ct = Table(cat_data, colWidths=[8*cm, 4*cm, 4.5*cm])
-        ct.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#4A3AFF')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0,0), (-1,-1), 9),
-            ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
-            ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#fafafa')]),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#eeeeee')),
-            ('TOPPADDING', (0,0), (-1,-1), 8),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
-        ]))
-        story.append(ct)
-        story.append(Spacer(1, 0.8*cm))
+    cat_labels = list(categorias.keys())
+    cat_values = [round(categorias[c], 2) for c in cat_labels]
 
-    # Lista de faturas
-    story.append(Paragraph('Detalhe das Faturas', h2_s))
-    fat_data = [['Ficheiro', 'Loja', 'Categoria', 'Data Compra', 'Total', 'Garantia até']]
+    # Gastos por loja (top 6)
+    lojas_sorted = sorted(lojas.items(), key=lambda x: x[1], reverse=True)[:6]
+    loja_labels = [l[0] for l in lojas_sorted]
+    loja_values = [round(l[1], 2) for l in lojas_sorted]
+
+    # Alertas de garantia e devolução
+    hoje = datetime.now()
+    alertas = []
     for f in faturas:
-        fat_data.append([
-            f.nome_ficheiro[:30] + ('...' if len(f.nome_ficheiro) > 30 else ''),
-            (f.loja or '—')[:20],
-            f.categoria or '—',
-            f.data_compra or '—',
-            f'{f.total:.2f} €' if f.total else '—',
-            f.data_garantia or '—',
-        ])
-    ft = Table(fat_data, colWidths=[4*cm, 3.5*cm, 2.5*cm, 2.2*cm, 2*cm, 2.3*cm])
-    ft.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#111118')),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0,0), (-1,-1), 8),
-        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.HexColor('#f8f8f8')]),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#e0e0e0')),
-        ('TOPPADDING', (0,0), (-1,-1), 7),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 7),
-        ('ALIGN', (4,0), (4,-1), 'RIGHT'),
-    ]))
-    story.append(ft)
+        # Alerta devolução (< 7 dias)
+        data_dev = _parse_date(f.data_devolucao)
+        if data_dev and data_dev >= hoje:
+            dias = (data_dev - hoje).days
+            if dias <= 7:
+                alertas.append({
+                    'tipo': 'devolucao',
+                    'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—',
+                    'data': f.data_devolucao,
+                    'dias': dias,
+                    'urgencia': 'critico' if dias <= 3 else 'aviso'
+                })
+        # Alerta garantia (< 30 dias)
+        data_gar = _parse_date(f.data_garantia)
+        if data_gar and data_gar >= hoje:
+            dias = (data_gar - hoje).days
+            if dias <= 30:
+                alertas.append({
+                    'tipo': 'garantia',
+                    'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—',
+                    'data': f.data_garantia,
+                    'dias': dias,
+                    'urgencia': 'critico' if dias <= 7 else 'aviso'
+                })
 
-    # Rodapé
-    story.append(Spacer(1, 1*cm))
-    story.append(HRFlowable(width='100%', thickness=0.5, color=colors.HexColor('#cccccc')))
-    story.append(Spacer(1, 0.3*cm))
-    nota = ParagraphStyle('nota', fontSize=7, fontName='Helvetica',
-                          textColor=colors.HexColor('#aaaaaa'), leading=10)
-    story.append(Paragraph(
-        'Relatório gerado pelo Verly · Track it. Verify it. Never lose a deadline. · '
-        'Garantia legal: 3 anos (Diretiva EU 2019/771). Devolução: 30 dias.',
-        nota))
+    alertas.sort(key=lambda x: x['dias'])
 
-    doc.build(story)
-    buffer.seek(0)
-
-    filename = f'relatorio_verly_{datetime.now().strftime("%Y%m%d")}.pdf'
-    return send_file(buffer, as_attachment=True, download_name=filename, mimetype='application/pdf')
-</file>
-
-<file path="app/perfil.py">
-from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
-from flask_login import login_required, current_user
-from app import db
-from app.models import Fatura, Conversa
-
-perfil_bp = Blueprint('perfil', __name__)
-
-
-@perfil_bp.route('/perfil')
-@login_required
-def perfil():
-    num_faturas = Fatura.query.filter_by(user_id=current_user.id).count()
-    num_conversas = Conversa.query.filter_by(user_id=current_user.id).count()
-    total_gasto = db.session.query(db.func.sum(Fatura.total)).filter_by(user_id=current_user.id).scalar() or 0
-    return render_template('perfil.html',
+    return render_template('dashboard.html',
+        total_gasto=total_gasto,
         num_faturas=num_faturas,
         num_conversas=num_conversas,
-        total_gasto=total_gasto,
+        top_loja=top_loja,
+        cat_labels=json.dumps(cat_labels),
+        cat_values=json.dumps(cat_values),
+        loja_labels=json.dumps(loja_labels),
+        loja_values=json.dumps(loja_values),
+        ultimas_faturas=faturas[:5],
+        conversas_recentes=conversas,
+        alertas=alertas,
     )
-
-
-@perfil_bp.route('/perfil/atualizar', methods=['POST'])
-@login_required
-def atualizar():
-    nome = request.form.get('nome', '').strip()
-    email_notif = request.form.get('email_notificacoes', '').strip()
-    notif = request.form.get('notificacoes_email') == 'on'
-
-    if nome:
-        current_user.nome = nome
-    current_user.email_notificacoes = email_notif if email_notif else None
-    current_user.notificacoes_email = notif
-    db.session.commit()
-    flash('Perfil atualizado com sucesso!', 'success')
-    return redirect(url_for('perfil.perfil'))
-
-
-@perfil_bp.route('/perfil/alterar-password', methods=['POST'])
-@login_required
-def alterar_password():
-    atual = request.form.get('password_atual', '')
-    nova = request.form.get('password_nova', '')
-    confirmar = request.form.get('confirmar_password', '')
-
-    if not current_user.check_password(atual):
-        flash('Password atual incorreta.', 'error')
-    elif len(nova) < 6:
-        flash('A nova password deve ter pelo menos 6 caracteres.', 'error')
-    elif nova != confirmar:
-        flash('As passwords não coincidem.', 'error')
-    else:
-        current_user.set_password(nova)
-        db.session.commit()
-        flash('Password alterada com sucesso!', 'success')
-    return redirect(url_for('perfil.perfil'))
-
-
-@perfil_bp.route('/perfil/eliminar-conta', methods=['POST'])
-@login_required
-def eliminar_conta():
-    from flask_login import logout_user
-    import shutil, os
-    from flask import current_app
-
-    user_id = current_user.id
-
-    # Apagar ficheiros físicos
-    data_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], str(user_id))
-    storage_dir = os.path.join(current_app.config['STORAGE_FOLDER'], str(user_id))
-    for d in [data_dir, storage_dir]:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-
-    logout_user()
-    user = db.session.get(db.Model.__class__, user_id)
-    # Apagar via query
-    from app.models import User
-    User.query.filter_by(id=user_id).delete()
-    db.session.commit()
-    flash('Conta eliminada.', 'success')
-    return redirect(url_for('auth.login'))
-</file>
-
-<file path="app/personality.py">
-"""
-personality.py — Roast / Personality Engine
-"""
-from flask import Blueprint, request, jsonify, render_template, flash, redirect, url_for
-from flask_login import login_required, current_user
-from app import db
-from app.models import User
-
-personality_bp = Blueprint('personality', __name__)
-
-PERSONALIDADES = {
-    'savage': {
-        'nome':     'Savage',
-        'descricao':'Sem filtros. Verdade nua e crua. A Verly não te vai poupar.',
-        'preview':  'Gastaste 243€ em lixo financeiro este mês. Parabéns pela consistência.',
-        'cor':      '#FF4757',
-    },
-    'sarcastic': {
-        'nome':     'Sarcástico',
-        'descricao':'Ironia refinada. Construtivo, mas com estilo.',
-        'preview':  'Ah, só 243€ desperdiçados. Modesto para os teus padrões habituais.',
-        'cor':      '#FFB800',
-    },
-    'calm': {
-        'nome':     'Calmo',
-        'descricao':'Coach financeiro gentil. Honesto sem ser brutal.',
-        'preview':  'Identificámos 243€ de oportunidades de poupança. Vamos melhorar juntos.',
-        'cor':      '#00D68F',
-    },
-    'pro': {
-        'nome':     'Profissional',
-        'descricao':'CFO pessoal. Dados, análise, zero drama.',
-        'preview':  'Índice de desperdício: 29.1% (243€). Acção requerida: optimizar 2 categorias.',
-        'cor':      '#7B61FF',
-    },
-}
-
-
-def get_personalidade_user():
-    """Lê a personalidade directamente da BD — nunca usa cache."""
-    user = User.query.get(current_user.id)
-    return (user.personalidade or 'calm') if user else 'calm'
-
-
-@personality_bp.route('/personality')
-@login_required
-def personality():
-    atual = get_personalidade_user()
-    return render_template('personality.html', personalidades=PERSONALIDADES, atual=atual)
-
-
-@personality_bp.route('/personality/set', methods=['POST'])
-@login_required
-def set_personality():
-    data = request.json or request.form
-    nova = data.get('personalidade', 'calm')
-
-    if nova not in PERSONALIDADES:
-        if request.is_json:
-            return jsonify({'success': False, 'message': 'Personalidade inválida.'})
-        flash('Personalidade inválida.', 'error')
-        return redirect(url_for('personality.personality'))
-
-    # Actualiza directamente na BD sem depender do current_user em cache
-    User.query.filter_by(id=current_user.id).update({'personalidade': nova})
-    db.session.commit()
-
-    if request.is_json:
-        return jsonify({
-            'success': True,
-            'personalidade': nova,
-            'info': PERSONALIDADES[nova],
-        })
-
-    flash(f'Personalidade alterada para {PERSONALIDADES[nova]["nome"]}.', 'success')
-    return redirect(url_for('personality.personality'))
-
-
-@personality_bp.route('/personality/preview/<string:modo>')
-@login_required
-def preview(modo):
-    if modo not in PERSONALIDADES:
-        return jsonify({'success': False})
-    return jsonify({'success': True, 'preview': PERSONALIDADES[modo]['preview'], 'info': PERSONALIDADES[modo]})
 </file>
 
 <file path="app/scoring.py">
@@ -2699,7 +3327,7 @@ def _distancia_label(km: float) -> str:
 
 
 # Muda o raio padrão de 3000 para 5000
-def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000) -> list:
+def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000, item: str = '') -> list:
     """Usa Google Places API para encontrar lojas próximas."""
 
     KEYWORDS_CATEGORIA = {
@@ -2720,7 +3348,13 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000)
         print("[MAPA] GOOGLE_PLACES_API_KEY não configurada")
         return []
 
-    keyword = KEYWORDS_CATEGORIA.get(categoria, 'loja')
+    # Usa o nome do produto se disponível — muito mais específico do que a categoria
+    if item and item.strip() and item.lower() not in ('item', ''):
+        keyword = item.strip()
+    else:
+        keyword = KEYWORDS_CATEGORIA.get(categoria, 'loja')
+
+    print(f"[GOOGLE PLACES] keyword usada: '{keyword}'")
 
     try:
         r = requests.get(
@@ -2911,7 +3545,7 @@ def lojas_proximas():
     except (TypeError, ValueError):
         return jsonify({'success': False, 'message': 'Coordenadas inválidas.', 'lojas': []})
 
-    lojas = buscar_lojas_osm(lat, lng, categoria)
+    lojas = buscar_lojas_osm(lat, lng, categoria, item=item)
     print(f"[MAPA] lojas encontradas: {len(lojas)}")
 
     return jsonify({'success': True, 'lojas': lojas, 'item': item})
@@ -2936,581 +3570,6 @@ def score_fatura(fatura_id):
     )
     resultado['item'] = item
     return jsonify({'success': True, 'resultado': resultado})
-</file>
-
-<file path="NOTAS.md">
-# Notas do Projeto
-
-## Como instalar noutro PC
-1. python -m venv venv
-2. venv\Scripts\activate
-3. pip install -r requirements.txt
-</file>
-
-<file path="templates/impulse.html">
-{% extends 'base.html' %}
-{% block title %}Impulse Control · Verly{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Impulse Control</h1>
-        <p class="page-sub">Antes de comprar, pergunta à Verly. Ela vai ser honesta.</p>
-    </div>
-</div>
-
-<div style="max-width:680px;">
-
-    <div class="card" style="margin-bottom:20px;">
-        <div class="card-header">
-            <h3>Modo de Resposta</h3>
-            <a href="{{ url_for('personality.personality') }}" class="card-link">Alterar →</a>
-        </div>
-        <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;">
-            {% set modos = [('savage','Savage'),('sarcastic','Sarcástico'),('calm','Calmo'),('pro','Profissional')] %}
-            {% for key, nome in modos %}
-            <button class="pers-pill {% if key == personalidade_atual %}pers-pill--active{% endif %}"
-                data-p="{{ key }}"
-                onclick="selecionarPersonalidade('{{ key }}', this)"
-                style="padding:7px 16px;border-radius:6px;border:1px solid {% if key == personalidade_atual %}var(--brand-2){% else %}var(--border){% endif %};
-                background:{% if key == personalidade_atual %}rgba(123,97,255,0.1){% else %}var(--surface2){% endif %};
-                color:{% if key == personalidade_atual %}var(--brand-2){% else %}var(--text-muted){% endif %};
-                font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.2s;">
-                {{ nome }}
-            </button>
-            {% endfor %}
-        </div>
-    </div>
-
-    <div class="card" style="margin-bottom:20px;">
-        <div class="card-header"><h3>O que queres comprar?</h3></div>
-        <div class="card-body">
-            <textarea id="impulseInput"
-                placeholder="Ex: Adidas Samba 120€ · iPhone 16 Pro 1299€ · Sofá IKEA 800€"
-                rows="3"
-                style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;
-                color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:12px 16px;
-                resize:none;outline:none;transition:border-color 0.2s;line-height:1.5;"
-                onfocus="this.style.borderColor='var(--brand)'"
-                onblur="this.style.borderColor='var(--border)'"></textarea>
-            <button class="btn-primary" style="margin-top:12px;" onclick="analisarImpulso()">
-                Analisar antes de comprar
-            </button>
-        </div>
-    </div>
-
-    <div id="impulseResult" style="display:none;">
-        <div id="impulseLoading" class="card" style="margin-bottom:20px;display:none;">
-            <div class="card-body" style="text-align:center;padding:32px;color:var(--text-muted);">
-                <div style="font-size:13px;">A analisar...</div>
-            </div>
-        </div>
-        <div id="impulseContent">
-            <div class="card" style="margin-bottom:12px;">
-                <div class="card-header"><h3>Análise</h3></div>
-                <div class="card-body"><p id="resAnalise" style="font-size:14px;line-height:1.7;color:var(--text);"></p></div>
-            </div>
-            <div class="card" style="margin-bottom:12px;">
-                <div class="card-header"><h3>Alternativa</h3></div>
-                <div class="card-body"><p id="resAlternativa" style="font-size:14px;line-height:1.7;color:var(--text);"></p></div>
-            </div>
-            <div id="bannerAguardar" style="background:rgba(255,184,0,0.06);border:1px solid rgba(255,184,0,0.15);
-                border-radius:10px;padding:16px 20px;text-align:center;margin-bottom:20px;">
-                <div id="resVeredicto" style="font-size:14px;font-weight:600;color:var(--yellow);"></div>
-            </div>
-            <div id="bannerOk" style="background:rgba(0,214,143,0.06);border:1px solid rgba(0,214,143,0.15);
-                border-radius:10px;padding:16px 20px;text-align:center;margin-bottom:20px;display:none;">
-                <div id="resVeredictoOk" style="font-size:14px;font-weight:600;color:var(--green);"></div>
-            </div>
-        </div>
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-let personalidadeAtual = '{{ personalidade_atual }}';
-function selecionarPersonalidade(key, btn) {
-    personalidadeAtual = key;
-    document.querySelectorAll('.pers-pill').forEach(b => {
-        const active = b.dataset.p === key;
-        b.style.background  = active ? 'rgba(123,97,255,0.1)' : 'var(--surface2)';
-        b.style.color       = active ? 'var(--brand-2)' : 'var(--text-muted)';
-        b.style.borderColor = active ? 'var(--brand-2)' : 'var(--border)';
-    });
-    fetch('/personality/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({personalidade:key})});
-}
-async function analisarImpulso() {
-    const produto = document.getElementById('impulseInput').value.trim();
-    if (!produto) { alert('Descreve o que queres comprar.'); return; }
-    document.getElementById('impulseResult').style.display = 'block';
-    document.getElementById('impulseLoading').style.display = 'block';
-    document.getElementById('impulseContent').style.display = 'none';
-    try {
-        const res = await fetch('/impulse/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({produto,personalidade:personalidadeAtual})});
-        const data = await res.json();
-        document.getElementById('impulseLoading').style.display = 'none';
-        if (data.success) {
-            const r = data.resultado;
-            document.getElementById('resAnalise').textContent = r.analise;
-            document.getElementById('resAlternativa').textContent = r.alternativa;
-            if (r.aguardar) {
-                document.getElementById('bannerAguardar').style.display='block';
-                document.getElementById('bannerOk').style.display='none';
-                document.getElementById('resVeredicto').textContent=r.veredicto;
-            } else {
-                document.getElementById('bannerAguardar').style.display='none';
-                document.getElementById('bannerOk').style.display='block';
-                document.getElementById('resVeredictoOk').textContent=r.veredicto;
-            }
-            document.getElementById('impulseContent').style.display='block';
-        } else { alert('Erro: '+(data.message||'Tenta de novo.')); document.getElementById('impulseResult').style.display='none'; }
-    } catch(e) { alert('Erro de ligação.'); document.getElementById('impulseResult').style.display='none'; }
-}
-document.getElementById('impulseInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&e.ctrlKey)analisarImpulso();});
-</script>
-{% endblock %}
-</file>
-
-<file path="templates/personality.html">
-{% extends 'base.html' %}
-{% block title %}Personalidade · Verly{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Personalidade</h1>
-        <p class="page-sub">Escolhe como a Verly te fala. Muda quando quiseres.</p>
-    </div>
-</div>
-
-<div style="max-width:680px;">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px;">
-        {% for key, p in personalidades.items() %}
-        <div class="pers-card" data-key="{{ key }}" data-cor="{{ p.cor }}"
-             onclick="selecionarPersonalidade('{{ key }}')"
-             style="background:var(--surface);border:2px solid {% if key == atual %}{{ p.cor }}{% else %}var(--border){% endif %};
-             border-radius:12px;padding:22px;cursor:pointer;transition:all 0.2s;position:relative;overflow:hidden;">
-
-            <div class="badge-ativo" style="display:{% if key == atual %}block{% else %}none{% endif %};
-                position:absolute;top:12px;right:12px;background:rgba(123,97,255,0.12);
-                color:var(--brand-2);font-size:10px;font-weight:700;padding:3px 9px;
-                border-radius:4px;letter-spacing:0.5px;">ATIVO</div>
-
-            <div style="font-family:'Sora',sans-serif;font-size:15px;font-weight:700;margin-bottom:6px;color:var(--text);">{{ p.nome }}</div>
-            <div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:14px;">{{ p.descricao }}</div>
-            <div style="background:var(--surface2);border-radius:6px;padding:10px 14px;
-                border:1px solid var(--border);font-size:12px;line-height:1.6;
-                color:var(--text-muted);font-style:italic;">
-                "{{ p.preview }}"
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-
-    <div id="confirmMsg" style="display:none;background:rgba(0,214,143,0.06);
-        border:1px solid rgba(0,214,143,0.15);border-radius:8px;padding:12px 18px;
-        font-size:13px;color:var(--green);font-weight:600;text-align:center;"></div>
-
-    <p style="font-size:12px;color:var(--text-sub);text-align:center;margin-top:20px;">
-        Afeta o Chat, Score de Compras, Relatório Mensal e Impulse Control.
-    </p>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-async function selecionarPersonalidade(key) {
-    try {
-        const res = await fetch('/personality/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({personalidade:key})});
-        const data = await res.json();
-        if (!data.success) return;
-        document.querySelectorAll('.pers-card').forEach(card => {
-            const active = card.dataset.key === key;
-            card.style.borderColor = active ? card.dataset.cor : 'var(--border)';
-            card.querySelector('.badge-ativo').style.display = active ? 'block' : 'none';
-        });
-        const msg = document.getElementById('confirmMsg');
-        msg.textContent = `Personalidade "${data.info.nome}" ativada.`;
-        msg.style.display = 'block';
-        setTimeout(() => msg.style.display = 'none', 3000);
-    } catch(e) { console.error(e); }
-}
-</script>
-{% endblock %}
-</file>
-
-<file path="templates/relatorio.html">
-{% extends 'base.html' %}
-{% block title %}Relatório Mensal · Verly{% endblock %}
-{% block extra_head %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Relatório Mensal</h1>
-        <p class="page-sub">{{ mes_nome }} {{ ano }}</p>
-    </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;">
-        {% for m in meses_nav %}
-        <a href="{{ url_for('reports.relatorio', mes=m.mes, ano=m.ano) }}"
-           class="btn-ghost {% if m.mes == mes and m.ano == ano %}btn-ghost--active{% endif %}"
-           style="{% if m.mes == mes and m.ano == ano %}border-color:var(--brand-2);color:var(--brand-2);{% endif %}padding:7px 12px;font-size:12px;">
-            {{ m.nome }}
-        </a>
-        {% endfor %}
-    </div>
-</div>
-
-{% if total_gasto > 0 %}
-<div class="metrics-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:28px;">
-    <div class="metric-card">
-        <div class="metric-icon" style="background:rgba(255,71,87,0.08);">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-            </svg>
-        </div>
-        <div class="metric-body">
-            <span class="metric-label">Total Gasto</span>
-            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_gasto) }}€</span>
-            {% if variacao != 0 %}
-            <span class="metric-trend {% if variacao > 0 %}trend-bad{% else %}trend-ok{% endif %}">
-                {% if variacao > 0 %}+{% endif %}{{ variacao|round(1) }}% vs mês anterior
-            </span>
-            {% endif %}
-        </div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon" style="background:rgba(255,184,0,0.08);">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-            </svg>
-        </div>
-        <div class="metric-body">
-            <span class="metric-label">Estimativa Desperdício</span>
-            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ '%.2f'|format(desperdicado) }}€</span>
-            <span class="metric-trend trend-bad">{{ '%.0f'|format(desperdicado / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
-        </div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon" style="background:rgba(0,214,143,0.08);">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12"/>
-            </svg>
-        </div>
-        <div class="metric-body">
-            <span class="metric-label">Boas Decisões</span>
-            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ '%.2f'|format(boas_decisoes) }}€</span>
-            <span class="metric-trend trend-ok">{{ '%.0f'|format(boas_decisoes / total_gasto * 100 if total_gasto > 0 else 0) }}% do total</span>
-        </div>
-    </div>
-</div>
-
-<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--brand-2);
-    border-radius:0 10px 10px 0;padding:16px 22px;margin-bottom:28px;
-    font-size:14px;line-height:1.7;color:var(--text);font-style:italic;">
-    "{{ roast_phrase }}"
-</div>
-
-<div class="dashboard-grid" style="margin-bottom:28px;">
-    <div class="card">
-        <div class="card-header"><h3>Por Categoria</h3></div>
-        <div class="card-body">
-            {% for b in barras %}
-            <div style="margin-bottom:14px;">
-                <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
-                    <span style="font-size:12px;color:var(--text-muted);">{{ b.categoria }}</span>
-                    <div style="display:flex;gap:8px;align-items:center;">
-                        <span style="font-size:11px;color:var(--red);font-weight:600;">~{{ b.desperdicado }}€</span>
-                        <span style="font-size:13px;font-weight:700;color:var(--text);">{{ b.valor }}€</span>
-                    </div>
-                </div>
-                <div style="height:6px;background:var(--surface2);border-radius:4px;overflow:hidden;">
-                    <div style="width:{{ b.percentagem }}%;height:100%;border-radius:4px;
-                        background:{% if b.regret_pct > 35 %}var(--red){% elif b.regret_pct > 20 %}var(--yellow){% else %}var(--green){% endif %};
-                        transition:width 0.8s ease;"></div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    <div class="card">
-        <div class="card-header"><h3>Distribuição</h3></div>
-        <div class="card-body" style="display:flex;align-items:center;justify-content:center;min-height:220px;">
-            <canvas id="donutChart" style="max-width:200px;max-height:200px;"></canvas>
-        </div>
-    </div>
-</div>
-
-{% if top_lojas %}
-<div class="card" style="margin-bottom:28px;">
-    <div class="card-header"><h3>Top Lojas</h3></div>
-    <div class="card-body" style="padding:0;">
-        <table class="data-table">
-            <thead><tr><th>#</th><th>Loja</th><th style="text-align:right;">Total</th></tr></thead>
-            <tbody>
-                {% for l in top_lojas %}
-                <tr>
-                    <td style="color:var(--text-sub);font-weight:700;">{{ loop.index }}</td>
-                    <td style="font-weight:600;">{{ l.loja }}</td>
-                    <td style="text-align:right;color:var(--brand-2);font-weight:700;">{{ l.valor }}€</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
-
-{% else %}
-<div class="empty-card">
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--text-sub)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:12px;">
-        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
-    </svg>
-    <p>Sem faturas em {{ mes_nome }} {{ ano }}.<br>
-       Carrega as tuas faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a>.</p>
-</div>
-{% endif %}
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-{% if barras %}
-const ctx = document.getElementById('donutChart');
-if (ctx) {
-    new Chart(ctx, {
-        type: 'doughnut',
-        data: {
-            labels: {{ barras | map(attribute='categoria') | list | tojson }},
-            datasets: [{
-                data: {{ barras | map(attribute='valor') | list | tojson }},
-                backgroundColor: ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#FF6B35'],
-                borderWidth: 0, hoverOffset: 6,
-            }]
-        },
-        options: { responsive:true, cutout:'65%', plugins:{ legend:{display:false}, tooltip:{callbacks:{label:(c)=>` ${c.label}: ${c.parsed.toFixed(2)}€`}} } }
-    });
-}
-{% endif %}
-</script>
-{% endblock %}
-</file>
-
-<file path="templates/subscriptions.html">
-{% extends 'base.html' %}
-{% block title %}Subscription Leak · Verly{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Subscription Leak Detector</h1>
-        <p class="page-sub">Subscrições detetadas nas tuas faturas — ordenadas por risco financeiro</p>
-    </div>
-</div>
-
-<!-- RESUMO -->
-<div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:28px;">
-    <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-        <div class="metric-body">
-            <span class="metric-label">Desperdiçado / mês</span>
-            <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€</span>
-            <span class="metric-trend trend-bad">≈ {{ '%.0f'|format(total_anual_desperdicado) }}€/ano</span>
-        </div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-        <div class="metric-body">
-            <span class="metric-label">Subscr. saudáveis</span>
-            <span class="metric-value metric-value-sm" style="color:var(--green)">{{ count_ok }}</span>
-            <span class="metric-trend trend-ok">{{ '%.2f'|format(total_mensal_ok) }}€/mês</span>
-        </div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-        <div class="metric-body">
-            <span class="metric-label">Em risco</span>
-            <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ count_danger + count_warning }}</span>
-            <span class="metric-trend trend-bad">{{ count_danger }} para cancelar</span>
-        </div>
-    </div>
-</div>
-
-{% if subscriptions %}
-<!-- LISTA DE SUBSCRIÇÕES -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-header">
-        <h3>Subscrições Detetadas</h3>
-        <span style="font-size:12px;color:var(--text-sub)">{{ subscriptions|length }} serviço(s)</span>
-    </div>
-    <div class="card-body" style="padding:0;">
-        {% for sub in subscriptions %}
-        <div class="sub-leak-item sub-risk-{{ sub.risk }}" style="
-            display:flex; align-items:center; gap:16px;
-            padding:16px 20px;
-            border-bottom:1px solid var(--border);
-            transition: background 0.15s;
-        ">
-            <!-- Ícone -->
-            <div style="
-                width:42px; height:42px; border-radius:10px;
-                background:{% if sub.risk == 'danger' %}rgba(255,71,87,0.1){% elif sub.risk == 'warning' %}rgba(255,184,0,0.1){% else %}rgba(0,214,143,0.08){% endif %};
-                display:flex; align-items:center; justify-content:center;
-                font-size:20px; flex-shrink:0;
-            ">{{ sub.icone }}</div>
-
-            <!-- Info -->
-            <div style="flex:1;">
-                <div style="font-size:14px;font-weight:600;color:var(--text);">{{ sub.nome }}</div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
-                    {{ sub.alerta }}
-                </div>
-            </div>
-
-            <!-- Preço + Badge -->
-            <div style="text-align:right; flex-shrink:0;">
-                <div style="font-size:15px; font-weight:700;
-                    color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
-                    {{ '%.2f'|format(sub.preco_mensal) }}€/mês
-                </div>
-                <div style="margin-top:4px;">
-                    <span style="
-                        font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; letter-spacing:0.5px;
-                        {% if sub.risk == 'danger' %}background:rgba(255,71,87,0.15);color:var(--red);
-                        {% elif sub.risk == 'warning' %}background:rgba(255,184,0,0.15);color:var(--yellow);
-                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}
-                    ">{{ sub.risk_label }}</span>
-                </div>
-            </div>
-        </div>
-        {% endfor %}
-    </div>
-</div>
-
-<!-- FRASE DE IMPACTO -->
-{% if total_mensal_desperdicado > 0 %}
-<div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
-    <div style="font-size:15px;color:var(--text);line-height:1.6;">
-        Estás a desperdiçar <strong style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€/mês</strong>
-        em subscrições que não usas. Isso é
-        <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong>
-        a ir pelo cano.
-    </div>
-</div>
-{% endif %}
-
-{% else %}
-<!-- EMPTY STATE -->
-<div class="empty-card">
-    <span>✅</span>
-    <p>Nenhuma subscrição detetada nas tuas faturas.<br>
-    Carrega mais faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para uma análise mais completa.</p>
-</div>
-{% endif %}
-{% endblock %}
-</file>
-
-<file path="app/dashboard.py">
-import json
-from datetime import datetime
-from flask import Blueprint, render_template
-from flask_login import login_required, current_user
-from app.models import Fatura, Conversa
-
-dashboard_bp = Blueprint('dashboard', __name__)
-
-
-def _parse_date(date_str):
-    if not date_str:
-        return None
-    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
-        try:
-            return datetime.strptime(date_str.strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
-@dashboard_bp.route('/dashboard')
-@login_required
-def dashboard():
-    faturas = Fatura.query.filter_by(user_id=current_user.id).order_by(Fatura.data_upload.desc()).all()
-    conversas = Conversa.query.filter_by(user_id=current_user.id).order_by(Conversa.timestamp.desc()).limit(5).all()
-
-    total_gasto = sum(f.total or 0 for f in faturas)
-    num_faturas = len(faturas)
-    num_conversas = Conversa.query.filter_by(user_id=current_user.id).count()
-
-    # Top loja
-    lojas = {}
-    for f in faturas:
-        loja = f.loja or 'Desconhecida'
-        lojas[loja] = lojas.get(loja, 0) + (f.total or 0)
-    top_loja = max(lojas, key=lojas.get) if lojas else '—'
-
-    # Gastos por categoria
-    categorias = {}
-    for f in faturas:
-        cat = f.categoria or 'Outros'
-        categorias[cat] = categorias.get(cat, 0) + (f.total or 0)
-
-    cat_labels = list(categorias.keys())
-    cat_values = [round(categorias[c], 2) for c in cat_labels]
-
-    # Gastos por loja (top 6)
-    lojas_sorted = sorted(lojas.items(), key=lambda x: x[1], reverse=True)[:6]
-    loja_labels = [l[0] for l in lojas_sorted]
-    loja_values = [round(l[1], 2) for l in lojas_sorted]
-
-    # Alertas de garantia e devolução
-    hoje = datetime.now()
-    alertas = []
-    for f in faturas:
-        # Alerta devolução (< 7 dias)
-        data_dev = _parse_date(f.data_devolucao)
-        if data_dev and data_dev >= hoje:
-            dias = (data_dev - hoje).days
-            if dias <= 7:
-                alertas.append({
-                    'tipo': 'devolucao',
-                    'fatura': f.nome_ficheiro,
-                    'loja': f.loja or '—',
-                    'data': f.data_devolucao,
-                    'dias': dias,
-                    'urgencia': 'critico' if dias <= 3 else 'aviso'
-                })
-        # Alerta garantia (< 30 dias)
-        data_gar = _parse_date(f.data_garantia)
-        if data_gar and data_gar >= hoje:
-            dias = (data_gar - hoje).days
-            if dias <= 30:
-                alertas.append({
-                    'tipo': 'garantia',
-                    'fatura': f.nome_ficheiro,
-                    'loja': f.loja or '—',
-                    'data': f.data_garantia,
-                    'dias': dias,
-                    'urgencia': 'critico' if dias <= 7 else 'aviso'
-                })
-
-    alertas.sort(key=lambda x: x['dias'])
-
-    return render_template('dashboard.html',
-        total_gasto=total_gasto,
-        num_faturas=num_faturas,
-        num_conversas=num_conversas,
-        top_loja=top_loja,
-        cat_labels=json.dumps(cat_labels),
-        cat_values=json.dumps(cat_values),
-        loja_labels=json.dumps(loja_labels),
-        loja_values=json.dumps(loja_values),
-        ultimas_faturas=faturas[:5],
-        conversas_recentes=conversas,
-        alertas=alertas,
-    )
 </file>
 
 <file path="README.md">
@@ -3604,6 +3663,155 @@ sentence-transformers
 {% extends 'base.html' %}
 {% block title %}Perfil · Verly{% endblock %}
 
+{% block extra_head %}
+<style>
+.perfil-hero {
+    background: linear-gradient(135deg, rgba(74,58,255,0.12) 0%, rgba(123,97,255,0.06) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+}
+.perfil-hero::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(74,58,255,0.12), transparent 70%);
+    pointer-events: none;
+}
+.avatar-wrapper {
+    position: relative;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.avatar-wrapper:hover .avatar-overlay { opacity: 1; }
+.avatar-img {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    object-fit: cover;
+    display: block;
+    box-shadow: 0 0 0 3px rgba(74,58,255,0.3);
+}
+.avatar-initial {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Sora', sans-serif;
+    font-size: 30px; font-weight: 700; color: #fff;
+    box-shadow: 0 0 0 3px rgba(74,58,255,0.3);
+}
+.avatar-overlay {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+.avatar-overlay svg { color: #fff; }
+.avatar-overlay span { font-size: 10px; font-weight: 600; color: #fff; }
+#avatarInput { display: none; }
+.perfil-hero-info h2 {
+    font-family: 'Sora', sans-serif;
+    font-size: 22px; font-weight: 700;
+    color: var(--text); margin-bottom: 4px;
+}
+.perfil-hero-info p { font-size: 13px; color: var(--text-muted); }
+.hero-meta { font-size: 11px; color: var(--text-sub); margin-top: 6px; display: flex; align-items: center; gap: 5px; }
+
+.perfil-stats-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+}
+.perfil-stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    transition: border-color 0.2s;
+}
+.perfil-stat-card:hover { border-color: var(--border-hover); }
+.stat-icon-wrap {
+    width: 40px; height: 40px;
+    border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 2px;
+}
+.stat-icon-wrap.blue   { background: rgba(74,58,255,0.12);  color: var(--brand-2); }
+.stat-icon-wrap.green  { background: rgba(0,214,143,0.10);  color: #00D68F; }
+.stat-icon-wrap.yellow { background: rgba(255,184,0,0.10);  color: #FFB800; }
+.perfil-stat-val {
+    font-family: 'Sora', sans-serif;
+    font-size: 24px; font-weight: 700; color: var(--text);
+}
+.perfil-stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
+
+.perfil-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 860px) { .perfil-grid-2 { grid-template-columns: 1fr; } }
+
+.field-group { display: flex; flex-direction: column; gap: 16px; }
+.field-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; display: block;
+}
+.field-input {
+    width: 100%; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); font-family: 'Outfit', sans-serif; font-size: 14px;
+    padding: 11px 14px; outline: none; box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.field-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(74,58,255,0.12); }
+.field-input:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.check-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    cursor: pointer; transition: border-color 0.2s;
+}
+.check-row:hover { border-color: var(--border-hover); }
+.check-row input[type=checkbox] { accent-color: var(--brand); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+.check-row span { font-size: 13px; color: var(--text-sub); }
+
+.card-danger-zone {
+    background: rgba(255,71,87,0.04); border: 1px solid rgba(255,71,87,0.14);
+    border-radius: var(--radius); padding: 24px; margin-top: 20px;
+}
+.card-danger-zone h3 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #FF4757; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+}
+.card-danger-zone p { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; }
+.btn-danger-outline {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 10px;
+    border: 1px solid rgba(255,71,87,0.35); background: transparent;
+    color: #FF4757; font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: 'Outfit', sans-serif; transition: all 0.2s;
+}
+.btn-danger-outline:hover { background: rgba(255,71,87,0.08); border-color: #FF4757; }
+.avatar-wrapper.uploading { opacity: 0.6; pointer-events: none; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -3612,97 +3820,180 @@ sentence-transformers
     </div>
 </div>
 
-<div class="perfil-grid">
-    <!-- Stats -->
-    <div class="card">
-        <div class="card-header"><h3>Estatísticas</h3></div>
-        <div class="card-body">
-            <div class="perfil-stats">
-                <div class="perfil-stat">
-                    <span class="ps-icon">🧾</span>
-                    <span class="ps-val">{{ num_faturas }}</span>
-                    <span class="ps-label">Faturas</span>
-                </div>
-                <div class="perfil-stat">
-                    <span class="ps-icon">💬</span>
-                    <span class="ps-val">{{ num_conversas }}</span>
-                    <span class="ps-label">Conversas IA</span>
-                </div>
-                <div class="perfil-stat">
-                    <span class="ps-icon">💸</span>
-                    <span class="ps-val">{{ "%.0f"|format(total_gasto) }}€</span>
-                    <span class="ps-label">Total Gasto</span>
-                </div>
-            </div>
-            <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
-                Membro desde {{ current_user.criado_em.strftime('%d/%m/%Y') }}
-            </div>
+<div class="perfil-hero">
+    <div class="avatar-wrapper" id="avatarWrapper" onclick="document.getElementById('avatarInput').click()" title="Alterar foto de perfil">
+        {% if current_user.avatar %}
+            <img class="avatar-img" id="avatarPreview"
+                 src="{{ url_for('perfil.get_avatar', user_id=current_user.id) }}" alt="Avatar">
+        {% else %}
+            <div class="avatar-initial" id="avatarPreview">{{ current_user.nome[0].upper() }}</div>
+        {% endif %}
+        <div class="avatar-overlay">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+            </svg>
+            <span>Alterar foto</span>
         </div>
+        <input type="file" id="avatarInput" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif">
     </div>
 
-    <!-- Editar Perfil -->
+    <div class="perfil-hero-info">
+        <h2>{{ current_user.nome }}</h2>
+        <p>{{ current_user.email }}</p>
+        <p class="hero-meta">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Membro desde {{ current_user.criado_em.strftime('%d/%m/%Y') }}
+        </p>
+    </div>
+</div>
+
+<div class="perfil-stats-row">
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap blue">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ num_faturas }}</span>
+        <span class="perfil-stat-label">Faturas</span>
+    </div>
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap green">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ num_conversas }}</span>
+        <span class="perfil-stat-label">Conversas IA</span>
+    </div>
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap yellow">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="1" x2="12" y2="23"/>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ "%.0f"|format(total_gasto) }}€</span>
+        <span class="perfil-stat-label">Total Gasto</span>
+    </div>
+</div>
+
+<div class="perfil-grid-2">
     <div class="card">
         <div class="card-header"><h3>Informação Pessoal</h3></div>
         <div class="card-body">
             <form method="POST" action="{{ url_for('perfil.atualizar') }}">
-                <div class="form-group">
-                    <label>Nome</label>
-                    <input type="text" name="nome" value="{{ current_user.nome }}" required>
+                <div class="field-group">
+                    <div>
+                        <label class="field-label">Nome</label>
+                        <input class="field-input" type="text" name="nome" value="{{ current_user.nome }}" required>
+                    </div>
+                    <div>
+                        <label class="field-label">Email</label>
+                        <input class="field-input" type="email" value="{{ current_user.email }}" disabled>
+                    </div>
+                    <div>
+                        <label class="field-label">Email para Notificações</label>
+                        <input class="field-input" type="email" name="email_notificacoes"
+                               value="{{ current_user.email_notificacoes or '' }}" placeholder="outro@email.com">
+                    </div>
+                    <label class="check-row">
+                        <input type="checkbox" name="notificacoes_email" {% if current_user.notificacoes_email %}checked{% endif %}>
+                        <span>Receber alertas de garantia por email</span>
+                    </label>
+                    <button type="submit" class="btn-primary" style="width:100%;">Guardar Alterações</button>
                 </div>
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" value="{{ current_user.email }}" disabled style="opacity:0.4;cursor:not-allowed;">
-                </div>
-                <div class="form-group">
-                    <label>Email para Notificações</label>
-                    <input type="email" name="email_notificacoes" value="{{ current_user.email_notificacoes or '' }}" placeholder="outro@email.com">
-                </div>
-                <div class="form-check" style="margin-bottom:20px;">
-                    <input type="checkbox" name="notificacoes_email" id="notif" {% if current_user.notificacoes_email %}checked{% endif %}>
-                    <label for="notif">Receber alertas de garantia por email</label>
-                </div>
-                <button type="submit" class="btn-primary">Guardar Alterações</button>
             </form>
         </div>
     </div>
 
-    <!-- Alterar Password -->
     <div class="card">
         <div class="card-header"><h3>Alterar Password</h3></div>
         <div class="card-body">
             <form method="POST" action="{{ url_for('perfil.alterar_password') }}">
-                <div class="form-group">
-                    <label>Password Atual</label>
-                    <input type="password" name="password_atual" required placeholder="••••••••">
+                <div class="field-group">
+                    <div>
+                        <label class="field-label">Password Atual</label>
+                        <input class="field-input" type="password" name="password_atual" required placeholder="••••••••">
+                    </div>
+                    <div>
+                        <label class="field-label">Nova Password</label>
+                        <input class="field-input" type="password" name="password_nova" required placeholder="Mínimo 6 caracteres">
+                    </div>
+                    <div>
+                        <label class="field-label">Confirmar Nova Password</label>
+                        <input class="field-input" type="password" name="confirmar_password" required placeholder="Repete a password">
+                    </div>
+                    <button type="submit" class="btn-primary" style="width:100%;margin-top:4px;">Alterar Password</button>
                 </div>
-                <div class="form-group">
-                    <label>Nova Password</label>
-                    <input type="password" name="password_nova" required placeholder="Mínimo 6 caracteres">
-                </div>
-                <div class="form-group">
-                    <label>Confirmar Nova Password</label>
-                    <input type="password" name="confirmar_password" required placeholder="Repete a password">
-                </div>
-                <button type="submit" class="btn-primary">Alterar Password</button>
             </form>
         </div>
     </div>
+</div>
 
-    <!-- Zona de Perigo -->
-    <div class="card card-danger">
-        <div class="card-header"><h3>Zona de Perigo</h3></div>
-        <div class="card-body">
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
-                Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas. Esta ação é irreversível.
-            </p>
-            <button class="btn-danger" onclick="confirmarEliminar()">Eliminar Conta Permanentemente</button>
-        </div>
-    </div>
+<div class="card-danger-zone">
+    <h3>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Zona de Perigo
+    </h3>
+    <p>Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas. Esta ação é irreversível.</p>
+    <button class="btn-danger-outline" onclick="confirmarEliminar()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+        </svg>
+        Eliminar Conta Permanentemente
+    </button>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+document.getElementById('avatarInput').addEventListener('change', async function () {
+    const file = this.files[0];
+    if (!file) return;
+
+    const wrapper = document.getElementById('avatarWrapper');
+    wrapper.classList.add('uploading');
+
+    const fd = new FormData();
+    fd.append('avatar', file);
+
+    try {
+        const res  = await fetch('{{ url_for("perfil.upload_avatar") }}', { method: 'POST', body: fd });
+        const data = await res.json();
+
+        if (data.success) {
+            const preview = document.getElementById('avatarPreview');
+            const newSrc  = data.avatar_url + '?t=' + Date.now();
+            if (preview.tagName === 'DIV') {
+                const img = document.createElement('img');
+                img.className = 'avatar-img';
+                img.id = 'avatarPreview';
+                img.alt = 'Avatar';
+                img.src = newSrc;
+                preview.replaceWith(img);
+            } else {
+                preview.src = newSrc;
+            }
+        } else {
+            alert(data.message || 'Erro ao fazer upload.');
+        }
+    } catch (e) {
+        alert('Erro de rede. Tenta novamente.');
+    } finally {
+        wrapper.classList.remove('uploading');
+        this.value = '';
+    }
+});
+
 function confirmarEliminar() {
     const conf = prompt('Escreve "ELIMINAR" para confirmar:');
     if (conf === 'ELIMINAR') {
@@ -5296,6 +5587,7 @@ def _migrate_db():
         ("users", "personalidade", "VARCHAR(20) DEFAULT 'calm'"),
         ("users", "orcamento_mensal", "FLOAT DEFAULT 0"),
         ("users", "onboarding_completo", "BOOLEAN DEFAULT 0"),
+        ("users", "avatar", "VARCHAR(255)"),
     ]
 
     for table, column, col_type in migrations:
@@ -6443,8 +6735,10 @@ def clear_chat():
         <!-- Logo + botão hambúrguer -->
         <div class="sidenav-logo">
             <div class="sidenav-logo-left">
-                <img src="{{ url_for('static', filename='img/logo.png') }}"
-                     alt="Verly" style="height:32px;width:auto;flex-shrink:0;">
+                <div class="logo-mark" style="background:none;box-shadow:none;overflow:hidden;">
+                    <img src="{{ url_for('static', filename='img/logo.png') }}"
+                         alt="Verly" style="width:36px;height:36px;object-fit:contain;display:block;">
+                </div>
                 <span class="logo-text">Verly</span>
             </div>
             <button class="nav-toggle" id="navToggle" title="Colapsar menu" aria-label="Toggle menu">

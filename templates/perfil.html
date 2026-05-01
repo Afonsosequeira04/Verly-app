@@ -1,6 +1,155 @@
 {% extends 'base.html' %}
 {% block title %}Perfil · Verly{% endblock %}
 
+{% block extra_head %}
+<style>
+.perfil-hero {
+    background: linear-gradient(135deg, rgba(74,58,255,0.12) 0%, rgba(123,97,255,0.06) 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    margin-bottom: 24px;
+    position: relative;
+    overflow: hidden;
+}
+.perfil-hero::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(74,58,255,0.12), transparent 70%);
+    pointer-events: none;
+}
+.avatar-wrapper {
+    position: relative;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.avatar-wrapper:hover .avatar-overlay { opacity: 1; }
+.avatar-img {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    object-fit: cover;
+    display: block;
+    box-shadow: 0 0 0 3px rgba(74,58,255,0.3);
+}
+.avatar-initial {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Sora', sans-serif;
+    font-size: 30px; font-weight: 700; color: #fff;
+    box-shadow: 0 0 0 3px rgba(74,58,255,0.3);
+}
+.avatar-overlay {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.55);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+.avatar-overlay svg { color: #fff; }
+.avatar-overlay span { font-size: 10px; font-weight: 600; color: #fff; }
+#avatarInput { display: none; }
+.perfil-hero-info h2 {
+    font-family: 'Sora', sans-serif;
+    font-size: 22px; font-weight: 700;
+    color: var(--text); margin-bottom: 4px;
+}
+.perfil-hero-info p { font-size: 13px; color: var(--text-muted); }
+.hero-meta { font-size: 11px; color: var(--text-sub); margin-top: 6px; display: flex; align-items: center; gap: 5px; }
+
+.perfil-stats-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-bottom: 24px;
+}
+.perfil-stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 16px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    transition: border-color 0.2s;
+}
+.perfil-stat-card:hover { border-color: var(--border-hover); }
+.stat-icon-wrap {
+    width: 40px; height: 40px;
+    border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 2px;
+}
+.stat-icon-wrap.blue   { background: rgba(74,58,255,0.12);  color: var(--brand-2); }
+.stat-icon-wrap.green  { background: rgba(0,214,143,0.10);  color: #00D68F; }
+.stat-icon-wrap.yellow { background: rgba(255,184,0,0.10);  color: #FFB800; }
+.perfil-stat-val {
+    font-family: 'Sora', sans-serif;
+    font-size: 24px; font-weight: 700; color: var(--text);
+}
+.perfil-stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
+
+.perfil-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 860px) { .perfil-grid-2 { grid-template-columns: 1fr; } }
+
+.field-group { display: flex; flex-direction: column; gap: 16px; }
+.field-label {
+    font-size: 11px; font-weight: 700; letter-spacing: 0.8px;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px; display: block;
+}
+.field-input {
+    width: 100%; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); font-family: 'Outfit', sans-serif; font-size: 14px;
+    padding: 11px 14px; outline: none; box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+.field-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(74,58,255,0.12); }
+.field-input:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.check-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    cursor: pointer; transition: border-color 0.2s;
+}
+.check-row:hover { border-color: var(--border-hover); }
+.check-row input[type=checkbox] { accent-color: var(--brand); width: 15px; height: 15px; flex-shrink: 0; cursor: pointer; }
+.check-row span { font-size: 13px; color: var(--text-sub); }
+
+.card-danger-zone {
+    background: rgba(255,71,87,0.04); border: 1px solid rgba(255,71,87,0.14);
+    border-radius: var(--radius); padding: 24px; margin-top: 20px;
+}
+.card-danger-zone h3 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #FF4757; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+}
+.card-danger-zone p { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px; }
+.btn-danger-outline {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 20px; border-radius: 10px;
+    border: 1px solid rgba(255,71,87,0.35); background: transparent;
+    color: #FF4757; font-size: 13px; font-weight: 600;
+    cursor: pointer; font-family: 'Outfit', sans-serif; transition: all 0.2s;
+}
+.btn-danger-outline:hover { background: rgba(255,71,87,0.08); border-color: #FF4757; }
+.avatar-wrapper.uploading { opacity: 0.6; pointer-events: none; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -9,97 +158,180 @@
     </div>
 </div>
 
-<div class="perfil-grid">
-    <!-- Stats -->
-    <div class="card">
-        <div class="card-header"><h3>Estatísticas</h3></div>
-        <div class="card-body">
-            <div class="perfil-stats">
-                <div class="perfil-stat">
-                    <span class="ps-icon">🧾</span>
-                    <span class="ps-val">{{ num_faturas }}</span>
-                    <span class="ps-label">Faturas</span>
-                </div>
-                <div class="perfil-stat">
-                    <span class="ps-icon">💬</span>
-                    <span class="ps-val">{{ num_conversas }}</span>
-                    <span class="ps-label">Conversas IA</span>
-                </div>
-                <div class="perfil-stat">
-                    <span class="ps-icon">💸</span>
-                    <span class="ps-val">{{ "%.0f"|format(total_gasto) }}€</span>
-                    <span class="ps-label">Total Gasto</span>
-                </div>
-            </div>
-            <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
-                Membro desde {{ current_user.criado_em.strftime('%d/%m/%Y') }}
-            </div>
+<div class="perfil-hero">
+    <div class="avatar-wrapper" id="avatarWrapper" onclick="document.getElementById('avatarInput').click()" title="Alterar foto de perfil">
+        {% if current_user.avatar %}
+            <img class="avatar-img" id="avatarPreview"
+                 src="{{ url_for('perfil.get_avatar', user_id=current_user.id) }}" alt="Avatar">
+        {% else %}
+            <div class="avatar-initial" id="avatarPreview">{{ current_user.nome[0].upper() }}</div>
+        {% endif %}
+        <div class="avatar-overlay">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+            </svg>
+            <span>Alterar foto</span>
         </div>
+        <input type="file" id="avatarInput" accept="image/png,image/jpeg,image/jpg,image/webp,image/gif">
     </div>
 
-    <!-- Editar Perfil -->
+    <div class="perfil-hero-info">
+        <h2>{{ current_user.nome }}</h2>
+        <p>{{ current_user.email }}</p>
+        <p class="hero-meta">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Membro desde {{ current_user.criado_em.strftime('%d/%m/%Y') }}
+        </p>
+    </div>
+</div>
+
+<div class="perfil-stats-row">
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap blue">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ num_faturas }}</span>
+        <span class="perfil-stat-label">Faturas</span>
+    </div>
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap green">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ num_conversas }}</span>
+        <span class="perfil-stat-label">Conversas IA</span>
+    </div>
+    <div class="perfil-stat-card">
+        <div class="stat-icon-wrap yellow">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="1" x2="12" y2="23"/>
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+        </div>
+        <span class="perfil-stat-val">{{ "%.0f"|format(total_gasto) }}€</span>
+        <span class="perfil-stat-label">Total Gasto</span>
+    </div>
+</div>
+
+<div class="perfil-grid-2">
     <div class="card">
         <div class="card-header"><h3>Informação Pessoal</h3></div>
         <div class="card-body">
             <form method="POST" action="{{ url_for('perfil.atualizar') }}">
-                <div class="form-group">
-                    <label>Nome</label>
-                    <input type="text" name="nome" value="{{ current_user.nome }}" required>
+                <div class="field-group">
+                    <div>
+                        <label class="field-label">Nome</label>
+                        <input class="field-input" type="text" name="nome" value="{{ current_user.nome }}" required>
+                    </div>
+                    <div>
+                        <label class="field-label">Email</label>
+                        <input class="field-input" type="email" value="{{ current_user.email }}" disabled>
+                    </div>
+                    <div>
+                        <label class="field-label">Email para Notificações</label>
+                        <input class="field-input" type="email" name="email_notificacoes"
+                               value="{{ current_user.email_notificacoes or '' }}" placeholder="outro@email.com">
+                    </div>
+                    <label class="check-row">
+                        <input type="checkbox" name="notificacoes_email" {% if current_user.notificacoes_email %}checked{% endif %}>
+                        <span>Receber alertas de garantia por email</span>
+                    </label>
+                    <button type="submit" class="btn-primary" style="width:100%;">Guardar Alterações</button>
                 </div>
-                <div class="form-group">
-                    <label>Email</label>
-                    <input type="email" value="{{ current_user.email }}" disabled style="opacity:0.4;cursor:not-allowed;">
-                </div>
-                <div class="form-group">
-                    <label>Email para Notificações</label>
-                    <input type="email" name="email_notificacoes" value="{{ current_user.email_notificacoes or '' }}" placeholder="outro@email.com">
-                </div>
-                <div class="form-check" style="margin-bottom:20px;">
-                    <input type="checkbox" name="notificacoes_email" id="notif" {% if current_user.notificacoes_email %}checked{% endif %}>
-                    <label for="notif">Receber alertas de garantia por email</label>
-                </div>
-                <button type="submit" class="btn-primary">Guardar Alterações</button>
             </form>
         </div>
     </div>
 
-    <!-- Alterar Password -->
     <div class="card">
         <div class="card-header"><h3>Alterar Password</h3></div>
         <div class="card-body">
             <form method="POST" action="{{ url_for('perfil.alterar_password') }}">
-                <div class="form-group">
-                    <label>Password Atual</label>
-                    <input type="password" name="password_atual" required placeholder="••••••••">
+                <div class="field-group">
+                    <div>
+                        <label class="field-label">Password Atual</label>
+                        <input class="field-input" type="password" name="password_atual" required placeholder="••••••••">
+                    </div>
+                    <div>
+                        <label class="field-label">Nova Password</label>
+                        <input class="field-input" type="password" name="password_nova" required placeholder="Mínimo 6 caracteres">
+                    </div>
+                    <div>
+                        <label class="field-label">Confirmar Nova Password</label>
+                        <input class="field-input" type="password" name="confirmar_password" required placeholder="Repete a password">
+                    </div>
+                    <button type="submit" class="btn-primary" style="width:100%;margin-top:4px;">Alterar Password</button>
                 </div>
-                <div class="form-group">
-                    <label>Nova Password</label>
-                    <input type="password" name="password_nova" required placeholder="Mínimo 6 caracteres">
-                </div>
-                <div class="form-group">
-                    <label>Confirmar Nova Password</label>
-                    <input type="password" name="confirmar_password" required placeholder="Repete a password">
-                </div>
-                <button type="submit" class="btn-primary">Alterar Password</button>
             </form>
         </div>
     </div>
+</div>
 
-    <!-- Zona de Perigo -->
-    <div class="card card-danger">
-        <div class="card-header"><h3>Zona de Perigo</h3></div>
-        <div class="card-body">
-            <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
-                Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas. Esta ação é irreversível.
-            </p>
-            <button class="btn-danger" onclick="confirmarEliminar()">Eliminar Conta Permanentemente</button>
-        </div>
-    </div>
+<div class="card-danger-zone">
+    <h3>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Zona de Perigo
+    </h3>
+    <p>Eliminar conta apaga permanentemente todos os teus dados, faturas e histórico de conversas. Esta ação é irreversível.</p>
+    <button class="btn-danger-outline" onclick="confirmarEliminar()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            <path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+        </svg>
+        Eliminar Conta Permanentemente
+    </button>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+document.getElementById('avatarInput').addEventListener('change', async function () {
+    const file = this.files[0];
+    if (!file) return;
+
+    const wrapper = document.getElementById('avatarWrapper');
+    wrapper.classList.add('uploading');
+
+    const fd = new FormData();
+    fd.append('avatar', file);
+
+    try {
+        const res  = await fetch('{{ url_for("perfil.upload_avatar") }}', { method: 'POST', body: fd });
+        const data = await res.json();
+
+        if (data.success) {
+            const preview = document.getElementById('avatarPreview');
+            const newSrc  = data.avatar_url + '?t=' + Date.now();
+            if (preview.tagName === 'DIV') {
+                const img = document.createElement('img');
+                img.className = 'avatar-img';
+                img.id = 'avatarPreview';
+                img.alt = 'Avatar';
+                img.src = newSrc;
+                preview.replaceWith(img);
+            } else {
+                preview.src = newSrc;
+            }
+        } else {
+            alert(data.message || 'Erro ao fazer upload.');
+        }
+    } catch (e) {
+        alert('Erro de rede. Tenta novamente.');
+    } finally {
+        wrapper.classList.remove('uploading');
+        this.value = '';
+    }
+});
+
 function confirmarEliminar() {
     const conf = prompt('Escreve "ELIMINAR" para confirmar:');
     if (conf === 'ELIMINAR') {

@@ -82,6 +82,7 @@ def _migrate_db():
         ("users", "personalidade", "VARCHAR(20) DEFAULT 'calm'"),
         ("users", "orcamento_mensal", "FLOAT DEFAULT 0"),
         ("users", "onboarding_completo", "BOOLEAN DEFAULT 0"),
+        ("users", "avatar", "VARCHAR(255)"),
     ]
 
     for table, column, col_type in migrations:
