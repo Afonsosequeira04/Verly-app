@@ -1,0 +1,610 @@
+{% extends "base.html" %}
+
+{% block title %}Banco — Verly{% endblock %}
+
+{% block extra_head %}
+<style>
+.banco-page {
+    padding: 32px;
+    max-width: 900px;
+}
+
+.banco-header {
+    margin-bottom: 32px;
+}
+.banco-header h1 {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0 0 6px;
+}
+.banco-header p {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0;
+}
+
+/* ── Status card ── */
+.status-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 28px;
+}
+.status-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.status-dot.ok  { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.2); }
+.status-dot.err { background: #ef4444; box-shadow: 0 0 0 3px rgba(239,68,68,.2); }
+.status-text { font-size: 14px; color: var(--text-muted); }
+.status-text strong { color: var(--text); }
+
+/* ── Contas ligadas ── */
+.section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin: 0 0 12px;
+}
+
+.contas-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    margin-bottom: 32px;
+}
+
+.conta-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+}
+.conta-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+.conta-banco-nome {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text);
+}
+.conta-iban {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: monospace;
+    margin-top: 2px;
+}
+.conta-ligada-em {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 8px;
+}
+.conta-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+.btn-movimentos {
+    flex: 1;
+    padding: 8px 0;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+}
+.btn-movimentos:hover { opacity: .85; }
+.btn-desligar {
+    padding: 8px 12px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all .15s;
+}
+.btn-desligar:hover { border-color: #ef4444; color: #ef4444; }
+
+/* ── Ligar novo banco ── */
+.ligar-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 28px;
+}
+.pais-select-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    align-items: center;
+}
+.pais-select-row label {
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.pais-select-row select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.btn-buscar-bancos {
+    padding: 8px 18px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+}
+.btn-buscar-bancos:hover { border-color: var(--accent); color: var(--accent); }
+
+.bancos-lista {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+    margin-top: 4px;
+}
+.banco-item {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: all .15s;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.banco-item:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface2));
+}
+.banco-item.selected {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, var(--surface2));
+}
+.banco-item img {
+    width: 24px; height: 24px;
+    object-fit: contain;
+    border-radius: 4px;
+}
+.banco-item-placeholder {
+    width: 24px; height: 24px;
+    background: var(--accent);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.btn-conectar {
+    margin-top: 16px;
+    padding: 10px 24px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s;
+    display: none;
+}
+.btn-conectar:hover { opacity: .85; }
+.btn-conectar.visible { display: inline-flex; align-items: center; gap: 8px; }
+
+/* ── Movimentos ── */
+.movimentos-section {
+    display: none;
+}
+.movimentos-section.visible {
+    display: block;
+}
+.movimentos-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+}
+.movimentos-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+}
+.btn-fechar-mov {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.movimento-row {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 8px;
+}
+.mov-categoria-badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 20px;
+    background: var(--surface2);
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.mov-desc {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mov-data {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.mov-valor {
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+    min-width: 70px;
+    text-align: right;
+}
+.mov-valor.debito  { color: #ef4444; }
+.mov-valor.credito { color: #22c55e; }
+.btn-importar {
+    padding: 5px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all .15s;
+    flex-shrink: 0;
+}
+.btn-importar:hover { border-color: var(--accent); color: var(--accent); }
+.btn-importar.importado { border-color: #22c55e; color: #22c55e; pointer-events: none; }
+
+/* ── Loading / empty ── */
+.loading-msg, .empty-msg {
+    text-align: center;
+    padding: 32px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+/* ── Sem configuração ── */
+.setup-card {
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: 14px;
+    padding: 40px 32px;
+    text-align: center;
+    max-width: 520px;
+}
+.setup-card h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 16px 0 8px;
+}
+.setup-card p {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 20px;
+    line-height: 1.6;
+}
+.setup-steps {
+    text-align: left;
+    background: var(--surface2);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+.setup-steps li {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+.setup-steps li:last-child { margin-bottom: 0; }
+.setup-steps code {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 12px;
+    color: var(--accent);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="banco-page">
+
+    <div class="banco-header">
+        <h1>Banco</h1>
+        <p>Liga a tua conta bancária para importar movimentos automaticamente.</p>
+    </div>
+
+    {% if not token_configurado %}
+    <!-- ── Sem .pem configurado ── -->
+    <div class="setup-card">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="5" width="20" height="14" rx="2"/>
+            <line x1="2" y1="10" x2="22" y2="10"/>
+        </svg>
+        <h2>Configuração necessária</h2>
+        <p>Para ligar ao banco precisas de ter o ficheiro de chave RSA na pasta do projeto.</p>
+        <ol class="setup-steps">
+            <li>Vai a <strong>enablebanking.com</strong> → API applications → cria uma app</li>
+            <li>Faz download da chave privada (<code>.pem</code>)</li>
+            <li>Renomeia-a para <code>65c7b8db-de8c-478d-ad1a-198503a15cd8.pem</code></li>
+            <li>Mete-a na raiz do projeto (junto ao <code>run.py</code>)</li>
+            <li>Reinicia a app</li>
+        </ol>
+        <p style="font-size:12px; color:var(--text-muted);">
+            Ficheiro esperado: <code style="font-size:11px;">65c7b8db-de8c-478d-ad1a-198503a15cd8.pem</code>
+        </p>
+    </div>
+
+    {% else %}
+
+    <!-- ── Status ── -->
+    <div class="status-card">
+        <div class="status-dot ok"></div>
+        <div class="status-text"><strong>Enable Banking</strong> — chave RSA configurada. Podes ligar ao banco.</div>
+    </div>
+
+    <!-- ── Contas ligadas ── -->
+    {% if contas %}
+    <p class="section-title">Contas ligadas</p>
+    <div class="contas-grid">
+        {% for conta in contas %}
+        <div class="conta-card">
+            <div class="conta-card-header">
+                <div>
+                    <div class="conta-banco-nome">{{ conta.nome_banco }}</div>
+                    <div class="conta-iban">{{ conta.iban }}</div>
+                </div>
+            </div>
+            <div class="conta-ligada-em">Ligada em {{ conta.ligada_em.strftime('%d/%m/%Y') if conta.ligada_em else '—' }}</div>
+            <div class="conta-actions">
+                <button class="btn-movimentos" onclick="verMovimentos({{ conta.id }}, this)">
+                    Ver movimentos
+                </button>
+                <button class="btn-desligar" onclick="desligar({{ conta.id }}, this)">
+                    Desligar
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- ── Movimentos ── -->
+    <div class="movimentos-section" id="movimentosSection">
+        <div class="movimentos-header">
+            <h3 id="movimentosTitulo">Movimentos</h3>
+            <button class="btn-fechar-mov" onclick="fecharMovimentos()">×</button>
+        </div>
+        <div id="movimentosLista"></div>
+    </div>
+
+    <!-- ── Ligar novo banco ── -->
+    <p class="section-title">{{ 'Ligar outro banco' if contas else 'Ligar ao banco' }}</p>
+    <div class="ligar-card">
+        <div class="pais-select-row">
+            <label>País:</label>
+            <select id="paisSelect">
+                <option value="PT">🇵🇹 Portugal</option>
+                <option value="ES">🇪🇸 Espanha</option>
+                <option value="GB">🇬🇧 Reino Unido</option>
+                <option value="DE">🇩🇪 Alemanha</option>
+                <option value="FR">🇫🇷 França</option>
+            </select>
+            <button class="btn-buscar-bancos" onclick="buscarBancos()">Buscar bancos</button>
+        </div>
+
+        <div id="bancosLista" class="bancos-lista"></div>
+
+        <button class="btn-conectar" id="btnConectar" onclick="conectar()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            Ligar ao banco selecionado
+        </button>
+    </div>
+
+    {% endif %}
+</div>
+
+<script>
+let bancoSelecionado = null;
+
+async function buscarBancos() {
+    const pais = document.getElementById('paisSelect').value;
+    const lista = document.getElementById('bancosLista');
+    lista.innerHTML = '<div class="loading-msg">A carregar bancos...</div>';
+    document.getElementById('btnConectar').classList.remove('visible');
+    bancoSelecionado = null;
+
+    const res = await fetch(`/banco/paises?pais=${pais}`);
+    const bancos = await res.json();
+
+    if (!bancos.length) {
+        lista.innerHTML = '<div class="empty-msg">Nenhum banco encontrado para este país.</div>';
+        return;
+    }
+
+    lista.innerHTML = bancos.map(b => {
+        const iniciais = b.name.substring(0, 2).toUpperCase();
+        const logoHtml = b.logo
+            ? `<img src="${b.logo}" alt="${b.name}" onerror="this.style.display='none'">`
+            : `<div class="banco-item-placeholder">${iniciais}</div>`;
+        return `<div class="banco-item" onclick="selecionarBanco('${b.id}', this)">
+            ${logoHtml}
+            <span>${b.name}</span>
+        </div>`;
+    }).join('');
+}
+
+function selecionarBanco(id, el) {
+    document.querySelectorAll('.banco-item').forEach(i => i.classList.remove('selected'));
+    el.classList.add('selected');
+    bancoSelecionado = id;
+    document.getElementById('btnConectar').classList.add('visible');
+}
+
+async function conectar() {
+    if (!bancoSelecionado) return;
+    const pais = document.getElementById('paisSelect').value;
+    const btn = document.getElementById('btnConectar');
+    btn.textContent = 'A redirecionar...';
+    btn.disabled = true;
+
+    const res = await fetch('/banco/conectar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ institution_id: bancoSelecionado, pais })
+    });
+    const data = await res.json();
+
+    if (data.error) {
+        alert('Erro: ' + data.error);
+        btn.disabled = false;
+        btn.textContent = 'Ligar ao banco selecionado';
+        return;
+    }
+    window.location.href = data.link;
+}
+
+async function verMovimentos(contaId, btnEl) {
+    const section = document.getElementById('movimentosSection');
+    const lista = document.getElementById('movimentosLista');
+    const titulo = document.getElementById('movimentosTitulo');
+
+    section.classList.add('visible');
+    lista.innerHTML = '<div class="loading-msg">A carregar movimentos...</div>';
+    titulo.textContent = 'Movimentos';
+    btnEl.textContent = 'A carregar...';
+    btnEl.disabled = true;
+
+    const res = await fetch(`/banco/movimentos/${contaId}`);
+    const data = await res.json();
+
+    btnEl.textContent = 'Ver movimentos';
+    btnEl.disabled = false;
+
+    if (data.error) {
+        lista.innerHTML = `<div class="empty-msg">Erro: ${data.error}</div>`;
+        return;
+    }
+
+    const movs = data.movimentos || [];
+    if (!movs.length) {
+        lista.innerHTML = '<div class="empty-msg">Sem movimentos disponíveis.</div>';
+        return;
+    }
+
+    titulo.textContent = `Movimentos (${movs.length})`;
+    lista.innerHTML = movs.map(m => `
+        <div class="movimento-row">
+            <span class="mov-categoria-badge">${m.categoria}</span>
+            <span class="mov-desc" title="${m.descricao}">${m.descricao}</span>
+            <span class="mov-data">${m.data || '—'}</span>
+            <span class="mov-valor ${m.tipo}">${m.tipo === 'debito' ? '-' : '+'}${Math.abs(m.valor).toFixed(2)} €</span>
+            ${m.tipo === 'debito' ? `<button class="btn-importar" onclick="importar(this, '${m.descricao.replace(/'/g,"\\'")}', ${m.valor}, '${m.data}', '${m.categoria}')">Importar</button>` : ''}
+        </div>
+    `).join('');
+
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function fecharMovimentos() {
+    document.getElementById('movimentosSection').classList.remove('visible');
+}
+
+async function importar(btn, descricao, valor, data, categoria) {
+    btn.textContent = '...';
+    btn.disabled = true;
+
+    const res = await fetch('/banco/importar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ descricao, valor, data, categoria })
+    });
+    const r = await res.json();
+
+    if (r.success) {
+        btn.textContent = '✓ Importado';
+        btn.classList.add('importado');
+    } else {
+        btn.textContent = 'Importar';
+        btn.disabled = false;
+    }
+}
+
+async function desligar(contaId, btn) {
+    if (!confirm('Tens a certeza que queres desligar esta conta?')) return;
+    btn.textContent = '...';
+    btn.disabled = true;
+
+    const res = await fetch(`/banco/desligar/${contaId}`, { method: 'POST' });
+    const data = await res.json();
+
+    if (data.success) {
+        location.reload();
+    } else {
+        btn.textContent = 'Desligar';
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

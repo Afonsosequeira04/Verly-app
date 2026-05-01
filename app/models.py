@@ -21,6 +21,7 @@ class User(UserMixin, db.Model):
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
     metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')
+    subscricoes = db.relationship('Subscricao', backref='user', lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -70,4 +71,35 @@ class Meta(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     categoria = db.Column(db.String(50), nullable=False)
     valor_limite = db.Column(db.Float, nullable=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class ContaBancaria(db.Model):
+    __tablename__ = 'contas_bancarias'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    account_id = db.Column(db.String(100), nullable=False)
+    requisition_id = db.Column(db.String(100), nullable=False)
+    institution_id = db.Column(db.String(100))
+    iban = db.Column(db.String(50))
+    nome_banco = db.Column(db.String(100))
+    ligada_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Subscricao(db.Model):
+    """Subscrição detetada — pode vir de faturas ou de extrato bancário."""
+    __tablename__ = 'subscricoes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    nome = db.Column(db.String(200), nullable=False)
+    categoria = db.Column(db.String(50), default='outro')
+    icone = db.Column(db.String(10), default='📦')
+    preco_mensal = db.Column(db.Float, default=0.0)
+    meses_pago = db.Column(db.Integer, default=1)
+    risk = db.Column(db.String(20), default='ok')   # ok | warning | danger
+    fonte = db.Column(db.String(20), default='extrato')  # extrato | faturas | manual
+    ativa = db.Column(db.Boolean, default=True)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)

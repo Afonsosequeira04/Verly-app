@@ -5,11 +5,43 @@
 <div class="page-header">
     <div>
         <h1 class="page-title">Subscription Leak Detector</h1>
-        <p class="page-sub">Subscrições detetadas nas tuas faturas — ordenadas por risco financeiro</p>
+        <p class="page-sub">Carrega o teu extrato bancário e a app deteta subscrições automaticamente</p>
     </div>
 </div>
 
-<!-- RESUMO -->
+<!-- UPLOAD EXTRATO -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h3>Analisar Extrato Bancário</h3>
+        <span style="font-size:12px;color:var(--text-muted)">TXT ou CSV exportado do teu banco</span>
+    </div>
+    <div class="card-body">
+        <div id="dropZone" style="
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            padding: 32px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        " onclick="document.getElementById('extratoInput').click()"
+           ondragover="event.preventDefault(); this.style.borderColor='var(--accent)'"
+           ondragleave="this.style.borderColor='var(--border)'"
+           ondrop="handleDrop(event)">
+            <div style="font-size:28px;margin-bottom:8px;">📄</div>
+            <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;">
+                Arrasta o extrato aqui ou clica para escolher
+            </div>
+            <div style="font-size:12px;color:var(--text-muted)">
+                Suporta TXT e CSV exportados de qualquer banco português
+            </div>
+            <input type="file" id="extratoInput" accept=".txt,.csv" style="display:none" onchange="analisarExtrato(this.files[0])">
+        </div>
+
+        <div id="uploadStatus" style="display:none; margin-top:16px;"></div>
+    </div>
+</div>
+
+<!-- RESUMO (das faturas existentes) -->
 <div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:28px;">
     <div class="metric-card">
         <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
@@ -37,50 +69,39 @@
     </div>
 </div>
 
+<!-- RESULTADO DO EXTRATO (aparece após upload) -->
+<div id="resultadoExtrato" style="display:none; margin-bottom:24px;"></div>
+
 {% if subscriptions %}
-<!-- LISTA DE SUBSCRIÇÕES -->
+<!-- SUBSCRIÇÕES DAS FATURAS -->
 <div class="card" style="margin-bottom:24px;">
     <div class="card-header">
-        <h3>Subscrições Detetadas</h3>
-        <span style="font-size:12px;color:var(--text-sub)">{{ subscriptions|length }} serviço(s)</span>
+        <h3>Subscrições nas Faturas</h3>
+        <span style="font-size:12px;color:var(--text-muted)">{{ subscriptions|length }} serviço(s)</span>
     </div>
     <div class="card-body" style="padding:0;">
         {% for sub in subscriptions %}
-        <div class="sub-leak-item sub-risk-{{ sub.risk }}" style="
-            display:flex; align-items:center; gap:16px;
-            padding:16px 20px;
-            border-bottom:1px solid var(--border);
-            transition: background 0.15s;
-        ">
-            <!-- Ícone -->
-            <div style="
-                width:42px; height:42px; border-radius:10px;
+        <div style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid var(--border);">
+            <div style="width:42px;height:42px;border-radius:10px;
                 background:{% if sub.risk == 'danger' %}rgba(255,71,87,0.1){% elif sub.risk == 'warning' %}rgba(255,184,0,0.1){% else %}rgba(0,214,143,0.08){% endif %};
-                display:flex; align-items:center; justify-content:center;
-                font-size:20px; flex-shrink:0;
-            ">{{ sub.icone }}</div>
-
-            <!-- Info -->
+                display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">
+                {{ sub.icone }}
+            </div>
             <div style="flex:1;">
                 <div style="font-size:14px;font-weight:600;color:var(--text);">{{ sub.nome }}</div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
-                    {{ sub.alerta }}
-                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">{{ sub.alerta }}</div>
             </div>
-
-            <!-- Preço + Badge -->
-            <div style="text-align:right; flex-shrink:0;">
-                <div style="font-size:15px; font-weight:700;
-                    color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
+            <div style="text-align:right;flex-shrink:0;">
+                <div style="font-size:15px;font-weight:700;color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
                     {{ '%.2f'|format(sub.preco_mensal) }}€/mês
                 </div>
                 <div style="margin-top:4px;">
-                    <span style="
-                        font-size:10px; font-weight:700; padding:3px 9px; border-radius:20px; letter-spacing:0.5px;
+                    <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;
                         {% if sub.risk == 'danger' %}background:rgba(255,71,87,0.15);color:var(--red);
                         {% elif sub.risk == 'warning' %}background:rgba(255,184,0,0.15);color:var(--yellow);
-                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}
-                    ">{{ sub.risk_label }}</span>
+                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}">
+                        {{ sub.risk_label }}
+                    </span>
                 </div>
             </div>
         </div>
@@ -88,25 +109,122 @@
     </div>
 </div>
 
-<!-- FRASE DE IMPACTO -->
 {% if total_mensal_desperdicado > 0 %}
 <div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;margin-bottom:24px;">
     <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
     <div style="font-size:15px;color:var(--text);line-height:1.6;">
         Estás a desperdiçar <strong style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€/mês</strong>
-        em subscrições que não usas. Isso é
-        <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong>
-        a ir pelo cano.
+        em subscrições. Isso é <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong> a ir pelo cano.
     </div>
 </div>
 {% endif %}
 
 {% else %}
-<!-- EMPTY STATE -->
 <div class="empty-card">
-    <span>✅</span>
-    <p>Nenhuma subscrição detetada nas tuas faturas.<br>
-    Carrega mais faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para uma análise mais completa.</p>
+    <span>📄</span>
+    <p>Carrega o teu extrato bancário acima para detetar subscrições automaticamente.<br>
+    Ou adiciona faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para análise.</p>
 </div>
 {% endif %}
+
+<script>
+function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('dropZone').style.borderColor = 'var(--border)';
+    const file = e.dataTransfer.files[0];
+    if (file) analisarExtrato(file);
+}
+
+async function analisarExtrato(file) {
+    if (!file) return;
+
+    const status = document.getElementById('uploadStatus');
+    const resultado = document.getElementById('resultadoExtrato');
+
+    status.style.display = 'block';
+    status.innerHTML = `<div style="color:var(--text-muted);font-size:13px;">⏳ A analisar <strong>${file.name}</strong>...</div>`;
+    resultado.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('extrato', file);
+
+    try {
+        const res = await fetch('/subscriptions/analisar-extrato', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await res.json();
+
+        if (!data.success) {
+            status.innerHTML = `<div style="color:var(--red);font-size:13px;">❌ ${data.error}</div>`;
+            return;
+        }
+
+        status.innerHTML = `<div style="color:var(--green);font-size:13px;">✓ Extrato analisado — ${data.total_movimentos} movimentos lidos</div>`;
+
+        if (!data.subscriptions || !data.subscriptions.length) {
+            resultado.style.display = 'block';
+            resultado.innerHTML = `
+                <div class="card">
+                    <div class="card-body" style="text-align:center;padding:32px;color:var(--text-muted);">
+                        ✅ Nenhuma subscrição detetada no extrato.
+                    </div>
+                </div>`;
+            return;
+        }
+
+        const riskColor = { danger: 'var(--red)', warning: 'var(--yellow)', ok: 'var(--green)' };
+        const riskBg    = { danger: 'rgba(255,71,87,0.1)', warning: 'rgba(255,184,0,0.1)', ok: 'rgba(0,214,143,0.08)' };
+        const riskBadge = { danger: 'rgba(255,71,87,0.15)', warning: 'rgba(255,184,0,0.15)', ok: 'rgba(0,214,143,0.1)' };
+
+        const linhas = data.subscriptions.map(s => `
+            <div style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid var(--border);">
+                <div style="width:42px;height:42px;border-radius:10px;background:${riskBg[s.risk]};
+                    display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">
+                    ${s.icone}
+                </div>
+                <div style="flex:1;">
+                    <div style="font-size:14px;font-weight:600;color:var(--text);">${s.nome}</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">${s.alerta}</div>
+                </div>
+                <div style="text-align:right;flex-shrink:0;">
+                    <div style="font-size:15px;font-weight:700;color:${riskColor[s.risk]};">
+                        ${s.preco_mensal.toFixed(2)}€/mês
+                    </div>
+                    <div style="margin-top:4px;">
+                        <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;
+                            background:${riskBadge[s.risk]};color:${riskColor[s.risk]};">
+                            ${s.risk_label}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        const desperdicado = data.total_mensal_desperdicado.toFixed(2);
+        const anual = data.total_anual_desperdicado.toFixed(0);
+
+        resultado.style.display = 'block';
+        resultado.innerHTML = `
+            <div class="card" style="margin-bottom:16px;">
+                <div class="card-header">
+                    <h3>Subscrições no Extrato</h3>
+                    <span style="font-size:12px;color:var(--text-muted)">${data.subscriptions.length} detetada(s)</span>
+                </div>
+                <div class="card-body" style="padding:0;">${linhas}</div>
+            </div>
+            ${data.total_mensal_desperdicado > 0 ? `
+            <div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;">
+                <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
+                <div style="font-size:15px;color:var(--text);line-height:1.6;">
+                    Encontrámos <strong style="color:var(--red)">${desperdicado}€/mês</strong> em subscrições recorrentes —
+                    <strong style="color:var(--red)">${anual}€/ano</strong>.
+                </div>
+            </div>` : ''}
+        `;
+    } catch (err) {
+        status.innerHTML = `<div style="color:var(--red);font-size:13px;">❌ Erro ao analisar o ficheiro.</div>`;
+    }
+}
+</script>
 {% endblock %}

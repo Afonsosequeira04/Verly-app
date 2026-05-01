@@ -1,0 +1,43 @@
+EXTRATO DE CONTA
+Banco: Caixa Geral de Depositos
+Titular: Afonso Sequeira
+IBAN: PT50 0035 0067 0000 1234 5678 9
+Periodo: 01/04/2025 a 30/04/2025
+========================================
+
+DATA        DESCRICAO                        VALOR (EUR)
+----------------------------------------
+01/04/2025  Saldo inicial                    +1 450,00
+02/04/2025  NETFLIX.COM                        -9,99
+02/04/2025  Spotify Portugal                   -9,99
+03/04/2025  Pingo Doce Matosinhos            -47,32
+05/04/2025  HBO Max Portugal                   -7,99
+06/04/2025  Uber Portugal                     -11,20
+07/04/2025  Apple TV+                          -2,99
+08/04/2025  Padaria Portuguesa                 -4,80
+09/04/2025  NOS Comunicacoes                  -55,00
+10/04/2025  Metro do Porto                     -3,50
+11/04/2025  Disney+ Portugal                   -8,99
+12/04/2025  Galp Combustivel                  -62,00
+13/04/2025  YouTube Premium                    -9,99
+14/04/2025  Continente Online                 -38,90
+15/04/2025  Salario Abril 2025             +1 200,00
+16/04/2025  PlayStation Plus                  -11,99
+17/04/2025  Amazon Prime Video                -14,99
+18/04/2025  Restaurante O Gaveto              -32,00
+19/04/2025  Farmacia Holon                    -18,50
+20/04/2025  Twitch.tv Sub                      -4,99
+21/04/2025  Zara Online                       -29,90
+22/04/2025  Uber Portugal                      -8,40
+23/04/2025  NETFLIX.COM                        -9,99
+24/04/2025  Microsoft 365                      -7,00
+25/04/2025  Lidl Porto                        -22,15
+26/04/2025  Bolt Portugal                      -6,30
+27/04/2025  Adobe Creative Cloud              -54,99
+28/04/2025  Seguro Saude Fidelidade           -28,00
+29/04/2025  Worten Online                     -89,99
+30/04/2025  Spotify Portugal                   -9,99
+
+========================================
+SALDO FINAL: +1 038,03 EUR
+========================================

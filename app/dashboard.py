@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import Blueprint, render_template
 from flask_login import login_required, current_user
 from app.models import Fatura, Conversa
+from app.subscriptions import detect_subscriptions
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -53,7 +54,6 @@ def dashboard():
     hoje = datetime.now()
     alertas = []
     for f in faturas:
-        # Alerta devolução (< 7 dias)
         data_dev = _parse_date(f.data_devolucao)
         if data_dev and data_dev >= hoje:
             dias = (data_dev - hoje).days
@@ -66,7 +66,6 @@ def dashboard():
                     'dias': dias,
                     'urgencia': 'critico' if dias <= 3 else 'aviso'
                 })
-        # Alerta garantia (< 30 dias)
         data_gar = _parse_date(f.data_garantia)
         if data_gar and data_gar >= hoje:
             dias = (data_gar - hoje).days
@@ -82,6 +81,9 @@ def dashboard():
 
     alertas.sort(key=lambda x: x['dias'])
 
+    # Subscrições
+    subs_data = detect_subscriptions(current_user.id)
+
     return render_template('dashboard.html',
         total_gasto=total_gasto,
         num_faturas=num_faturas,
@@ -94,4 +96,8 @@ def dashboard():
         ultimas_faturas=faturas[:5],
         conversas_recentes=conversas,
         alertas=alertas,
+        subs_total_mensal=subs_data['total_mensal_desperdicado'],
+        subs_count_danger=subs_data['count_danger'],
+        subs_count_warning=subs_data['count_warning'],
+        subs_top=subs_data['subscriptions'][:3],
     )
