@@ -1,9 +1,11 @@
 """
 scoring.py — "Was It Worth It?" AI Scoring
 Score inteligente: combina algoritmo base com avaliação de mercado via Groq.
+Inclui route /scoring/lojas-proximas para mapa de lojas via Overpass API.
 """
 import os
 import json
+import math
 import requests
 from flask import Blueprint, request, jsonify, render_template
 from flask_login import login_required, current_user
@@ -12,7 +14,8 @@ from app import db
 
 scoring_bp = Blueprint('scoring', __name__)
 
-# Pesos por categoria
+# ─── CONSTANTES ───────────────────────────────────────────────────────────────
+
 CATEGORY_WEIGHTS = {
     'Alimentação':      1.15,
     'Saúde & Beleza':   1.10,
@@ -26,7 +29,6 @@ CATEGORY_WEIGHTS = {
     'Outros':           0.90,
 }
 
-# Score base por frequência de uso
 USAGE_BASE = {
     'daily':   80,
     'weekly':  65,
@@ -43,134 +45,291 @@ USAGE_LABELS = {
     'never':   'Nunca utilizado',
 }
 
+# Mapeamento categoria → tipos de loja OSM para pesquisa
+CATEGORIA_OSM = {
+    'Tecnologia': [
+        'shop=electronics', 'shop=computer', 'shop=mobile_phone',
+        'shop=telephone', 'shop=hifi', 'shop=camera',
+        'shop=video_games', 'shop=appliance',
+        'name=Worten', 'name=MediaMarkt', 'name=Radio Popular',
+        'name=Apple Store', 'name=Samsung', 'name=FNAC',
+    ],
+    'Alimentação': [
+        'shop=supermarket', 'shop=convenience', 'shop=grocery',
+        'shop=bakery', 'shop=butcher', 'shop=seafood',
+        'shop=greengrocer', 'shop=deli', 'shop=food',
+        'shop=pastry', 'shop=chocolate', 'shop=confectionery',
+        'amenity=marketplace', 'amenity=food_court',
+        'name=Continente', 'name=Pingo Doce', 'name=Lidl',
+        'name=Aldi', 'name=Mercadona', 'name=Minipreço',
+    ],
+    'Vestuário': [
+        'shop=clothes', 'shop=shoes', 'shop=boutique',
+        'shop=fashion', 'shop=accessories', 'shop=bag',
+        'shop=jewelry', 'shop=watches', 'shop=leather',
+        'shop=underwear', 'shop=sports', 'shop=outdoor',
+        'name=Zara', 'name=H&M', 'name=Pull&Bear',
+        'name=Bershka', 'name=Mango', 'name=C&A',
+        'name=Springfield', 'name=Stradivarius',
+    ],
+    'Desporto': [
+        'shop=sports', 'shop=outdoor', 'shop=bicycle',
+        'shop=fishing', 'shop=golf', 'shop=ski',
+        'shop=swimming', 'shop=surf',
+        'leisure=sports_centre', 'leisure=fitness_centre',
+        'leisure=swimming_pool', 'leisure=stadium',
+        'name=Decathlon', 'name=Sport Zone', 'name=Nike',
+        'name=Adidas', 'name=Intersport',
+    ],
+    'Saúde & Beleza': [
+        'amenity=pharmacy', 'amenity=hospital', 'amenity=clinic',
+        'amenity=dentist', 'amenity=doctors',
+        'shop=beauty', 'shop=cosmetics', 'shop=hairdresser',
+        'shop=optician', 'shop=hearing_aids', 'shop=medical_supply',
+        'shop=perfumery', 'shop=wellness',
+        'name=Wells', 'name=Perfumes & Companhia',
+        'name=Droga Raia', 'name=Farmácia',
+    ],
+    'Casa & Decoração': [
+        'shop=furniture', 'shop=interior_decoration', 'shop=houseware',
+        'shop=hardware', 'shop=doityourself', 'shop=paint',
+        'shop=curtain', 'shop=carpet', 'shop=lighting',
+        'shop=kitchen', 'shop=bathroom', 'shop=bed',
+        'shop=garden', 'shop=florist',
+        'name=IKEA', 'name=Leroy Merlin', 'name=AKI',
+        'name=Conforama', 'name=El Corte Inglés',
+    ],
+    'Educação': [
+        'shop=books', 'shop=stationery', 'shop=art',
+        'shop=music', 'shop=musical_instrument',
+        'amenity=library', 'amenity=school', 'amenity=university',
+        'amenity=college', 'amenity=language_school',
+        'amenity=music_school', 'amenity=driving_school',
+        'name=FNAC', 'name=Bertrand', 'name=Livraria',
+    ],
+    'Entretenimento': [
+        'amenity=cinema', 'amenity=theatre', 'amenity=nightclub',
+        'amenity=bar', 'amenity=pub', 'amenity=casino',
+        'amenity=arts_centre', 'amenity=music_venue',
+        'leisure=bowling_alley', 'leisure=escape_game',
+        'leisure=miniature_golf', 'leisure=amusement_arcade',
+        'shop=video_games', 'shop=games', 'shop=toys',
+        'name=NOS', 'name=Cinemas NOS', 'name=UCI',
+    ],
+    'Transportes': [
+        'amenity=fuel', 'amenity=parking', 'amenity=car_rental',
+        'amenity=car_wash', 'amenity=car_repair',
+        'shop=car', 'shop=car_parts', 'shop=car_repair',
+        'shop=bicycle', 'shop=motorcycle',
+        'amenity=taxi', 'amenity=bus_station',
+        'amenity=train_station', 'amenity=ferry_terminal',
+        'name=Repsol', 'name=BP', 'name=Galp', 'name=Cepsa',
+    ],
+    'Outros': [
+        'shop=general', 'shop=department_store', 'shop=variety_store',
+        'shop=second_hand', 'shop=charity', 'shop=gift',
+        'shop=newsagent', 'shop=tobacco', 'shop=lottery',
+        'amenity=post_office', 'amenity=bank', 'amenity=atm',
+        'shop=laundry', 'shop=dry_cleaning',
+        'name=El Corte Inglés', 'name=Fnac',
+    ],
+}
+
+
+# ─── AVALIAÇÃO DE MERCADO ─────────────────────────────────────────────────────
 
 def _avaliar_preco_mercado(item: str, preco: float, categoria: str) -> dict:
-    """
-    Pede ao Groq apenas o preço médio de mercado do produto.
-    Calculamos nós próprios o ajuste ao score com base no rácio preço pago / mercado.
-    """
+    """Pede ao Groq o preço médio de mercado e calcula o ajuste ao score."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
 
-    prompt = f"""Qual é o preço médio de mercado atual deste produto em Portugal ou Europa?
-
-Produto: {item}
-Categoria: {categoria}
-
-Responde APENAS com JSON válido, sem markdown, sem texto extra:
-{{
-  "preco_medio_mercado": <número em euros>,
-  "comentario": "<frase curta max 10 palavras sobre o preço típico deste produto>"
-}}
-
-Exemplos de referência:
-- PS5 -> 499
-- iPhone 16 Pro -> 1199
-- Nike Air Max -> 120
-- Cafe expresso -> 1
-- MacBook Pro 14 -> 1999"""
+    prompt = (
+        f"Qual é o preço médio de mercado atual deste produto em Portugal ou Europa?\n\n"
+        f"Produto: {item}\nCategoria: {categoria}\n\n"
+        f"Responde APENAS com JSON válido, sem markdown, sem texto extra:\n"
+        f'{{"preco_medio_mercado": <número em euros>, '
+        f'"comentario": "<frase curta max 10 palavras sobre o preço típico>"}}\n\n'
+        f"Exemplos: PS5->499, iPhone 16 Pro->1199, Nike Air Max->120, Café->1, MacBook Pro 14->1999"
+    )
 
     try:
-        response = requests.post(
+        r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 150,
-            },
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.1, "max_tokens": 150},
             timeout=15,
         )
+        if r.status_code != 200:
+            raise ValueError("Groq error")
 
-        if response.status_code != 200:
-            return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
-
-        text = response.json()["choices"][0]["message"]["content"].strip()
-
-        # Limpar markdown se vier
+        text = r.json()["choices"][0]["message"]["content"].strip()
         if '```' in text:
             parts = text.split('```')
             text = parts[1] if len(parts) > 1 else text
             if text.startswith('json'):
                 text = text[4:]
         text = text.strip().strip('`')
-
-        start = text.find('{')
-        end   = text.rfind('}') + 1
+        start, end = text.find('{'), text.rfind('}') + 1
         if start != -1 and end > start:
             text = text[start:end]
 
-        data        = json.loads(text)
+        data = json.loads(text)
         preco_medio = float(data.get('preco_medio_mercado') or 0)
         comentario  = data.get('comentario', '')
 
-        # Calculamos o ajuste com base no rácio preço pago / preço médio de mercado
         if preco_medio > 0:
             ratio = preco / preco_medio
             if ratio < 0.70:
-                avaliacao = 'barato'
-                ajuste    = +20
+                avaliacao, ajuste = 'barato', +20
             elif ratio <= 1.15:
-                avaliacao = 'justo'
-                ajuste    = 0
+                avaliacao, ajuste = 'justo', 0
             elif ratio <= 1.50:
-                avaliacao = 'caro'
-                ajuste    = -15
+                avaliacao, ajuste = 'caro', -15
             else:
-                avaliacao = 'muito_caro'
-                ajuste    = -30
+                avaliacao, ajuste = 'muito_caro', -30
         else:
-            avaliacao = 'justo'
-            ajuste    = 0
+            avaliacao, ajuste = 'justo', 0
 
-        return {
-            'preco_medio':  preco_medio,
-            'avaliacao':    avaliacao,
-            'ajuste_score': ajuste,
-            'comentario':   comentario,
-        }
+        return {'preco_medio': preco_medio, 'avaliacao': avaliacao,
+                'ajuste_score': ajuste, 'comentario': comentario}
 
     except Exception:
         return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
 
 
+# ─── LOJAS PRÓXIMAS ───────────────────────────────────────────────────────────
+
+def _distancia_km(lat1, lng1, lat2, lng2) -> float:
+    """Distância em km entre dois pontos (fórmula de Haversine)."""
+    R = 6371
+    d_lat = math.radians(lat2 - lat1)
+    d_lng = math.radians(lng2 - lng1)
+    a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _distancia_label(km: float) -> str:
+    if km < 1:
+        return f"{int(km * 1000)} m"
+    return f"{km:.1f} km"
+
+
+# Muda o raio padrão de 3000 para 5000
+def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000, item: str = '') -> list:
+    """Usa Google Places API para encontrar lojas próximas."""
+
+    KEYWORDS_CATEGORIA = {
+        'Tecnologia':       'loja tecnologia eletrónica telemóvel computador',
+        'Alimentação':      'supermercado mercearia padaria alimentação',
+        'Vestuário':        'loja roupa calçado moda vestuário',
+        'Desporto':         'loja desporto ginásio fitness',
+        'Saúde & Beleza':   'farmácia beleza cosméticos saúde',
+        'Casa & Decoração': 'mobiliário decoração casa bricolage',
+        'Educação':         'livraria papelaria escola biblioteca',
+        'Entretenimento':   'cinema bar entretenimento jogos',
+        'Transportes':      'combustível posto gasolina automóvel',
+        'Outros':           'loja geral',
+    }
+
+    api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    if not api_key:
+        print("[MAPA] GOOGLE_PLACES_API_KEY não configurada")
+        return []
+
+    # Usa o nome do produto se disponível — muito mais específico do que a categoria
+    if item and item.strip() and item.lower() not in ('item', ''):
+        keyword = item.strip()
+    else:
+        keyword = KEYWORDS_CATEGORIA.get(categoria, 'loja')
+
+    print(f"[GOOGLE PLACES] keyword usada: '{keyword}'")
+
+    try:
+        r = requests.get(
+            "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+            params={
+                'location': f"{lat},{lng}",
+                'radius':   raio_m,
+                'keyword':  keyword,
+                'language': 'pt',
+                'key':      api_key,
+            },
+            timeout=10,
+        )
+
+        print(f"[GOOGLE PLACES] status HTTP: {r.status_code}")
+        data = r.json()
+        print(f"[GOOGLE PLACES] status API: {data.get('status')}")
+
+        if data.get('status') not in ('OK', 'ZERO_RESULTS'):
+            print(f"[GOOGLE PLACES] erro: {data.get('error_message', '')}")
+            return []
+
+        lojas = []
+        seen = set()
+
+        for place in data.get('results', []):
+            nome = place.get('name')
+            if not nome or nome in seen:
+                continue
+            seen.add(nome)
+
+            loc = place['geometry']['location']
+            elat, elng = loc['lat'], loc['lng']
+            km = _distancia_km(lat, lng, elat, elng)
+
+            lojas.append({
+                'nome':      nome,
+                'lat':       elat,
+                'lng':       elng,
+                'endereco':  place.get('vicinity', ''),
+                'distancia': _distancia_label(km),
+                'km':        km,
+            })
+
+        lojas.sort(key=lambda x: x['km'])
+        print(f"[GOOGLE PLACES] lojas encontradas: {len(lojas)}")
+        return lojas[:10]
+
+    except Exception as e:
+        print(f"[GOOGLE PLACES] exceção: {e}")
+        return []
+
+# ─── SCORE ────────────────────────────────────────────────────────────────────
+
 def _score_label(score: int, personalidade: str) -> dict:
     personas = {
         'savage': {
-            (80, 101): ('Decisão Sólida',   'green',  'Raro. Até tu fizeste bem desta vez.'),
-            (60,  80): ('Aceitável',         'brand2', 'Passável. Mas não te gabares.'),
-            (40,  60): ('Duvidoso',          'yellow', 'Sabes que não precisavas disto.'),
-            (20,  40): ('Regret Incoming',   'orange', 'O teu futuro eu vai mandar-te mensagens de ódio.'),
-            (0,   20): ('Dinheiro Ardido',   'red',    'Parabéns. Transformaste euros em remorso puro.'),
+            (80, 101): ('Decisão Sólida',  'green',  'Raro. Até tu fizeste bem desta vez.'),
+            (60,  80): ('Aceitável',        'brand2', 'Passável. Mas não te gabares.'),
+            (40,  60): ('Duvidoso',         'yellow', 'Sabes que não precisavas disto.'),
+            (20,  40): ('Regret Incoming',  'orange', 'O teu futuro eu vai mandar-te mensagens de ódio.'),
+            (0,   20): ('Dinheiro Ardido',  'red',    'Parabéns. Transformaste euros em remorso puro.'),
         },
         'sarcastic': {
-            (80, 101): ('Uau, bem feito',    'green',  'Quem diria. Uma decisão financeira adulta.'),
-            (60,  80): ('Mais ou menos',     'brand2', 'Podias ter poupado, mas pronto.'),
-            (40,  60): ('Interessante...',   'yellow', 'Tenho a certeza que tinhas mesmo de comprar isto.'),
-            (20,  40): ('Boa sorte aí',      'orange', 'Espero que o remorso venha com brinde.'),
-            (0,   20): ('Magistral',         'red',    'Ninguém te bate nisto. Literalmente ninguém.'),
+            (80, 101): ('Uau, bem feito',   'green',  'Quem diria. Uma decisão financeira adulta.'),
+            (60,  80): ('Mais ou menos',    'brand2', 'Podias ter poupado, mas pronto.'),
+            (40,  60): ('Interessante...',  'yellow', 'Tenho a certeza que tinhas mesmo de comprar isto.'),
+            (20,  40): ('Boa sorte aí',     'orange', 'Espero que o remorso venha com brinde.'),
+            (0,   20): ('Magistral',        'red',    'Ninguém te bate nisto. Literalmente ninguém.'),
         },
         'calm': {
-            (80, 101): ('Boa decisão',       'green',  'Esta compra alinha com os teus objetivos. Bem feito.'),
-            (60,  80): ('Razoável',          'brand2', 'Ha melhores opcoes, mas nao foi ma escolha.'),
-            (40,  60): ('Reconsiderar',      'yellow', 'Vale a pena refletir se isto era mesmo necessario.'),
-            (20,  40): ('Risco elevado',     'orange', 'Esta compra pode gerar arrependimento. Aprende para a proxima.'),
-            (0,   20): ('Evitar repetir',    'red',    'Esta decisao nao ajuda os teus objetivos financeiros.'),
+            (80, 101): ('Boa decisão',      'green',  'Esta compra alinha com os teus objetivos. Bem feito.'),
+            (60,  80): ('Razoável',         'brand2', 'Há melhores opções, mas não foi má escolha.'),
+            (40,  60): ('Reconsiderar',     'yellow', 'Vale a pena refletir se isto era mesmo necessário.'),
+            (20,  40): ('Risco elevado',    'orange', 'Esta compra pode gerar arrependimento.'),
+            (0,   20): ('Evitar repetir',   'red',    'Esta decisão não ajuda os teus objetivos financeiros.'),
         },
         'pro': {
-            (80, 101): ('ROI Positivo',      'green',  'Investimento justificado. Custo-beneficio favoravel.'),
-            (60,  80): ('ROI Neutro',        'brand2', 'Dentro do aceitavel. Monitorizar uso.'),
-            (40,  60): ('ROI Baixo',         'yellow', 'Retorno questionavel. Rever prioridades.'),
-            (20,  40): ('Capital em Risco',  'orange', 'Desperdicio provavel. Ajustar comportamento.'),
-            (0,   20): ('Prejuizo Total',    'red',    'Gasto sem retorno mensuravel. Reclassificar como custo de oportunidade perdida.'),
+            (80, 101): ('ROI Positivo',     'green',  'Investimento justificado. Custo-benefício favorável.'),
+            (60,  80): ('ROI Neutro',       'brand2', 'Dentro do aceitável. Monitorizar uso.'),
+            (40,  60): ('ROI Baixo',        'yellow', 'Retorno questionável. Rever prioridades.'),
+            (20,  40): ('Capital em Risco', 'orange', 'Desperdício provável. Ajustar comportamento.'),
+            (0,   20): ('Prejuízo Total',   'red',    'Gasto sem retorno mensurável.'),
         },
     }
-
     p = personalidade if personalidade in personas else 'calm'
     for (low, high), (label, color, msg) in personas[p].items():
         if low <= score < high:
@@ -180,12 +339,12 @@ def _score_label(score: int, personalidade: str) -> dict:
 
 def _chip_preco(avaliacao: str, preco_medio: float) -> dict:
     labels = {
-        'barato':     ('Preco barato',    'good'),
-        'justo':      ('Preco justo',     'mid'),
-        'caro':       ('Preco acima',     'bad'),
-        'muito_caro': ('Preco excessivo', 'bad'),
+        'barato':     ('💚 Preço barato',    'good'),
+        'justo':      ('✓ Preço justo',      'mid'),
+        'caro':       ('⚠ Preço acima',      'bad'),
+        'muito_caro': ('🔴 Preço excessivo', 'bad'),
     }
-    text, tipo = labels.get(avaliacao, ('Preco desconhecido', 'mid'))
+    text, tipo = labels.get(avaliacao, ('Preço desconhecido', 'mid'))
     if preco_medio and preco_medio > 0:
         text += f' (mercado ~{preco_medio:.0f}€)'
     return {'text': text, 'type': tipo}
@@ -193,58 +352,45 @@ def _chip_preco(avaliacao: str, preco_medio: float) -> dict:
 
 def calcular_score(categoria: str, preco: float, uso: str,
                    personalidade: str = 'calm', item: str = '') -> dict:
-    """Calcula o score com avaliacao de mercado via IA."""
-
     base     = USAGE_BASE.get(uso, 40)
     weight   = CATEGORY_WEIGHTS.get(categoria, 0.90)
     raw_base = base * weight
 
-    # Avaliacao de mercado via Groq
     mercado = {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
     if item and item.strip() and item.lower() != 'item':
         mercado = _avaliar_preco_mercado(item, preco, categoria)
 
-    raw_final = raw_base + mercado['ajuste_score']
-    score     = int(max(0, min(100, raw_final)))
-
+    score = int(max(0, min(100, raw_base + mercado['ajuste_score'])))
     label_info = _score_label(score, personalidade)
 
-    # Chips
-    chips = []
-    chips.append({
-        'text': USAGE_LABELS.get(uso, uso),
-        'type': 'good' if score >= 60 else 'bad'
-    })
-    chips.append({
-        'text': f'{preco:.2f}€',
-        'type': 'bad' if preco > 300 else 'mid'
-    })
-    chips.append({'text': categoria, 'type': 'mid'})
-
+    chips = [
+        {'text': USAGE_LABELS.get(uso, uso), 'type': 'good' if score >= 60 else 'bad'},
+        {'text': f'{preco:.2f}€', 'type': 'bad' if preco > 300 else 'mid'},
+        {'text': categoria, 'type': 'mid'},
+    ]
     if mercado['comentario']:
         chips.append(_chip_preco(mercado['avaliacao'], mercado['preco_medio']))
-
     if score < 40:
         chips.append({'text': 'Alto arrependimento', 'type': 'bad'})
     elif score >= 80:
         chips.append({'text': 'Compra validada', 'type': 'good'})
 
-    mensagem_final = label_info['message']
+    mensagem = label_info['message']
     if mercado['comentario']:
-        mensagem_final += ' ' + mercado['comentario']
+        mensagem += ' ' + mercado['comentario']
 
     return {
         'score':               score,
         'label':               label_info['label'],
         'color':               label_info['color'],
-        'message':             mensagem_final,
+        'message':             mensagem,
         'chips':               chips,
         'preco_medio_mercado': mercado['preco_medio'],
         'avaliacao_mercado':   mercado['avaliacao'],
     }
 
 
-# ─── ROUTES ──────────────────────────────────────────────────────────────────
+# ─── ROUTES ───────────────────────────────────────────────────────────────────
 
 @scoring_bp.route('/scoring')
 @login_required
@@ -257,17 +403,42 @@ def analisar():
 @login_required
 def analisar_post():
     data      = request.json or {}
-    item      = data.get('item', 'Item').strip() or 'Item'
+    item      = (data.get('item') or 'Item').strip() or 'Item'
     preco     = float(data.get('preco') or 0)
     categoria = data.get('categoria', 'Outros')
     uso       = data.get('uso', 'monthly')
-
     personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
 
     resultado = calcular_score(categoria, preco, uso, personalidade, item=item)
     resultado['item'] = item
-
     return jsonify({'success': True, 'resultado': resultado})
+
+
+@scoring_bp.route('/scoring/lojas-proximas', methods=['POST'])
+@login_required
+def lojas_proximas():
+    print("=== LOJAS ROUTE HIT ===")
+    data      = request.json or {}
+    lat       = data.get('lat')
+    lng       = data.get('lng')
+    categoria = data.get('categoria', 'Outros')
+    item      = data.get('item', '')
+
+    print(f"[MAPA] lat={lat}, lng={lng}, categoria={categoria}")
+
+    if lat is None or lng is None:
+        return jsonify({'success': False, 'message': 'Localização não fornecida.', 'lojas': []})
+
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Coordenadas inválidas.', 'lojas': []})
+
+    lojas = buscar_lojas_osm(lat, lng, categoria, item=item)
+    print(f"[MAPA] lojas encontradas: {len(lojas)}")
+
+    return jsonify({'success': True, 'lojas': lojas, 'item': item})
 
 
 @scoring_bp.route('/scoring/fatura/<int:fatura_id>', methods=['GET'])
@@ -275,7 +446,7 @@ def analisar_post():
 def score_fatura(fatura_id):
     fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
     if not fatura:
-        return jsonify({'success': False, 'message': 'Fatura nao encontrada.'})
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'})
 
     personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
     item = fatura.loja or fatura.nome_ficheiro
@@ -288,5 +459,4 @@ def score_fatura(fatura_id):
         item=item,
     )
     resultado['item'] = item
-
     return jsonify({'success': True, 'resultado': resultado})

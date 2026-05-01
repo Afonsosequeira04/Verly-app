@@ -690,301 +690,6 @@ def relatorio_api():
     return jsonify({'success': True, **data})
 </file>
 
-<file path="app/scoring.py">
-"""
-scoring.py — "Was It Worth It?" AI Scoring
-Score inteligente: combina algoritmo base com avaliação de mercado via Groq.
-"""
-import os
-import json
-import requests
-from flask import Blueprint, request, jsonify, render_template
-from flask_login import login_required, current_user
-from app.models import Fatura
-from app import db
-
-scoring_bp = Blueprint('scoring', __name__)
-
-# Pesos por categoria
-CATEGORY_WEIGHTS = {
-    'Alimentação':      1.15,
-    'Saúde & Beleza':   1.10,
-    'Educação':         1.10,
-    'Desporto':         1.05,
-    'Casa & Decoração': 1.00,
-    'Vestuário':        0.95,
-    'Tecnologia':       0.90,
-    'Entretenimento':   0.85,
-    'Transportes':      1.00,
-    'Outros':           0.90,
-}
-
-# Score base por frequência de uso
-USAGE_BASE = {
-    'daily':   80,
-    'weekly':  65,
-    'monthly': 45,
-    'rarely':  22,
-    'never':   5,
-}
-
-USAGE_LABELS = {
-    'daily':   'Uso diário',
-    'weekly':  'Uso regular',
-    'monthly': 'Uso ocasional',
-    'rarely':  'Raramente usado',
-    'never':   'Nunca utilizado',
-}
-
-
-def _avaliar_preco_mercado(item: str, preco: float, categoria: str) -> dict:
-    """
-    Pede ao Groq apenas o preço médio de mercado do produto.
-    Calculamos nós próprios o ajuste ao score com base no rácio preço pago / mercado.
-    """
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
-
-    prompt = f"""Qual é o preço médio de mercado atual deste produto em Portugal ou Europa?
-
-Produto: {item}
-Categoria: {categoria}
-
-Responde APENAS com JSON válido, sem markdown, sem texto extra:
-{{
-  "preco_medio_mercado": <número em euros>,
-  "comentario": "<frase curta max 10 palavras sobre o preço típico deste produto>"
-}}
-
-Exemplos de referência:
-- PS5 -> 499
-- iPhone 16 Pro -> 1199
-- Nike Air Max -> 120
-- Cafe expresso -> 1
-- MacBook Pro 14 -> 1999"""
-
-    try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 150,
-            },
-            timeout=15,
-        )
-
-        if response.status_code != 200:
-            return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
-
-        text = response.json()["choices"][0]["message"]["content"].strip()
-
-        # Limpar markdown se vier
-        if '```' in text:
-            parts = text.split('```')
-            text = parts[1] if len(parts) > 1 else text
-            if text.startswith('json'):
-                text = text[4:]
-        text = text.strip().strip('`')
-
-        start = text.find('{')
-        end   = text.rfind('}') + 1
-        if start != -1 and end > start:
-            text = text[start:end]
-
-        data        = json.loads(text)
-        preco_medio = float(data.get('preco_medio_mercado') or 0)
-        comentario  = data.get('comentario', '')
-
-        # Calculamos o ajuste com base no rácio preço pago / preço médio de mercado
-        if preco_medio > 0:
-            ratio = preco / preco_medio
-            if ratio < 0.70:
-                avaliacao = 'barato'
-                ajuste    = +20
-            elif ratio <= 1.15:
-                avaliacao = 'justo'
-                ajuste    = 0
-            elif ratio <= 1.50:
-                avaliacao = 'caro'
-                ajuste    = -15
-            else:
-                avaliacao = 'muito_caro'
-                ajuste    = -30
-        else:
-            avaliacao = 'justo'
-            ajuste    = 0
-
-        return {
-            'preco_medio':  preco_medio,
-            'avaliacao':    avaliacao,
-            'ajuste_score': ajuste,
-            'comentario':   comentario,
-        }
-
-    except Exception:
-        return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
-
-
-def _score_label(score: int, personalidade: str) -> dict:
-    personas = {
-        'savage': {
-            (80, 101): ('Decisão Sólida',   'green',  'Raro. Até tu fizeste bem desta vez.'),
-            (60,  80): ('Aceitável',         'brand2', 'Passável. Mas não te gabares.'),
-            (40,  60): ('Duvidoso',          'yellow', 'Sabes que não precisavas disto.'),
-            (20,  40): ('Regret Incoming',   'orange', 'O teu futuro eu vai mandar-te mensagens de ódio.'),
-            (0,   20): ('Dinheiro Ardido',   'red',    'Parabéns. Transformaste euros em remorso puro.'),
-        },
-        'sarcastic': {
-            (80, 101): ('Uau, bem feito',    'green',  'Quem diria. Uma decisão financeira adulta.'),
-            (60,  80): ('Mais ou menos',     'brand2', 'Podias ter poupado, mas pronto.'),
-            (40,  60): ('Interessante...',   'yellow', 'Tenho a certeza que tinhas mesmo de comprar isto.'),
-            (20,  40): ('Boa sorte aí',      'orange', 'Espero que o remorso venha com brinde.'),
-            (0,   20): ('Magistral',         'red',    'Ninguém te bate nisto. Literalmente ninguém.'),
-        },
-        'calm': {
-            (80, 101): ('Boa decisão',       'green',  'Esta compra alinha com os teus objetivos. Bem feito.'),
-            (60,  80): ('Razoável',          'brand2', 'Ha melhores opcoes, mas nao foi ma escolha.'),
-            (40,  60): ('Reconsiderar',      'yellow', 'Vale a pena refletir se isto era mesmo necessario.'),
-            (20,  40): ('Risco elevado',     'orange', 'Esta compra pode gerar arrependimento. Aprende para a proxima.'),
-            (0,   20): ('Evitar repetir',    'red',    'Esta decisao nao ajuda os teus objetivos financeiros.'),
-        },
-        'pro': {
-            (80, 101): ('ROI Positivo',      'green',  'Investimento justificado. Custo-beneficio favoravel.'),
-            (60,  80): ('ROI Neutro',        'brand2', 'Dentro do aceitavel. Monitorizar uso.'),
-            (40,  60): ('ROI Baixo',         'yellow', 'Retorno questionavel. Rever prioridades.'),
-            (20,  40): ('Capital em Risco',  'orange', 'Desperdicio provavel. Ajustar comportamento.'),
-            (0,   20): ('Prejuizo Total',    'red',    'Gasto sem retorno mensuravel. Reclassificar como custo de oportunidade perdida.'),
-        },
-    }
-
-    p = personalidade if personalidade in personas else 'calm'
-    for (low, high), (label, color, msg) in personas[p].items():
-        if low <= score < high:
-            return {'label': label, 'color': color, 'message': msg}
-    return {'label': '—', 'color': 'muted', 'message': ''}
-
-
-def _chip_preco(avaliacao: str, preco_medio: float) -> dict:
-    labels = {
-        'barato':     ('Preco barato',    'good'),
-        'justo':      ('Preco justo',     'mid'),
-        'caro':       ('Preco acima',     'bad'),
-        'muito_caro': ('Preco excessivo', 'bad'),
-    }
-    text, tipo = labels.get(avaliacao, ('Preco desconhecido', 'mid'))
-    if preco_medio and preco_medio > 0:
-        text += f' (mercado ~{preco_medio:.0f}€)'
-    return {'text': text, 'type': tipo}
-
-
-def calcular_score(categoria: str, preco: float, uso: str,
-                   personalidade: str = 'calm', item: str = '') -> dict:
-    """Calcula o score com avaliacao de mercado via IA."""
-
-    base     = USAGE_BASE.get(uso, 40)
-    weight   = CATEGORY_WEIGHTS.get(categoria, 0.90)
-    raw_base = base * weight
-
-    # Avaliacao de mercado via Groq
-    mercado = {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
-    if item and item.strip() and item.lower() != 'item':
-        mercado = _avaliar_preco_mercado(item, preco, categoria)
-
-    raw_final = raw_base + mercado['ajuste_score']
-    score     = int(max(0, min(100, raw_final)))
-
-    label_info = _score_label(score, personalidade)
-
-    # Chips
-    chips = []
-    chips.append({
-        'text': USAGE_LABELS.get(uso, uso),
-        'type': 'good' if score >= 60 else 'bad'
-    })
-    chips.append({
-        'text': f'{preco:.2f}€',
-        'type': 'bad' if preco > 300 else 'mid'
-    })
-    chips.append({'text': categoria, 'type': 'mid'})
-
-    if mercado['comentario']:
-        chips.append(_chip_preco(mercado['avaliacao'], mercado['preco_medio']))
-
-    if score < 40:
-        chips.append({'text': 'Alto arrependimento', 'type': 'bad'})
-    elif score >= 80:
-        chips.append({'text': 'Compra validada', 'type': 'good'})
-
-    mensagem_final = label_info['message']
-    if mercado['comentario']:
-        mensagem_final += ' ' + mercado['comentario']
-
-    return {
-        'score':               score,
-        'label':               label_info['label'],
-        'color':               label_info['color'],
-        'message':             mensagem_final,
-        'chips':               chips,
-        'preco_medio_mercado': mercado['preco_medio'],
-        'avaliacao_mercado':   mercado['avaliacao'],
-    }
-
-
-# ─── ROUTES ──────────────────────────────────────────────────────────────────
-
-@scoring_bp.route('/scoring')
-@login_required
-def analisar():
-    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
-    return render_template('scoring.html', personalidade=personalidade)
-
-
-@scoring_bp.route('/scoring/analisar', methods=['POST'])
-@login_required
-def analisar_post():
-    data      = request.json or {}
-    item      = data.get('item', 'Item').strip() or 'Item'
-    preco     = float(data.get('preco') or 0)
-    categoria = data.get('categoria', 'Outros')
-    uso       = data.get('uso', 'monthly')
-
-    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
-
-    resultado = calcular_score(categoria, preco, uso, personalidade, item=item)
-    resultado['item'] = item
-
-    return jsonify({'success': True, 'resultado': resultado})
-
-
-@scoring_bp.route('/scoring/fatura/<int:fatura_id>', methods=['GET'])
-@login_required
-def score_fatura(fatura_id):
-    fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
-    if not fatura:
-        return jsonify({'success': False, 'message': 'Fatura nao encontrada.'})
-
-    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
-    item = fatura.loja or fatura.nome_ficheiro
-
-    resultado = calcular_score(
-        categoria=fatura.categoria or 'Outros',
-        preco=fatura.total or 0,
-        uso='monthly',
-        personalidade=personalidade,
-        item=item,
-    )
-    resultado['item'] = item
-
-    return jsonify({'success': True, 'resultado': resultado})
-</file>
-
 <file path="app/subscriptions.py">
 """
 subscriptions.py — Subscription Leak Detector
@@ -2047,6 +1752,22 @@ async function finalizar() {
 {% extends 'base.html' %}
 {% block title %}Score de Compras · Verly{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.mapa-spinner {
+    width:32px;height:32px;
+    border:3px solid var(--border);
+    border-top-color:var(--brand);
+    border-radius:50%;
+    animation:spin 0.8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+#mapaDiv { height:220px; }
+#mapaDiv .leaflet-container { background:var(--bg)!important; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -2055,135 +1776,133 @@ async function finalizar() {
     </div>
 </div>
 
-<div style="max-width:680px;">
+<!-- GRID: formulário + mapa lado a lado -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
 
-    <!-- FORMULÁRIO -->
-    <div class="card" style="margin-bottom:20px;">
-        <div class="card-header"><h3>Analisar Compra</h3></div>
-        <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+    <!-- COLUNA ESQUERDA -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
 
-            <div>
-                <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Nome do item</label>
-                <input
-                    id="itemInput"
-                    type="text"
-                    placeholder="Ex: iPhone 16 Pro, Adidas Samba, Sofá Ikea..."
-                    style="
-                        width:100%; background:var(--surface2); border:1px solid var(--border);
-                        border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                        font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                        transition:border-color 0.2s;
-                    "
-                    onfocus="this.style.borderColor='var(--brand)'"
-                    onblur="this.style.borderColor='var(--border)'"
-                >
-            </div>
+        <!-- Formulário -->
+        <div class="card">
+            <div class="card-header"><h3>Analisar Compra</h3></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
                 <div>
-                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Preço (€)</label>
-                    <input
-                        id="precoInput"
-                        type="number"
-                        min="0"
-                        placeholder="0.00"
-                        style="
-                            width:100%; background:var(--surface2); border:1px solid var(--border);
-                            border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                            font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                            transition:border-color 0.2s;
-                        "
+                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Nome do item</label>
+                    <input id="itemInput" type="text"
+                        placeholder="Ex: iPhone 16 Pro, Adidas Samba, Sofá Ikea..."
+                        style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
                         onfocus="this.style.borderColor='var(--brand)'"
-                        onblur="this.style.borderColor='var(--border)'"
-                    >
+                        onblur="this.style.borderColor='var(--border)'">
                 </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Preço (€)</label>
+                        <input id="precoInput" type="number" min="0" placeholder="0.00"
+                            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
+                            onfocus="this.style.borderColor='var(--brand)'"
+                            onblur="this.style.borderColor='var(--border)'">
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Categoria</label>
+                        <select id="categoriaInput"
+                            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;cursor:pointer;">
+                            <option value="Outros">Outros</option>
+                            <option value="Alimentação">Alimentação</option>
+                            <option value="Tecnologia">Tecnologia</option>
+                            <option value="Vestuário">Vestuário</option>
+                            <option value="Entretenimento">Entretenimento</option>
+                            <option value="Saúde & Beleza">Saúde & Beleza</option>
+                            <option value="Casa & Decoração">Casa & Decoração</option>
+                            <option value="Desporto">Desporto</option>
+                            <option value="Educação">Educação</option>
+                            <option value="Transportes">Transportes</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div>
-                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Categoria</label>
-                    <select id="categoriaInput" style="
-                        width:100%; background:var(--surface2); border:1px solid var(--border);
-                        border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                        font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                        transition:border-color 0.2s; cursor:pointer;
-                    ">
-                        <option value="Outros">Outros</option>
-                        <option value="Alimentação">Alimentação</option>
-                        <option value="Tecnologia">Tecnologia</option>
-                        <option value="Vestuário">Vestuário</option>
-                        <option value="Entretenimento">Entretenimento</option>
-                        <option value="Saúde & Beleza">Saúde & Beleza</option>
-                        <option value="Casa & Decoração">Casa & Decoração</option>
-                        <option value="Desporto">Desporto</option>
-                        <option value="Educação">Educação</option>
-                        <option value="Transportes">Transportes</option>
-                    </select>
+                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:8px;">Com que frequência vais usar?</label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;" id="usoGroup">
+                        {% for key, label in [('daily','Diariamente'),('weekly','Regularmente'),('monthly','Às vezes'),('rarely','Raramente'),('never','Nunca')] %}
+                        <button class="uso-btn" data-uso="{{ key }}"
+                            onclick="selecionarUso('{{ key }}', this)"
+                            style="padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.2s;">
+                            {{ label }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <button onclick="analisarCompra()" id="btnAnalisar"
+                    style="background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 24px;font-size:15px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif;transition:opacity 0.2s;width:100%;">
+                    Analisar Compra →
+                </button>
+            </div>
+        </div>
+
+        <!-- Resultado (oculto até análise) -->
+        <div id="resultado" style="display:none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 id="resItem" style="font-size:16px;"></h3>
+                    <span id="resLabel" style="font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;"></span>
+                </div>
+                <div class="card-body">
+                    <div style="display:flex;align-items:center;gap:24px;margin-bottom:16px;">
+                        <div style="position:relative;width:90px;height:90px;flex-shrink:0;">
+                            <svg width="90" height="90" viewBox="0 0 90 90">
+                                <circle cx="45" cy="45" r="36" fill="none" stroke="var(--border)" stroke-width="8"/>
+                                <circle id="scoreCircle" cx="45" cy="45" r="36" fill="none"
+                                    stroke="var(--brand)" stroke-width="8" stroke-linecap="round"
+                                    stroke-dasharray="226" stroke-dashoffset="226"
+                                    transform="rotate(-90 45 45)"
+                                    style="transition:stroke-dashoffset 0.8s ease,stroke 0.4s ease;"/>
+                            </svg>
+                            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;">
+                                <div id="scoreNum" style="font-size:22px;font-weight:800;font-family:'Sora',sans-serif;color:var(--text);"></div>
+                                <div style="font-size:10px;color:var(--text-sub);">/100</div>
+                            </div>
+                        </div>
+                        <div style="flex:1;">
+                            <div id="resMessage" style="font-size:14px;color:var(--text-sub);line-height:1.5;margin-bottom:12px;"></div>
+                            <div id="resChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
-
-            <div>
-                <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:8px;">Com que frequência vais usar?</label>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;" id="usoGroup">
-                    {% for key, label in [('daily','Diariamente'), ('weekly','Regularmente'), ('monthly','Às vezes'), ('rarely','Raramente'), ('never','Nunca')] %}
-                    <button
-                        class="uso-btn"
-                        data-uso="{{ key }}"
-                        onclick="selecionarUso('{{ key }}', this)"
-                        style="
-                            padding:7px 14px; border-radius:20px; border:1px solid var(--border);
-                            background:var(--surface2); color:var(--text-muted);
-                            font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
-                            transition:all 0.2s;
-                        "
-                    >{{ label }}</button>
-                    {% endfor %}
-                </div>
-            </div>
-
-            <button
-                onclick="analisarCompra()"
-                id="btnAnalisar"
-                style="
-                    background:var(--brand); color:#fff; border:none; border-radius:10px;
-                    padding:12px 24px; font-size:15px; font-weight:700; cursor:pointer;
-                    font-family:'Outfit',sans-serif; transition:opacity 0.2s; width:100%;
-                "
-            >Analisar Compra →</button>
         </div>
     </div>
 
-    <!-- RESULTADO -->
-    <div id="resultado" style="display:none;">
-        <div class="card">
-            <div class="card-header">
-                <h3 id="resItem" style="font-size:16px;"></h3>
-                <span id="resLabel" style="font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;"></span>
+    <!-- COLUNA DIREITA: mapa -->
+    <div>
+        <div class="card" style="overflow:hidden;">
+            <div class="card-header" style="padding:14px 16px;">
+                <h3 style="font-size:14px;">📍 Lojas Próximas</h3>
+                <span id="mapaStatus" style="font-size:12px;color:var(--text-sub);">Analisa um produto para ver lojas</span>
             </div>
-            <div class="card-body">
 
-                <!-- Score ring -->
-                <div style="display:flex;align-items:center;gap:24px;margin-bottom:20px;">
-                    <div style="position:relative;width:90px;height:90px;flex-shrink:0;">
-                        <svg width="90" height="90" viewBox="0 0 90 90">
-                            <circle cx="45" cy="45" r="36" fill="none" stroke="var(--border)" stroke-width="8"/>
-                            <circle id="scoreCircle" cx="45" cy="45" r="36" fill="none"
-                                stroke="var(--brand)" stroke-width="8"
-                                stroke-linecap="round"
-                                stroke-dasharray="226"
-                                stroke-dashoffset="226"
-                                transform="rotate(-90 45 45)"
-                                style="transition:stroke-dashoffset 0.8s ease, stroke 0.4s ease;"
-                            />
-                        </svg>
-                        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;">
-                            <div id="scoreNum" style="font-size:22px;font-weight:800;font-family:'Sora',sans-serif;color:var(--text);"></div>
-                            <div style="font-size:10px;color:var(--text-sub);">/ 100</div>
-                        </div>
-                    </div>
-                    <div>
-                        <div id="resMessage" style="font-size:14px;color:var(--text-sub);line-height:1.5;margin-bottom:12px;"></div>
-                        <div id="resChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-                    </div>
-                </div>
+            <!-- Estado vazio -->
+            <div id="mapaVazio" style="padding:48px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-sub);text-align:center;">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25;">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                </svg>
+                <p style="font-size:13px;max-width:200px;line-height:1.6;margin:0;" id="mapaVazioMsg">
+                    Após analisar um produto, mostramos lojas próximas onde o podes comprar.
+                </p>
+            </div>
 
+            <!-- Loading -->
+            <div id="mapaLoading" style="display:none;padding:48px 24px;flex-direction:column;align-items:center;gap:12px;color:var(--text-sub);">
+                <div class="mapa-spinner"></div>
+                <p style="font-size:13px;margin:0;">A procurar lojas próximas...</p>
+            </div>
+
+            <!-- Mapa + lista (aparece após pesquisa) -->
+            <div id="mapaConteudo" style="display:none;">
+                <div id="mapaDiv"></div>
+                <div id="lojasList" style="max-height:220px;overflow-y:auto;padding:8px 16px;display:flex;flex-direction:column;gap:0;"></div>
             </div>
         </div>
     </div>
@@ -2192,35 +1911,20 @@ async function finalizar() {
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// ── Estado ──────────────────────────────────────────────────────────────────
 let usoSelecionado = 'monthly';
-
-// Selecionar uso
-function selecionarUso(uso, btn) {
-    usoSelecionado = uso;
-    document.querySelectorAll('.uso-btn').forEach(b => {
-        b.style.background = 'var(--surface2)';
-        b.style.color = 'var(--text-muted)';
-        b.style.borderColor = 'var(--border)';
-    });
-    btn.style.background = 'rgba(123,97,255,0.12)';
-    btn.style.color = 'var(--brand)';
-    btn.style.borderColor = 'var(--brand)';
-}
-
-// Selecionar "Às vezes" por defeito ao carregar
-window.addEventListener('DOMContentLoaded', () => {
-    const btn = document.querySelector('[data-uso="monthly"]');
-    if (btn) selecionarUso('monthly', btn);
-});
+let mapaInstance   = null;
+let userLat = null, userLng = null;
 
 const SCORE_COLORS = {
-    green:  { stroke: '#00D68F', bg: 'rgba(0,214,143,0.12)', text: '#00D68F' },
-    brand2: { stroke: '#7B61FF', bg: 'rgba(123,97,255,0.12)', text: '#7B61FF' },
-    yellow: { stroke: '#FFB800', bg: 'rgba(255,184,0,0.12)', text: '#FFB800' },
-    orange: { stroke: '#FF8C00', bg: 'rgba(255,140,0,0.12)', text: '#FF8C00' },
-    red:    { stroke: '#FF4757', bg: 'rgba(255,71,87,0.12)', text: '#FF4757' },
-    muted:  { stroke: 'var(--border)', bg: 'var(--surface2)', text: 'var(--text-muted)' },
+    green:  {stroke:'#00D68F', bg:'rgba(0,214,143,0.12)',  text:'#00D68F'},
+    brand2: {stroke:'#7B61FF', bg:'rgba(123,97,255,0.12)', text:'#7B61FF'},
+    yellow: {stroke:'#FFB800', bg:'rgba(255,184,0,0.12)',  text:'#FFB800'},
+    orange: {stroke:'#FF8C00', bg:'rgba(255,140,0,0.12)',  text:'#FF8C00'},
+    red:    {stroke:'#FF4757', bg:'rgba(255,71,87,0.12)',  text:'#FF4757'},
+    muted:  {stroke:'#333',    bg:'var(--surface2)',        text:'var(--text-muted)'},
 };
 
 const CHIP_STYLES = {
@@ -2229,19 +1933,54 @@ const CHIP_STYLES = {
     mid:  'background:var(--surface2);color:var(--text-sub);border:1px solid var(--border);',
 };
 
+// ── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+    // Seleciona uso padrão
+    const btn = document.querySelector('[data-uso="monthly"]');
+    if (btn) selecionarUso('monthly', btn);
+
+    // Pede GPS logo no carregamento (o browser só pergunta uma vez)
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            pos => { userLat = pos.coords.latitude; userLng = pos.coords.longitude; },
+            ()  => { userLat = null; userLng = null; },
+            {timeout: 8000}
+        );
+    }
+});
+
+// ── Seleção de uso ────────────────────────────────────────────────────────────
+function selecionarUso(uso, btn) {
+    usoSelecionado = uso;
+    document.querySelectorAll('.uso-btn').forEach(b => {
+        b.style.background   = 'var(--surface2)';
+        b.style.color        = 'var(--text-muted)';
+        b.style.borderColor  = 'var(--border)';
+    });
+    btn.style.background  = 'rgba(123,97,255,0.12)';
+    btn.style.color       = 'var(--brand)';
+    btn.style.borderColor = 'var(--brand)';
+}
+
+// ── Analisar compra ───────────────────────────────────────────────────────────
 async function analisarCompra() {
     const item      = document.getElementById('itemInput').value.trim();
     const preco     = parseFloat(document.getElementById('precoInput').value) || 0;
     const categoria = document.getElementById('categoriaInput').value;
 
+    // Validação
     if (!item) {
-        document.getElementById('itemInput').style.borderColor = '#FF4757';
-        document.getElementById('itemInput').focus();
+        const el = document.getElementById('itemInput');
+        el.style.borderColor = '#FF4757';
+        el.focus();
+        setTimeout(() => el.style.borderColor = 'var(--border)', 2000);
         return;
     }
     if (preco <= 0) {
-        document.getElementById('precoInput').style.borderColor = '#FF4757';
-        document.getElementById('precoInput').focus();
+        const el = document.getElementById('precoInput');
+        el.style.borderColor = '#FF4757';
+        el.focus();
+        setTimeout(() => el.style.borderColor = 'var(--border)', 2000);
         return;
     }
 
@@ -2249,61 +1988,155 @@ async function analisarCompra() {
     btn.disabled = true;
     btn.textContent = 'A analisar...';
 
+    // Mostra loading no mapa em paralelo
+    mostrarMapaLoading(item);
+
     try {
-        const res = await fetch('/scoring/analisar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ item, preco, categoria, uso: usoSelecionado }),
+        const res  = await fetch('/scoring/analisar', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({item, preco, categoria, uso: usoSelecionado}),
         });
         const data = await res.json();
-
-        if (!data.success) throw new Error(data.message || 'Erro');
-
-        mostrarResultado(data.resultado);
+        if (!data.success) throw new Error(data.message || 'Erro desconhecido');
+        mostrarResultado(data.resultado, item);
     } catch (e) {
-        alert('Erro: ' + e.message);
+        alert('Erro ao analisar: ' + e.message);
     } finally {
         btn.disabled = false;
         btn.textContent = 'Analisar Compra →';
     }
+
+    // Busca lojas (não bloqueia o resultado)
+    buscarLojasProximas(item, categoria);
 }
 
-function mostrarResultado(r) {
+// ── Resultado ─────────────────────────────────────────────────────────────────
+function mostrarResultado(r, item) {
     const colors = SCORE_COLORS[r.color] || SCORE_COLORS.muted;
 
-    // Item name
-    document.getElementById('resItem').textContent = r.item || 'Compra';
+    document.getElementById('resItem').textContent = item;
 
-    // Label badge
     const lbl = document.getElementById('resLabel');
     lbl.textContent = r.label;
     lbl.style.cssText = `font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;background:${colors.bg};color:${colors.text};`;
 
-    // Score number
     document.getElementById('scoreNum').textContent = r.score;
-
-    // Score circle animation
-    const circle = document.getElementById('scoreCircle');
-    const circumference = 226;
-    const offset = circumference - (r.score / 100) * circumference;
     setTimeout(() => {
-        circle.style.strokeDashoffset = offset;
+        const circle = document.getElementById('scoreCircle');
+        circle.style.strokeDashoffset = 226 - (r.score / 100) * 226;
         circle.style.stroke = colors.stroke;
     }, 50);
 
-    // Message
     document.getElementById('resMessage').textContent = r.message;
-
-    // Chips
-    const chipsEl = document.getElementById('resChips');
-    chipsEl.innerHTML = (r.chips || []).map(c =>
+    document.getElementById('resChips').innerHTML = (r.chips || []).map(c =>
         `<span style="font-size:12px;font-weight:600;padding:4px 10px;border-radius:10px;${CHIP_STYLES[c.type] || CHIP_STYLES.mid}">${c.text}</span>`
     ).join('');
 
-    // Show
-    const resDiv = document.getElementById('resultado');
-    resDiv.style.display = 'block';
-    resDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const el = document.getElementById('resultado');
+    el.style.display = 'block';
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+// ── Mapa helpers ──────────────────────────────────────────────────────────────
+function mostrarMapaLoading(item) {
+    document.getElementById('mapaVazio').style.display    = 'none';
+    document.getElementById('mapaLoading').style.display  = 'flex';
+    document.getElementById('mapaConteudo').style.display = 'none';
+    document.getElementById('mapaStatus').textContent = `A procurar "${item}"...`;
+}
+
+function mostrarMapaErro(msg) {
+    document.getElementById('mapaLoading').style.display  = 'none';
+    document.getElementById('mapaConteudo').style.display = 'none';
+    document.getElementById('mapaVazio').style.display    = 'flex';
+    document.getElementById('mapaVazioMsg').textContent   = msg;
+    document.getElementById('mapaStatus').textContent     = 'Sem resultados';
+}
+
+// ── Busca lojas ───────────────────────────────────────────────────────────────
+async function buscarLojasProximas(item, categoria) {
+    // Se não temos GPS ainda, tenta obter agora
+    if (userLat === null || userLng === null) {
+        try {
+            const pos = await new Promise((resolve, reject) =>
+                navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 6000})
+            );
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+        } catch {
+            mostrarMapaErro('Ativa a localização no browser para ver lojas próximas.');
+            return;
+        }
+    }
+
+    try {
+        const res  = await fetch('/scoring/lojas-proximas', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({item, categoria, lat: userLat, lng: userLng}),
+        });
+        const data = await res.json();
+
+        if (!data.success || !data.lojas || data.lojas.length === 0) {
+            mostrarMapaErro('Nenhuma loja encontrada num raio de 5 km.');
+            return;
+        }
+
+        renderizarMapa(data.lojas, item);
+    } catch {
+        mostrarMapaErro('Erro ao procurar lojas. Tenta novamente.');
+    }
+}
+
+// ── Renderiza mapa Leaflet ────────────────────────────────────────────────────
+function renderizarMapa(lojas, item) {
+    document.getElementById('mapaLoading').style.display  = 'none';
+    document.getElementById('mapaVazio').style.display    = 'none';
+    document.getElementById('mapaConteudo').style.display = 'block';
+    document.getElementById('mapaStatus').textContent     = `${lojas.length} loja(s) encontrada(s)`;
+
+    // Remove mapa anterior se existir
+    if (mapaInstance) { mapaInstance.remove(); mapaInstance = null; }
+
+    const map = L.map('mapaDiv', {zoomControl:true, attributionControl:false})
+                 .setView([userLat, userLng], 14);
+    mapaInstance = map;
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {maxZoom:19})
+     .addTo(map);
+
+    // Marcador do utilizador
+    L.marker([userLat, userLng], {
+        icon: L.divIcon({
+            html: `<div style="width:14px;height:14px;background:#7B61FF;border:3px solid white;border-radius:50%;box-shadow:0 0 10px rgba(123,97,255,0.8);"></div>`,
+            className:'', iconAnchor:[7,7],
+        })
+    }).addTo(map).bindPopup('A tua localização');
+
+    // Marcadores das lojas
+    lojas.forEach((loja, i) => {
+        L.marker([loja.lat, loja.lng], {
+            icon: L.divIcon({
+                html: `<div style="width:26px;height:26px;background:linear-gradient(135deg,#4A3AFF,#7B61FF);border:2px solid white;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:white;box-shadow:0 2px 8px rgba(0,0,0,0.5);">${i+1}</div>`,
+                className:'', iconAnchor:[13,13],
+            })
+        }).addTo(map)
+          .bindPopup(`<b>${loja.nome}</b>${loja.endereco ? '<br>' + loja.endereco : ''}`);
+    });
+
+    // Lista
+    const lista = document.getElementById('lojasList');
+    lista.innerHTML = lojas.map((loja, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+            <div style="width:24px;height:24px;background:linear-gradient(135deg,#4A3AFF,#7B61FF);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:white;flex-shrink:0;">${i+1}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${loja.nome}</div>
+                ${loja.endereco ? `<div style="font-size:11px;color:var(--text-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${loja.endereco}</div>` : ''}
+            </div>
+            ${loja.distancia ? `<div style="font-size:11px;color:var(--brand-2);font-weight:700;flex-shrink:0;">${loja.distancia}</div>` : ''}
+        </div>
+    `).join('');
 }
 </script>
 {% endblock %}
@@ -2644,6 +2477,465 @@ def preview(modo):
     if modo not in PERSONALIDADES:
         return jsonify({'success': False})
     return jsonify({'success': True, 'preview': PERSONALIDADES[modo]['preview'], 'info': PERSONALIDADES[modo]})
+</file>
+
+<file path="app/scoring.py">
+"""
+scoring.py — "Was It Worth It?" AI Scoring
+Score inteligente: combina algoritmo base com avaliação de mercado via Groq.
+Inclui route /scoring/lojas-proximas para mapa de lojas via Overpass API.
+"""
+import os
+import json
+import math
+import requests
+from flask import Blueprint, request, jsonify, render_template
+from flask_login import login_required, current_user
+from app.models import Fatura
+from app import db
+
+scoring_bp = Blueprint('scoring', __name__)
+
+# ─── CONSTANTES ───────────────────────────────────────────────────────────────
+
+CATEGORY_WEIGHTS = {
+    'Alimentação':      1.15,
+    'Saúde & Beleza':   1.10,
+    'Educação':         1.10,
+    'Desporto':         1.05,
+    'Casa & Decoração': 1.00,
+    'Vestuário':        0.95,
+    'Tecnologia':       0.90,
+    'Entretenimento':   0.85,
+    'Transportes':      1.00,
+    'Outros':           0.90,
+}
+
+USAGE_BASE = {
+    'daily':   80,
+    'weekly':  65,
+    'monthly': 45,
+    'rarely':  22,
+    'never':   5,
+}
+
+USAGE_LABELS = {
+    'daily':   'Uso diário',
+    'weekly':  'Uso regular',
+    'monthly': 'Uso ocasional',
+    'rarely':  'Raramente usado',
+    'never':   'Nunca utilizado',
+}
+
+# Mapeamento categoria → tipos de loja OSM para pesquisa
+CATEGORIA_OSM = {
+    'Tecnologia': [
+        'shop=electronics', 'shop=computer', 'shop=mobile_phone',
+        'shop=telephone', 'shop=hifi', 'shop=camera',
+        'shop=video_games', 'shop=appliance',
+        'name=Worten', 'name=MediaMarkt', 'name=Radio Popular',
+        'name=Apple Store', 'name=Samsung', 'name=FNAC',
+    ],
+    'Alimentação': [
+        'shop=supermarket', 'shop=convenience', 'shop=grocery',
+        'shop=bakery', 'shop=butcher', 'shop=seafood',
+        'shop=greengrocer', 'shop=deli', 'shop=food',
+        'shop=pastry', 'shop=chocolate', 'shop=confectionery',
+        'amenity=marketplace', 'amenity=food_court',
+        'name=Continente', 'name=Pingo Doce', 'name=Lidl',
+        'name=Aldi', 'name=Mercadona', 'name=Minipreço',
+    ],
+    'Vestuário': [
+        'shop=clothes', 'shop=shoes', 'shop=boutique',
+        'shop=fashion', 'shop=accessories', 'shop=bag',
+        'shop=jewelry', 'shop=watches', 'shop=leather',
+        'shop=underwear', 'shop=sports', 'shop=outdoor',
+        'name=Zara', 'name=H&M', 'name=Pull&Bear',
+        'name=Bershka', 'name=Mango', 'name=C&A',
+        'name=Springfield', 'name=Stradivarius',
+    ],
+    'Desporto': [
+        'shop=sports', 'shop=outdoor', 'shop=bicycle',
+        'shop=fishing', 'shop=golf', 'shop=ski',
+        'shop=swimming', 'shop=surf',
+        'leisure=sports_centre', 'leisure=fitness_centre',
+        'leisure=swimming_pool', 'leisure=stadium',
+        'name=Decathlon', 'name=Sport Zone', 'name=Nike',
+        'name=Adidas', 'name=Intersport',
+    ],
+    'Saúde & Beleza': [
+        'amenity=pharmacy', 'amenity=hospital', 'amenity=clinic',
+        'amenity=dentist', 'amenity=doctors',
+        'shop=beauty', 'shop=cosmetics', 'shop=hairdresser',
+        'shop=optician', 'shop=hearing_aids', 'shop=medical_supply',
+        'shop=perfumery', 'shop=wellness',
+        'name=Wells', 'name=Perfumes & Companhia',
+        'name=Droga Raia', 'name=Farmácia',
+    ],
+    'Casa & Decoração': [
+        'shop=furniture', 'shop=interior_decoration', 'shop=houseware',
+        'shop=hardware', 'shop=doityourself', 'shop=paint',
+        'shop=curtain', 'shop=carpet', 'shop=lighting',
+        'shop=kitchen', 'shop=bathroom', 'shop=bed',
+        'shop=garden', 'shop=florist',
+        'name=IKEA', 'name=Leroy Merlin', 'name=AKI',
+        'name=Conforama', 'name=El Corte Inglés',
+    ],
+    'Educação': [
+        'shop=books', 'shop=stationery', 'shop=art',
+        'shop=music', 'shop=musical_instrument',
+        'amenity=library', 'amenity=school', 'amenity=university',
+        'amenity=college', 'amenity=language_school',
+        'amenity=music_school', 'amenity=driving_school',
+        'name=FNAC', 'name=Bertrand', 'name=Livraria',
+    ],
+    'Entretenimento': [
+        'amenity=cinema', 'amenity=theatre', 'amenity=nightclub',
+        'amenity=bar', 'amenity=pub', 'amenity=casino',
+        'amenity=arts_centre', 'amenity=music_venue',
+        'leisure=bowling_alley', 'leisure=escape_game',
+        'leisure=miniature_golf', 'leisure=amusement_arcade',
+        'shop=video_games', 'shop=games', 'shop=toys',
+        'name=NOS', 'name=Cinemas NOS', 'name=UCI',
+    ],
+    'Transportes': [
+        'amenity=fuel', 'amenity=parking', 'amenity=car_rental',
+        'amenity=car_wash', 'amenity=car_repair',
+        'shop=car', 'shop=car_parts', 'shop=car_repair',
+        'shop=bicycle', 'shop=motorcycle',
+        'amenity=taxi', 'amenity=bus_station',
+        'amenity=train_station', 'amenity=ferry_terminal',
+        'name=Repsol', 'name=BP', 'name=Galp', 'name=Cepsa',
+    ],
+    'Outros': [
+        'shop=general', 'shop=department_store', 'shop=variety_store',
+        'shop=second_hand', 'shop=charity', 'shop=gift',
+        'shop=newsagent', 'shop=tobacco', 'shop=lottery',
+        'amenity=post_office', 'amenity=bank', 'amenity=atm',
+        'shop=laundry', 'shop=dry_cleaning',
+        'name=El Corte Inglés', 'name=Fnac',
+    ],
+}
+
+
+# ─── AVALIAÇÃO DE MERCADO ─────────────────────────────────────────────────────
+
+def _avaliar_preco_mercado(item: str, preco: float, categoria: str) -> dict:
+    """Pede ao Groq o preço médio de mercado e calcula o ajuste ao score."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
+
+    prompt = (
+        f"Qual é o preço médio de mercado atual deste produto em Portugal ou Europa?\n\n"
+        f"Produto: {item}\nCategoria: {categoria}\n\n"
+        f"Responde APENAS com JSON válido, sem markdown, sem texto extra:\n"
+        f'{{"preco_medio_mercado": <número em euros>, '
+        f'"comentario": "<frase curta max 10 palavras sobre o preço típico>"}}\n\n'
+        f"Exemplos: PS5->499, iPhone 16 Pro->1199, Nike Air Max->120, Café->1, MacBook Pro 14->1999"
+    )
+
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
+                  "temperature": 0.1, "max_tokens": 150},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            raise ValueError("Groq error")
+
+        text = r.json()["choices"][0]["message"]["content"].strip()
+        if '```' in text:
+            parts = text.split('```')
+            text = parts[1] if len(parts) > 1 else text
+            if text.startswith('json'):
+                text = text[4:]
+        text = text.strip().strip('`')
+        start, end = text.find('{'), text.rfind('}') + 1
+        if start != -1 and end > start:
+            text = text[start:end]
+
+        data = json.loads(text)
+        preco_medio = float(data.get('preco_medio_mercado') or 0)
+        comentario  = data.get('comentario', '')
+
+        if preco_medio > 0:
+            ratio = preco / preco_medio
+            if ratio < 0.70:
+                avaliacao, ajuste = 'barato', +20
+            elif ratio <= 1.15:
+                avaliacao, ajuste = 'justo', 0
+            elif ratio <= 1.50:
+                avaliacao, ajuste = 'caro', -15
+            else:
+                avaliacao, ajuste = 'muito_caro', -30
+        else:
+            avaliacao, ajuste = 'justo', 0
+
+        return {'preco_medio': preco_medio, 'avaliacao': avaliacao,
+                'ajuste_score': ajuste, 'comentario': comentario}
+
+    except Exception:
+        return {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
+
+
+# ─── LOJAS PRÓXIMAS ───────────────────────────────────────────────────────────
+
+def _distancia_km(lat1, lng1, lat2, lng2) -> float:
+    """Distância em km entre dois pontos (fórmula de Haversine)."""
+    R = 6371
+    d_lat = math.radians(lat2 - lat1)
+    d_lng = math.radians(lng2 - lng1)
+    a = math.sin(d_lat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lng/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _distancia_label(km: float) -> str:
+    if km < 1:
+        return f"{int(km * 1000)} m"
+    return f"{km:.1f} km"
+
+
+# Muda o raio padrão de 3000 para 5000
+def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000) -> list:
+    """Usa Google Places API para encontrar lojas próximas."""
+
+    KEYWORDS_CATEGORIA = {
+        'Tecnologia':       'loja tecnologia eletrónica telemóvel computador',
+        'Alimentação':      'supermercado mercearia padaria alimentação',
+        'Vestuário':        'loja roupa calçado moda vestuário',
+        'Desporto':         'loja desporto ginásio fitness',
+        'Saúde & Beleza':   'farmácia beleza cosméticos saúde',
+        'Casa & Decoração': 'mobiliário decoração casa bricolage',
+        'Educação':         'livraria papelaria escola biblioteca',
+        'Entretenimento':   'cinema bar entretenimento jogos',
+        'Transportes':      'combustível posto gasolina automóvel',
+        'Outros':           'loja geral',
+    }
+
+    api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    if not api_key:
+        print("[MAPA] GOOGLE_PLACES_API_KEY não configurada")
+        return []
+
+    keyword = KEYWORDS_CATEGORIA.get(categoria, 'loja')
+
+    try:
+        r = requests.get(
+            "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+            params={
+                'location': f"{lat},{lng}",
+                'radius':   raio_m,
+                'keyword':  keyword,
+                'language': 'pt',
+                'key':      api_key,
+            },
+            timeout=10,
+        )
+
+        print(f"[GOOGLE PLACES] status HTTP: {r.status_code}")
+        data = r.json()
+        print(f"[GOOGLE PLACES] status API: {data.get('status')}")
+
+        if data.get('status') not in ('OK', 'ZERO_RESULTS'):
+            print(f"[GOOGLE PLACES] erro: {data.get('error_message', '')}")
+            return []
+
+        lojas = []
+        seen = set()
+
+        for place in data.get('results', []):
+            nome = place.get('name')
+            if not nome or nome in seen:
+                continue
+            seen.add(nome)
+
+            loc = place['geometry']['location']
+            elat, elng = loc['lat'], loc['lng']
+            km = _distancia_km(lat, lng, elat, elng)
+
+            lojas.append({
+                'nome':      nome,
+                'lat':       elat,
+                'lng':       elng,
+                'endereco':  place.get('vicinity', ''),
+                'distancia': _distancia_label(km),
+                'km':        km,
+            })
+
+        lojas.sort(key=lambda x: x['km'])
+        print(f"[GOOGLE PLACES] lojas encontradas: {len(lojas)}")
+        return lojas[:10]
+
+    except Exception as e:
+        print(f"[GOOGLE PLACES] exceção: {e}")
+        return []
+
+# ─── SCORE ────────────────────────────────────────────────────────────────────
+
+def _score_label(score: int, personalidade: str) -> dict:
+    personas = {
+        'savage': {
+            (80, 101): ('Decisão Sólida',  'green',  'Raro. Até tu fizeste bem desta vez.'),
+            (60,  80): ('Aceitável',        'brand2', 'Passável. Mas não te gabares.'),
+            (40,  60): ('Duvidoso',         'yellow', 'Sabes que não precisavas disto.'),
+            (20,  40): ('Regret Incoming',  'orange', 'O teu futuro eu vai mandar-te mensagens de ódio.'),
+            (0,   20): ('Dinheiro Ardido',  'red',    'Parabéns. Transformaste euros em remorso puro.'),
+        },
+        'sarcastic': {
+            (80, 101): ('Uau, bem feito',   'green',  'Quem diria. Uma decisão financeira adulta.'),
+            (60,  80): ('Mais ou menos',    'brand2', 'Podias ter poupado, mas pronto.'),
+            (40,  60): ('Interessante...',  'yellow', 'Tenho a certeza que tinhas mesmo de comprar isto.'),
+            (20,  40): ('Boa sorte aí',     'orange', 'Espero que o remorso venha com brinde.'),
+            (0,   20): ('Magistral',        'red',    'Ninguém te bate nisto. Literalmente ninguém.'),
+        },
+        'calm': {
+            (80, 101): ('Boa decisão',      'green',  'Esta compra alinha com os teus objetivos. Bem feito.'),
+            (60,  80): ('Razoável',         'brand2', 'Há melhores opções, mas não foi má escolha.'),
+            (40,  60): ('Reconsiderar',     'yellow', 'Vale a pena refletir se isto era mesmo necessário.'),
+            (20,  40): ('Risco elevado',    'orange', 'Esta compra pode gerar arrependimento.'),
+            (0,   20): ('Evitar repetir',   'red',    'Esta decisão não ajuda os teus objetivos financeiros.'),
+        },
+        'pro': {
+            (80, 101): ('ROI Positivo',     'green',  'Investimento justificado. Custo-benefício favorável.'),
+            (60,  80): ('ROI Neutro',       'brand2', 'Dentro do aceitável. Monitorizar uso.'),
+            (40,  60): ('ROI Baixo',        'yellow', 'Retorno questionável. Rever prioridades.'),
+            (20,  40): ('Capital em Risco', 'orange', 'Desperdício provável. Ajustar comportamento.'),
+            (0,   20): ('Prejuízo Total',   'red',    'Gasto sem retorno mensurável.'),
+        },
+    }
+    p = personalidade if personalidade in personas else 'calm'
+    for (low, high), (label, color, msg) in personas[p].items():
+        if low <= score < high:
+            return {'label': label, 'color': color, 'message': msg}
+    return {'label': '—', 'color': 'muted', 'message': ''}
+
+
+def _chip_preco(avaliacao: str, preco_medio: float) -> dict:
+    labels = {
+        'barato':     ('💚 Preço barato',    'good'),
+        'justo':      ('✓ Preço justo',      'mid'),
+        'caro':       ('⚠ Preço acima',      'bad'),
+        'muito_caro': ('🔴 Preço excessivo', 'bad'),
+    }
+    text, tipo = labels.get(avaliacao, ('Preço desconhecido', 'mid'))
+    if preco_medio and preco_medio > 0:
+        text += f' (mercado ~{preco_medio:.0f}€)'
+    return {'text': text, 'type': tipo}
+
+
+def calcular_score(categoria: str, preco: float, uso: str,
+                   personalidade: str = 'calm', item: str = '') -> dict:
+    base     = USAGE_BASE.get(uso, 40)
+    weight   = CATEGORY_WEIGHTS.get(categoria, 0.90)
+    raw_base = base * weight
+
+    mercado = {'preco_medio': None, 'avaliacao': 'justo', 'ajuste_score': 0, 'comentario': ''}
+    if item and item.strip() and item.lower() != 'item':
+        mercado = _avaliar_preco_mercado(item, preco, categoria)
+
+    score = int(max(0, min(100, raw_base + mercado['ajuste_score'])))
+    label_info = _score_label(score, personalidade)
+
+    chips = [
+        {'text': USAGE_LABELS.get(uso, uso), 'type': 'good' if score >= 60 else 'bad'},
+        {'text': f'{preco:.2f}€', 'type': 'bad' if preco > 300 else 'mid'},
+        {'text': categoria, 'type': 'mid'},
+    ]
+    if mercado['comentario']:
+        chips.append(_chip_preco(mercado['avaliacao'], mercado['preco_medio']))
+    if score < 40:
+        chips.append({'text': 'Alto arrependimento', 'type': 'bad'})
+    elif score >= 80:
+        chips.append({'text': 'Compra validada', 'type': 'good'})
+
+    mensagem = label_info['message']
+    if mercado['comentario']:
+        mensagem += ' ' + mercado['comentario']
+
+    return {
+        'score':               score,
+        'label':               label_info['label'],
+        'color':               label_info['color'],
+        'message':             mensagem,
+        'chips':               chips,
+        'preco_medio_mercado': mercado['preco_medio'],
+        'avaliacao_mercado':   mercado['avaliacao'],
+    }
+
+
+# ─── ROUTES ───────────────────────────────────────────────────────────────────
+
+@scoring_bp.route('/scoring')
+@login_required
+def analisar():
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    return render_template('scoring.html', personalidade=personalidade)
+
+
+@scoring_bp.route('/scoring/analisar', methods=['POST'])
+@login_required
+def analisar_post():
+    data      = request.json or {}
+    item      = (data.get('item') or 'Item').strip() or 'Item'
+    preco     = float(data.get('preco') or 0)
+    categoria = data.get('categoria', 'Outros')
+    uso       = data.get('uso', 'monthly')
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+
+    resultado = calcular_score(categoria, preco, uso, personalidade, item=item)
+    resultado['item'] = item
+    return jsonify({'success': True, 'resultado': resultado})
+
+
+@scoring_bp.route('/scoring/lojas-proximas', methods=['POST'])
+@login_required
+def lojas_proximas():
+    print("=== LOJAS ROUTE HIT ===")
+    data      = request.json or {}
+    lat       = data.get('lat')
+    lng       = data.get('lng')
+    categoria = data.get('categoria', 'Outros')
+    item      = data.get('item', '')
+
+    print(f"[MAPA] lat={lat}, lng={lng}, categoria={categoria}")
+
+    if lat is None or lng is None:
+        return jsonify({'success': False, 'message': 'Localização não fornecida.', 'lojas': []})
+
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Coordenadas inválidas.', 'lojas': []})
+
+    lojas = buscar_lojas_osm(lat, lng, categoria)
+    print(f"[MAPA] lojas encontradas: {len(lojas)}")
+
+    return jsonify({'success': True, 'lojas': lojas, 'item': item})
+
+
+@scoring_bp.route('/scoring/fatura/<int:fatura_id>', methods=['GET'])
+@login_required
+def score_fatura(fatura_id):
+    fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
+    if not fatura:
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'})
+
+    personalidade = getattr(current_user, 'personalidade', 'calm') or 'calm'
+    item = fatura.loja or fatura.nome_ficheiro
+
+    resultado = calcular_score(
+        categoria=fatura.categoria or 'Outros',
+        preco=fatura.total or 0,
+        uso='monthly',
+        personalidade=personalidade,
+        item=item,
+    )
+    resultado['item'] = item
+    return jsonify({'success': True, 'resultado': resultado})
 </file>
 
 <file path="NOTAS.md">
@@ -4716,179 +5008,6 @@ a:hover { color: var(--brand); }
 </html>
 </file>
 
-<file path="templates/chat.html">
-{% extends 'base.html' %}
-{% block title %}Assistente IA · Verly{% endblock %}
-
-{% block content %}
-<div class="chat-page">
-    <div class="chat-topbar">
-        <div class="chat-topbar-left">
-            <div class="status-dot"></div>
-            <h1>Assistente Verly</h1>
-        </div>
-        <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
-    </div>
-
-    <div id="messages" class="messages-area">
-        {% if conversas %}
-            {% for c in conversas %}
-            <div class="msg user">
-                <div class="msg-avatar">{{ current_user.nome[0].upper() }}</div>
-                <div class="msg-bubble">{{ c.pergunta }}</div>
-            </div>
-            <div class="msg bot">
-                <div class="msg-avatar">✦</div>
-                <div class="msg-bubble">{{ c.resposta }}</div>
-            </div>
-            {% endfor %}
-        {% else %}
-        <div class="empty-chat" id="emptyChat">
-            <div class="empty-chat-icon">✦</div>
-            <h3>Assistente Verly</h3>
-            <p>Faz perguntas sobre as tuas faturas ou gastos.</p>
-        </div>
-        {% endif %}
-    </div>
-
-    <div class="chat-input-area">
-        <textarea id="userInput" placeholder="Pergunta algo..."
-            onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
-        <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-let emptyRemoved = {{ 'true' if conversas else 'false' }};
-
-window.addEventListener('load', () => {
-    const m = document.getElementById('messages');
-    m.scrollTop = m.scrollHeight;
-});
-
-function removeEmpty() {
-    if (!emptyRemoved) {
-        const el = document.getElementById('emptyChat');
-        if (el) el.remove();
-        emptyRemoved = true;
-    }
-}
-
-function addMsg(role, text, avatar) {
-    removeEmpty();
-
-    const m = document.getElementById('messages');
-    const d = document.createElement('div');
-    d.className = 'msg ' + role;
-
-    d.innerHTML = `
-        <div class="msg-avatar">${avatar}</div>
-        <div class="msg-bubble">${text}</div>
-    `;
-
-    m.appendChild(d);
-    m.scrollTop = m.scrollHeight;
-
-    return d.querySelector('.msg-bubble');
-}
-
-// 🔥 STREAMING REAL
-async function sendMessage() {
-    const input = document.getElementById('userInput');
-    const btn = document.getElementById('btnSend');
-
-    const text = input.value.trim();
-    if (!text) return;
-
-    addMsg('user', text, '{{ current_user.nome[0].upper() }}');
-
-    input.value = '';
-    input.style.height = 'auto';
-    btn.disabled = true;
-
-    // cria mensagem vazia do bot
-    const bubble = addMsg('bot', '', '✦');
-
-    let fullText = "";
-
-    try {
-        const res = await fetch('/chat/stream', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({message: text})
-        });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value);
-            const lines = chunk.split("\n");
-
-            lines.forEach(line => {
-                if (line.startsWith("data: ")) {
-                    const t = line.replace("data: ", "");
-                    fullText += t;
-
-                    // efeito cursor
-                    bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
-
-                    const m = document.getElementById('messages');
-                    m.scrollTop = m.scrollHeight;
-                }
-            });
-        }
-
-        // remove cursor no fim
-        bubble.innerHTML = fullText;
-
-    } catch (e) {
-        bubble.innerHTML = "Erro de ligação.";
-    }
-
-    btn.disabled = false;
-}
-
-async function clearChat() {
-    if (!confirm('Apagar todo o histórico?')) return;
-    await fetch('/chat/clear', {method:'POST'});
-    location.reload();
-}
-
-function handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendMessage();
-    }
-}
-
-function autoResize(el) {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-</script>
-
-<style>
-.cursor {
-    display: inline-block;
-    margin-left: 2px;
-    animation: blink 1s infinite;
-}
-
-@keyframes blink {
-    0% {opacity: 1;}
-    50% {opacity: 0;}
-    100% {opacity: 1;}
-}
-</style>
-{% endblock %}
-</file>
-
 <file path="templates/dashboard.html">
 {% extends 'base.html' %}
 {% block title %}Dashboard · Verly{% endblock %}
@@ -5185,6 +5304,500 @@ def _migrate_db():
             db.session.commit()
         except Exception:
             db.session.rollback()
+</file>
+
+<file path="app/models.py">
+from datetime import datetime
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
+from app import db
+
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(150), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    notificacoes_email = db.Column(db.Boolean, default=False)
+    email_notificacoes = db.Column(db.String(150))
+    personalidade = db.Column(db.String(20), default='calm')
+    orcamento_mensal = db.Column(db.Float, default=0)
+    onboarding_completo = db.Column(db.Boolean, default=False)
+
+    faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
+    conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
+    metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+
+CATEGORIAS = [
+    'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
+    'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
+    'Educação', 'Outros',
+]
+
+
+class Fatura(db.Model):
+    __tablename__ = 'faturas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    nome_ficheiro = db.Column(db.String(255), nullable=False)
+    loja = db.Column(db.String(150))
+    data_compra = db.Column(db.String(50))
+    total = db.Column(db.Float)
+    items = db.Column(db.Text)
+    categoria = db.Column(db.String(50), default='Outros')
+    data_garantia = db.Column(db.String(50))
+    data_devolucao = db.Column(db.String(50))
+    notas = db.Column(db.Text)
+    data_upload = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Conversa(db.Model):
+    __tablename__ = 'conversas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    pergunta = db.Column(db.Text, nullable=False)
+    resposta = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class Meta(db.Model):
+    __tablename__ = 'metas'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    categoria = db.Column(db.String(50), nullable=False)
+    valor_limite = db.Column(db.Float, nullable=False)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+</file>
+
+<file path="templates/chat.html">
+{% extends 'base.html' %}
+{% block title %}Assistente IA · Verly{% endblock %}
+
+{% block content %}
+<div class="chat-page">
+    <div class="chat-topbar">
+        <div class="chat-topbar-left">
+            <div class="status-dot"></div>
+            <h1>Assistente Verly</h1>
+        </div>
+        <button class="btn-ghost" onclick="clearChat()">Limpar histórico</button>
+    </div>
+
+    <div id="messages" class="messages-area">
+        {% if conversas %}
+            {% for c in conversas %}
+            <div class="msg user">
+                <div class="msg-avatar">{{ current_user.nome[0].upper() }}</div>
+                <div class="msg-bubble">{{ c.pergunta }}</div>
+            </div>
+            <div class="msg bot">
+                <div class="msg-avatar">✦</div>
+                <div class="msg-bubble">{{ c.resposta }}</div>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-chat" id="emptyChat">
+            <div class="empty-chat-icon">✦</div>
+            <h3>Assistente Verly</h3>
+            <p>Faz perguntas sobre as tuas faturas ou gastos.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="chat-input-area">
+        <textarea id="userInput" placeholder="Pergunta algo..."
+            onkeydown="handleKey(event)" oninput="autoResize(this)" rows="1"></textarea>
+        <button class="btn-send" id="btnSend" onclick="sendMessage()">↑</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let emptyRemoved = {{ 'true' if conversas else 'false' }};
+
+window.addEventListener('load', () => {
+    const m = document.getElementById('messages');
+    m.scrollTop = m.scrollHeight;
+});
+
+function removeEmpty() {
+    if (!emptyRemoved) {
+        const el = document.getElementById('emptyChat');
+        if (el) el.remove();
+        emptyRemoved = true;
+    }
+}
+
+function addMsg(role, text, avatar) {
+    removeEmpty();
+
+    const m = document.getElementById('messages');
+    const d = document.createElement('div');
+    d.className = 'msg ' + role;
+
+    d.innerHTML = `
+        <div class="msg-avatar">${avatar}</div>
+        <div class="msg-bubble">${text}</div>
+    `;
+
+    m.appendChild(d);
+    m.scrollTop = m.scrollHeight;
+
+    return d.querySelector('.msg-bubble');
+}
+
+// 🔥 STREAMING REAL
+async function sendMessage() {
+    const input = document.getElementById('userInput');
+    const btn = document.getElementById('btnSend');
+
+    const text = input.value.trim();
+    if (!text) return;
+
+    addMsg('user', text, '{{ current_user.nome[0].upper() }}');
+
+    input.value = '';
+    input.style.height = 'auto';
+    btn.disabled = true;
+
+    // cria mensagem vazia do bot
+    const bubble = addMsg('bot', '', '✦');
+
+    let fullText = "";
+
+    try {
+        const res = await fetch('/chat/stream', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({message: text})
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split("\n");
+
+            lines.forEach(line => {
+                if (line.startsWith("data: ")) {
+                    const t = line.replace("data: ", "");
+                    fullText += t;
+
+                    // efeito cursor
+                    bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
+
+                    const m = document.getElementById('messages');
+                    m.scrollTop = m.scrollHeight;
+                }
+            });
+        }
+
+        // remove cursor no fim
+        bubble.innerHTML = fullText;
+
+    } catch (e) {
+        bubble.innerHTML = "Erro de ligação.";
+    }
+
+    btn.disabled = false;
+}
+
+async function clearChat() {
+    if (!confirm('Apagar todo o histórico?')) return;
+    await fetch('/chat/clear', {method:'POST'});
+    location.reload();
+}
+
+function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+}
+
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+</script>
+
+<style>
+.cursor {
+    display: inline-block;
+    margin-left: 2px;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0% {opacity: 1;}
+    50% {opacity: 0;}
+    100% {opacity: 1;}
+}
+</style>
+{% endblock %}
+</file>
+
+<file path="templates/faturas.html">
+{% extends 'base.html' %}
+{% block title %}Faturas · Verly{% endblock %}
+
+{% block extra_head %}
+<style>
+.items-chip { position:relative; display:inline-flex; align-items:center; gap:5px; background:var(--surface3); border:1px solid var(--border); border-radius:6px; padding:3px 10px; font-size:12px; color:var(--text-muted); cursor:default; }
+.items-chip:hover { border-color:var(--border-hover); color:var(--text); }
+.items-tooltip { display:none; position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; min-width:180px; max-width:260px; z-index:100; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+.items-chip:hover .items-tooltip { display:block; }
+.items-tooltip li { list-style:none; font-size:12px; color:var(--text); padding:3px 0; display:flex; align-items:center; gap:6px; }
+.items-tooltip li::before { content:''; width:5px; height:5px; border-radius:50%; background:var(--brand); flex-shrink:0; }
+
+.row-link { cursor:pointer; }
+.row-link:hover td { background:rgba(74,58,255,0.04); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Faturas</h1>
+        <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
+    </div>
+    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Exportar PDF
+    </a>
+</div>
+
+<!-- UPLOAD -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header"><h3>Submeter Nova Fatura</h3></div>
+    <div class="card-body">
+        <div class="upload-zone" id="uploadZone">
+            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
+            <div class="upload-icon">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
+            <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
+        </div>
+        <button class="btn-accent" id="btnUpload" style="display:none;margin-top:14px;" onclick="uploadFile()">
+            Analisar com IA →
+        </button>
+        <div class="upload-status" id="uploadStatus"></div>
+    </div>
+</div>
+
+<!-- FILTROS -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-body" style="padding:16px 20px;">
+        <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
+            <input type="text" name="q" value="{{ search }}" placeholder="Pesquisar loja, item..." class="filtro-input">
+            <select name="categoria" class="filtro-select">
+                <option value="">Todas as categorias</option>
+                {% for cat in categorias %}
+                <option value="{{ cat }}" {% if cat == categoria_sel %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+            <select name="ordenar" class="filtro-select">
+                <option value="recente" {% if ordenar == 'recente' %}selected{% endif %}>Mais recente</option>
+                <option value="antigo" {% if ordenar == 'antigo' %}selected{% endif %}>Mais antigo</option>
+                <option value="maior" {% if ordenar == 'maior' %}selected{% endif %}>Maior valor</option>
+                <option value="menor" {% if ordenar == 'menor' %}selected{% endif %}>Menor valor</option>
+            </select>
+            <button type="submit" class="btn-accent">Filtrar</button>
+            {% if search or categoria_sel %}
+            <a href="{{ url_for('faturas.faturas') }}" class="btn-ghost">Limpar</a>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<!-- TABELA -->
+<div class="card">
+    <div class="card-header"><h3>Faturas Registadas</h3></div>
+    <div class="card-body" style="padding:0;">
+        {% if faturas %}
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Loja</th>
+                    <th>Categoria</th>
+                    <th>Data Compra</th>
+                    <th>Total</th>
+                    <th>Items</th>
+                    <th>Prazos</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in faturas %}
+                <tr id="row-{{ f.id }}" class="row-link" onclick="goToDetail(event, {{ f.id }})">
+                    <td>
+                        <div style="display:flex;flex-direction:column;gap:2px;">
+                            <span style="font-weight:600;color:var(--text);">{{ f.loja or '—' }}</span>
+                            <span style="font-size:11px;color:var(--text-sub);">{{ f.nome_ficheiro }}</span>
+                        </div>
+                    </td>
+                    <td>
+                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)" onclick="event.stopPropagation()">
+                            {% for cat in categorias %}
+                            <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="text-muted">{{ f.data_compra or '—' }}</td>
+                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}" style="font-weight:600;">
+                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
+                    </td>
+                    <td onclick="event.stopPropagation()">
+                        {% if f.items_list %}
+                        <div class="items-chip">
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                            {{ f.items_list|length }}
+                            <div class="items-tooltip">
+                                <ul>
+                                {% for item in f.items_list[:6] %}
+                                    <li>{{ item }}</li>
+                                {% endfor %}
+                                {% if f.items_list|length > 6 %}
+                                    <li style="color:var(--text-muted);">+{{ f.items_list|length - 6 }} mais...</li>
+                                {% endif %}
+                                </ul>
+                            </div>
+                        </div>
+                        {% else %}
+                        <span style="color:var(--text-sub);font-size:12px;">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div style="display:flex;flex-direction:column;gap:3px;">
+                            {% if f.data_devolucao %}
+                            <span style="font-size:11px;color:var(--yellow);">Dev: {{ f.data_devolucao }}</span>
+                            {% endif %}
+                            {% if f.data_garantia %}
+                            <span style="font-size:11px;color:var(--green);">Gar: {{ f.data_garantia }}</span>
+                            {% endif %}
+                            {% if not f.data_devolucao and not f.data_garantia %}
+                            <span style="color:var(--text-sub);font-size:12px;">—</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td onclick="event.stopPropagation()">
+                        <div style="display:flex;gap:6px;align-items:center;">
+                            <a href="/faturas/{{ f.id }}" style="display:flex;align-items:center;padding:5px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:7px;color:var(--text-muted);font-size:12px;text-decoration:none;gap:4px;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--brand)';this.style.color='var(--brand)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                Ver
+                            </a>
+                            <button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-card">
+            <div style="width:48px;height:48px;background:var(--surface2);border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <p>Nenhuma fatura encontrada.<br>
+            {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedFile = null;
+
+function goToDetail(e, id) {
+    window.location.href = '/faturas/' + id;
+}
+
+function handleFileSelect(input) {
+    selectedFile = input.files[0];
+    if (selectedFile) {
+        document.getElementById('uploadLabel').textContent = selectedFile.name;
+        document.getElementById('uploadSub').textContent = (selectedFile.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+}
+
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+        selectedFile = file;
+        document.getElementById('uploadLabel').textContent = file.name;
+        document.getElementById('uploadSub').textContent = (file.size / 1024).toFixed(1) + ' KB';
+        document.getElementById('btnUpload').style.display = 'block';
+    }
+});
+
+async function uploadFile() {
+    if (!selectedFile) return;
+    const btn = document.getElementById('btnUpload');
+    btn.disabled = true; btn.textContent = 'A analisar...';
+    setStatus('loading', 'A analisar a fatura com IA...');
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    try {
+        const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.success) {
+            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.categoria}`);
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            setStatus('error', '✗ ' + data.message);
+        }
+    } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
+    btn.disabled = false; btn.textContent = 'Analisar com IA →';
+}
+
+function setStatus(type, msg) {
+    const el = document.getElementById('uploadStatus');
+    el.className = 'upload-status ' + type;
+    el.textContent = msg;
+}
+
+async function editarCategoria(id, valor) {
+    await fetch(`/faturas/editar/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria: valor })
+    });
+}
+
+async function deleteFatura(id) {
+    if (!confirm('Remover esta fatura?')) return;
+    const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) document.getElementById('row-' + id).remove();
+}
+</script>
+{% endblock %}
 </file>
 
 <file path="app/ai.py">
@@ -5698,327 +6311,6 @@ def clear_chat():
     return jsonify({'success': True})
 </file>
 
-<file path="app/models.py">
-from datetime import datetime
-from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
-from app import db
-
-
-class User(UserMixin, db.Model):
-    __tablename__ = 'users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    nome = db.Column(db.String(100), nullable=False)
-    email = db.Column(db.String(150), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
-    notificacoes_email = db.Column(db.Boolean, default=False)
-    email_notificacoes = db.Column(db.String(150))
-    personalidade = db.Column(db.String(20), default='calm')
-    orcamento_mensal = db.Column(db.Float, default=0)
-    onboarding_completo = db.Column(db.Boolean, default=False)
-
-    faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
-    conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
-    metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-
-CATEGORIAS = [
-    'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
-    'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
-    'Educação', 'Outros',
-]
-
-
-class Fatura(db.Model):
-    __tablename__ = 'faturas'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    nome_ficheiro = db.Column(db.String(255), nullable=False)
-    loja = db.Column(db.String(150))
-    data_compra = db.Column(db.String(50))
-    total = db.Column(db.Float)
-    items = db.Column(db.Text)
-    categoria = db.Column(db.String(50), default='Outros')
-    data_garantia = db.Column(db.String(50))
-    data_devolucao = db.Column(db.String(50))
-    notas = db.Column(db.Text)
-    data_upload = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class Conversa(db.Model):
-    __tablename__ = 'conversas'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    pergunta = db.Column(db.Text, nullable=False)
-    resposta = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class Meta(db.Model):
-    __tablename__ = 'metas'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    categoria = db.Column(db.String(50), nullable=False)
-    valor_limite = db.Column(db.Float, nullable=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
-</file>
-
-<file path="templates/faturas.html">
-{% extends 'base.html' %}
-{% block title %}Faturas · Verly{% endblock %}
-
-{% block extra_head %}
-<style>
-.items-chip { position:relative; display:inline-flex; align-items:center; gap:5px; background:var(--surface3); border:1px solid var(--border); border-radius:6px; padding:3px 10px; font-size:12px; color:var(--text-muted); cursor:default; }
-.items-chip:hover { border-color:var(--border-hover); color:var(--text); }
-.items-tooltip { display:none; position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; min-width:180px; max-width:260px; z-index:100; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
-.items-chip:hover .items-tooltip { display:block; }
-.items-tooltip li { list-style:none; font-size:12px; color:var(--text); padding:3px 0; display:flex; align-items:center; gap:6px; }
-.items-tooltip li::before { content:''; width:5px; height:5px; border-radius:50%; background:var(--brand); flex-shrink:0; }
-
-.row-link { cursor:pointer; }
-.row-link:hover td { background:rgba(74,58,255,0.04); }
-</style>
-{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Faturas</h1>
-        <p class="page-sub">{{ faturas|length }} fatura(s) · Total filtrado: {{ "%.2f"|format(total_filtrado) }} €</p>
-    </div>
-    <a href="{{ url_for('exportar.exportar_pdf') }}" class="btn-ghost">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Exportar PDF
-    </a>
-</div>
-
-<!-- UPLOAD -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-header"><h3>Submeter Nova Fatura</h3></div>
-    <div class="card-body">
-        <div class="upload-zone" id="uploadZone">
-            <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.txt" onchange="handleFileSelect(this)">
-            <div class="upload-icon">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            </div>
-            <strong id="uploadLabel">Arrastar ou clicar para selecionar</strong>
-            <p id="uploadSub">PDF, PNG, JPG, TXT aceites</p>
-        </div>
-        <button class="btn-accent" id="btnUpload" style="display:none;margin-top:14px;" onclick="uploadFile()">
-            Analisar com IA →
-        </button>
-        <div class="upload-status" id="uploadStatus"></div>
-    </div>
-</div>
-
-<!-- FILTROS -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-body" style="padding:16px 20px;">
-        <form method="GET" action="{{ url_for('faturas.faturas') }}" class="filtros-form">
-            <input type="text" name="q" value="{{ search }}" placeholder="Pesquisar loja, item..." class="filtro-input">
-            <select name="categoria" class="filtro-select">
-                <option value="">Todas as categorias</option>
-                {% for cat in categorias %}
-                <option value="{{ cat }}" {% if cat == categoria_sel %}selected{% endif %}>{{ cat }}</option>
-                {% endfor %}
-            </select>
-            <select name="ordenar" class="filtro-select">
-                <option value="recente" {% if ordenar == 'recente' %}selected{% endif %}>Mais recente</option>
-                <option value="antigo" {% if ordenar == 'antigo' %}selected{% endif %}>Mais antigo</option>
-                <option value="maior" {% if ordenar == 'maior' %}selected{% endif %}>Maior valor</option>
-                <option value="menor" {% if ordenar == 'menor' %}selected{% endif %}>Menor valor</option>
-            </select>
-            <button type="submit" class="btn-accent">Filtrar</button>
-            {% if search or categoria_sel %}
-            <a href="{{ url_for('faturas.faturas') }}" class="btn-ghost">Limpar</a>
-            {% endif %}
-        </form>
-    </div>
-</div>
-
-<!-- TABELA -->
-<div class="card">
-    <div class="card-header"><h3>Faturas Registadas</h3></div>
-    <div class="card-body" style="padding:0;">
-        {% if faturas %}
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Loja</th>
-                    <th>Categoria</th>
-                    <th>Data Compra</th>
-                    <th>Total</th>
-                    <th>Items</th>
-                    <th>Prazos</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for f in faturas %}
-                <tr id="row-{{ f.id }}" class="row-link" onclick="goToDetail(event, {{ f.id }})">
-                    <td>
-                        <div style="display:flex;flex-direction:column;gap:2px;">
-                            <span style="font-weight:600;color:var(--text);">{{ f.loja or '—' }}</span>
-                            <span style="font-size:11px;color:var(--text-sub);">{{ f.nome_ficheiro }}</span>
-                        </div>
-                    </td>
-                    <td>
-                        <select class="cat-select" onchange="editarCategoria({{ f.id }}, this.value)" onclick="event.stopPropagation()">
-                            {% for cat in categorias %}
-                            <option value="{{ cat }}" {% if cat == f.categoria %}selected{% endif %}>{{ cat }}</option>
-                            {% endfor %}
-                        </select>
-                    </td>
-                    <td class="text-muted">{{ f.data_compra or '—' }}</td>
-                    <td class="{% if f.total and f.total > 100 %}text-danger{% endif %}" style="font-weight:600;">
-                        {% if f.total %}{{ "%.2f"|format(f.total) }} €{% else %}—{% endif %}
-                    </td>
-                    <td onclick="event.stopPropagation()">
-                        {% if f.items_list %}
-                        <div class="items-chip">
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                            {{ f.items_list|length }}
-                            <div class="items-tooltip">
-                                <ul>
-                                {% for item in f.items_list[:6] %}
-                                    <li>{{ item }}</li>
-                                {% endfor %}
-                                {% if f.items_list|length > 6 %}
-                                    <li style="color:var(--text-muted);">+{{ f.items_list|length - 6 }} mais...</li>
-                                {% endif %}
-                                </ul>
-                            </div>
-                        </div>
-                        {% else %}
-                        <span style="color:var(--text-sub);font-size:12px;">—</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div style="display:flex;flex-direction:column;gap:3px;">
-                            {% if f.data_devolucao %}
-                            <span style="font-size:11px;color:var(--yellow);">Dev: {{ f.data_devolucao }}</span>
-                            {% endif %}
-                            {% if f.data_garantia %}
-                            <span style="font-size:11px;color:var(--green);">Gar: {{ f.data_garantia }}</span>
-                            {% endif %}
-                            {% if not f.data_devolucao and not f.data_garantia %}
-                            <span style="color:var(--text-sub);font-size:12px;">—</span>
-                            {% endif %}
-                        </div>
-                    </td>
-                    <td onclick="event.stopPropagation()">
-                        <div style="display:flex;gap:6px;align-items:center;">
-                            <a href="/faturas/{{ f.id }}" style="display:flex;align-items:center;padding:5px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:7px;color:var(--text-muted);font-size:12px;text-decoration:none;gap:4px;transition:all 0.2s;" onmouseover="this.style.borderColor='var(--brand)';this.style.color='var(--brand)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                Ver
-                            </a>
-                            <button class="btn-delete" onclick="deleteFatura({{ f.id }})">✕</button>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <div class="empty-card">
-            <div style="width:48px;height:48px;background:var(--surface2);border-radius:12px;display:flex;align-items:center;justify-content:center;margin:0 auto 16px;">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            </div>
-            <p>Nenhuma fatura encontrada.<br>
-            {% if search or categoria_sel %}Tenta outros filtros.{% else %}Submete uma fatura acima para começar.{% endif %}</p>
-        </div>
-        {% endif %}
-    </div>
-</div>
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-let selectedFile = null;
-
-function goToDetail(e, id) {
-    window.location.href = '/faturas/' + id;
-}
-
-function handleFileSelect(input) {
-    selectedFile = input.files[0];
-    if (selectedFile) {
-        document.getElementById('uploadLabel').textContent = selectedFile.name;
-        document.getElementById('uploadSub').textContent = (selectedFile.size / 1024).toFixed(1) + ' KB';
-        document.getElementById('btnUpload').style.display = 'block';
-    }
-}
-
-const zone = document.getElementById('uploadZone');
-zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-zone.addEventListener('drop', e => {
-    e.preventDefault(); zone.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file) {
-        selectedFile = file;
-        document.getElementById('uploadLabel').textContent = file.name;
-        document.getElementById('uploadSub').textContent = (file.size / 1024).toFixed(1) + ' KB';
-        document.getElementById('btnUpload').style.display = 'block';
-    }
-});
-
-async function uploadFile() {
-    if (!selectedFile) return;
-    const btn = document.getElementById('btnUpload');
-    btn.disabled = true; btn.textContent = 'A analisar...';
-    setStatus('loading', 'A analisar a fatura com IA...');
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    try {
-        const res = await fetch('/faturas/upload', { method: 'POST', body: formData });
-        const data = await res.json();
-        if (data.success) {
-            setStatus('success', `✓ ${data.message} — ${data.loja} · ${data.categoria}`);
-            setTimeout(() => location.reload(), 1500);
-        } else {
-            setStatus('error', '✗ ' + data.message);
-        }
-    } catch(e) { setStatus('error', '✗ Erro de ligação.'); }
-    btn.disabled = false; btn.textContent = 'Analisar com IA →';
-}
-
-function setStatus(type, msg) {
-    const el = document.getElementById('uploadStatus');
-    el.className = 'upload-status ' + type;
-    el.textContent = msg;
-}
-
-async function editarCategoria(id, valor) {
-    await fetch(`/faturas/editar/${id}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ categoria: valor })
-    });
-}
-
-async function deleteFatura(id) {
-    if (!confirm('Remover esta fatura?')) return;
-    const res = await fetch(`/faturas/delete/${id}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (data.success) document.getElementById('row-' + id).remove();
-}
-</script>
-{% endblock %}
-</file>
-
 <file path="templates/base.html">
 <!DOCTYPE html>
 <html lang="pt">
@@ -6028,131 +6320,297 @@ async function deleteFatura(id) {
     <title>{% block title %}Verly{% endblock %}</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* ── Variáveis de largura ─────────────────────────── */
+        :root {
+            --nav-width:     240px;
+            --nav-collapsed: 64px;
+        }
+
+        /* ── Sidebar ─────────────────────────────────────── */
+        .sidenav {
+            width: var(--nav-width);
+            transition: width 0.25s cubic-bezier(.4,0,.2,1);
+            overflow: hidden;
+            will-change: width;
+        }
+        .sidenav.collapsed { width: var(--nav-collapsed); }
+
+        /* ── Main content acompanha ───────────────────────── */
+        .main-content {
+            margin-left: var(--nav-width);
+            transition: margin-left 0.25s cubic-bezier(.4,0,.2,1);
+        }
+        .sidenav.collapsed ~ .main-content {
+            margin-left: var(--nav-collapsed);
+        }
+
+        /* ── Logo row ─────────────────────────────────────── */
+        .sidenav-logo {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 20px 10px 16px;
+            margin-bottom: 4px;
+        }
+        .sidenav-logo-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            overflow: hidden;
+            flex: 1;
+            min-width: 0;
+        }
+
+        /* ── Botão hambúrguer ─────────────────────────────── */
+        .nav-toggle {
+            width: 34px; height: 34px;
+            border-radius: 8px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+            padding: 0;
+        }
+        .nav-toggle:hover { background: var(--surface2); color: var(--text); }
+
+        /* ── Textos que desaparecem ───────────────────────── */
+        .nav-label,
+        .logo-text,
+        .sidenav-section,
+        .user-details {
+            transition: opacity 0.2s ease, max-width 0.25s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            max-width: 180px;
+        }
+        .sidenav.collapsed .nav-label,
+        .sidenav.collapsed .logo-text,
+        .sidenav.collapsed .user-details {
+            opacity: 0;
+            max-width: 0;
+            pointer-events: none;
+        }
+        .sidenav.collapsed .sidenav-section {
+            opacity: 0;
+            font-size: 0;
+            margin: 6px 0 2px;
+        }
+
+        /* ── Links centram quando colapsado ──────────────── */
+        .sidenav.collapsed .nav-link {
+            justify-content: center;
+            padding: 10px 0;
+        }
+        .sidenav.collapsed .sidenav-footer {
+            justify-content: center;
+            padding: 12px 0 20px;
+        }
+        .sidenav.collapsed .user-info { flex: 0; }
+
+        /* ── Tooltip ao colapsar ─────────────────────────── */
+        .sidenav.collapsed .nav-link:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            left: calc(var(--nav-collapsed) + 4px);
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 12px;
+            font-weight: 600;
+            padding: 5px 10px;
+            border-radius: 6px;
+            white-space: nowrap;
+            z-index: 300;
+            box-shadow: var(--shadow);
+            pointer-events: none;
+        }
+    </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
 <div class="app-layout">
-    <nav class="sidenav">
+
+    <nav class="sidenav" id="sidenav">
+        <!-- Logo + botão hambúrguer -->
         <div class="sidenav-logo">
-            <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Verly" style="height:36px;width:auto;">
-            <span class="logo-text">Verly</span>
+            <div class="sidenav-logo-left">
+                <img src="{{ url_for('static', filename='img/logo.png') }}"
+                     alt="Verly" style="height:32px;width:auto;flex-shrink:0;">
+                <span class="logo-text">Verly</span>
+            </div>
+            <button class="nav-toggle" id="navToggle" title="Colapsar menu" aria-label="Toggle menu">
+                <!-- ícone hambúrguer (substitído por JS) -->
+                <svg id="toggleIcon" width="18" height="18" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="3" y1="6"  x2="21" y2="6"/>
+                    <line x1="3" y1="12" x2="21" y2="12"/>
+                    <line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+            </button>
         </div>
 
+        <!-- PRINCIPAL -->
         <span class="sidenav-section">Principal</span>
         <ul class="sidenav-menu">
             <li>
-                <a href="{{ url_for('dashboard.dashboard') }}" class="nav-link {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}">
+                <a href="{{ url_for('dashboard.dashboard') }}"
+                   class="nav-link {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}"
+                   data-tooltip="Dashboard">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
-                            <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+                            <rect x="3" y="3" width="7" height="7" rx="1"/>
+                            <rect x="14" y="3" width="7" height="7" rx="1"/>
+                            <rect x="3" y="14" width="7" height="7" rx="1"/>
+                            <rect x="14" y="14" width="7" height="7" rx="1"/>
                         </svg>
                     </span>
-                    <span>Dashboard</span>
+                    <span class="nav-label">Dashboard</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('faturas.faturas') }}" class="nav-link {% if request.endpoint and 'faturas' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('faturas.faturas') }}"
+                   class="nav-link {% if request.endpoint and 'faturas' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Faturas">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                            <line x1="10" y1="9"  x2="8" y2="9"/>
                         </svg>
                     </span>
-                    <span>Faturas</span>
+                    <span class="nav-label">Faturas</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('chat.chat') }}" class="nav-link {% if request.endpoint == 'chat.chat' %}active{% endif %}">
+                <a href="{{ url_for('chat.chat') }}"
+                   class="nav-link {% if request.endpoint == 'chat.chat' %}active{% endif %}"
+                   data-tooltip="Assistente IA">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
                         </svg>
                     </span>
-                    <span>Assistente IA</span>
+                    <span class="nav-label">Assistente IA</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('metas.metas') }}" class="nav-link {% if request.endpoint and 'metas' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('metas.metas') }}"
+                   class="nav-link {% if request.endpoint and 'metas' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Metas">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+                            <line x1="18" y1="20" x2="18" y2="10"/>
+                            <line x1="12" y1="20" x2="12" y2="4"/>
+                            <line x1="6"  y1="20" x2="6"  y2="14"/>
                         </svg>
                     </span>
-                    <span>Metas</span>
+                    <span class="nav-label">Metas</span>
                 </a>
             </li>
         </ul>
 
+        <!-- FERRAMENTAS -->
         <span class="sidenav-section">Ferramentas</span>
         <ul class="sidenav-menu">
             <li>
-                <a href="{{ url_for('scoring.analisar') }}" class="nav-link {% if request.endpoint and 'scoring' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('scoring.analisar') }}"
+                   class="nav-link {% if request.endpoint and 'scoring' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Score de Compras">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
                         </svg>
                     </span>
-                    <span>Score de Compras</span>
+                    <span class="nav-label">Score de Compras</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('subscriptions.subscriptions') }}" class="nav-link {% if request.endpoint and 'subscriptions' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('subscriptions.subscriptions') }}"
+                   class="nav-link {% if request.endpoint and 'subscriptions' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Leak Detector">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                         </svg>
                     </span>
-                    <span>Leak Detector</span>
+                    <span class="nav-label">Leak Detector</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('impulse.impulse') }}" class="nav-link {% if request.endpoint and 'impulse' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('impulse.impulse') }}"
+                   class="nav-link {% if request.endpoint and 'impulse' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Impulse Control">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                            <circle cx="12" cy="12" r="10"/>
+                            <line x1="12" y1="8"     x2="12"   y2="12"/>
+                            <line x1="12" y1="16"    x2="12.01" y2="16"/>
                         </svg>
                     </span>
-                    <span>Impulse Control</span>
+                    <span class="nav-label">Impulse Control</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('reports.relatorio') }}" class="nav-link {% if request.endpoint and 'reports' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('reports.relatorio') }}"
+                   class="nav-link {% if request.endpoint and 'reports' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Relatório Mensal">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
                         </svg>
                     </span>
-                    <span>Relatório Mensal</span>
+                    <span class="nav-label">Relatório Mensal</span>
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('personality.personality') }}" class="nav-link {% if request.endpoint and 'personality' in request.endpoint %}active{% endif %}">
+                <a href="{{ url_for('personality.personality') }}"
+                   class="nav-link {% if request.endpoint and 'personality' in request.endpoint %}active{% endif %}"
+                   data-tooltip="Personalidade">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
                         </svg>
                     </span>
-                    <span>Personalidade</span>
+                    <span class="nav-label">Personalidade</span>
                 </a>
             </li>
         </ul>
 
+        <!-- CONTA -->
         <span class="sidenav-section">Conta</span>
         <ul class="sidenav-menu">
             <li>
-                <a href="{{ url_for('perfil.perfil') }}" class="nav-link {% if request.endpoint == 'perfil.perfil' %}active{% endif %}">
+                <a href="{{ url_for('perfil.perfil') }}"
+                   class="nav-link {% if request.endpoint == 'perfil.perfil' %}active{% endif %}"
+                   data-tooltip="Perfil">
                     <span class="nav-icon">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                            <circle cx="12" cy="7" r="4"/>
                         </svg>
                     </span>
-                    <span>Perfil</span>
+                    <span class="nav-label">Perfil</span>
                 </a>
             </li>
         </ul>
 
+        <!-- Footer: utilizador + logout -->
         <div class="sidenav-footer">
             <div class="user-info">
                 <div class="user-avatar">{{ current_user.nome[0].upper() }}</div>
@@ -6162,7 +6620,9 @@ async function deleteFatura(id) {
                 </div>
             </div>
             <a href="{{ url_for('auth.logout') }}" class="btn-logout" title="Sair">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"
+                     viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
                     <polyline points="16 17 21 12 16 7"/>
                     <line x1="21" y1="12" x2="9" y2="12"/>
@@ -6171,7 +6631,7 @@ async function deleteFatura(id) {
         </div>
     </nav>
 
-    <main class="main-content">
+    <main class="main-content" id="mainContent">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 <div class="flash-messages">
@@ -6184,7 +6644,39 @@ async function deleteFatura(id) {
         {% block content %}{% endblock %}
     </main>
 </div>
+
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+<script>
+// ── Sidebar toggle ────────────────────────────────────────────────────────────
+(function () {
+    const nav    = document.getElementById('sidenav');
+    const main   = document.getElementById('mainContent');
+    const toggle = document.getElementById('navToggle');
+    const icon   = document.getElementById('toggleIcon');
+    const KEY    = 'verly_nav_collapsed';
+
+    const ICON_HAMBURGER = `
+        <line x1="3" y1="6"  x2="21" y2="6"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>`;
+    const ICON_CLOSE = `
+        <line x1="18" y1="6" x2="6"  y2="18"/>
+        <line x1="6"  y1="6" x2="18" y2="18"/>`;
+
+    function apply(collapsed) {
+        nav.classList.toggle('collapsed', collapsed);
+        main.style.marginLeft = collapsed ? 'var(--nav-collapsed)' : 'var(--nav-width)';
+        icon.innerHTML        = collapsed ? ICON_CLOSE : ICON_HAMBURGER;
+        toggle.title          = collapsed ? 'Expandir menu' : 'Colapsar menu';
+        localStorage.setItem(KEY, collapsed ? '1' : '0');
+    }
+
+    // Restaura estado guardado
+    apply(localStorage.getItem(KEY) === '1');
+
+    toggle.addEventListener('click', () => apply(!nav.classList.contains('collapsed')));
+})();
+</script>
 {% block extra_scripts %}{% endblock %}
 </body>
 </html>

@@ -1,6 +1,22 @@
 {% extends 'base.html' %}
 {% block title %}Score de Compras · Verly{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+.mapa-spinner {
+    width:32px;height:32px;
+    border:3px solid var(--border);
+    border-top-color:var(--brand);
+    border-radius:50%;
+    animation:spin 0.8s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+#mapaDiv { height:220px; }
+#mapaDiv .leaflet-container { background:var(--bg)!important; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <div>
@@ -9,135 +25,133 @@
     </div>
 </div>
 
-<div style="max-width:680px;">
+<!-- GRID: formulário + mapa lado a lado -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;">
 
-    <!-- FORMULÁRIO -->
-    <div class="card" style="margin-bottom:20px;">
-        <div class="card-header"><h3>Analisar Compra</h3></div>
-        <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
+    <!-- COLUNA ESQUERDA -->
+    <div style="display:flex;flex-direction:column;gap:20px;">
 
-            <div>
-                <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Nome do item</label>
-                <input
-                    id="itemInput"
-                    type="text"
-                    placeholder="Ex: iPhone 16 Pro, Adidas Samba, Sofá Ikea..."
-                    style="
-                        width:100%; background:var(--surface2); border:1px solid var(--border);
-                        border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                        font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                        transition:border-color 0.2s;
-                    "
-                    onfocus="this.style.borderColor='var(--brand)'"
-                    onblur="this.style.borderColor='var(--border)'"
-                >
-            </div>
+        <!-- Formulário -->
+        <div class="card">
+            <div class="card-header"><h3>Analisar Compra</h3></div>
+            <div class="card-body" style="display:flex;flex-direction:column;gap:16px;">
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
                 <div>
-                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Preço (€)</label>
-                    <input
-                        id="precoInput"
-                        type="number"
-                        min="0"
-                        placeholder="0.00"
-                        style="
-                            width:100%; background:var(--surface2); border:1px solid var(--border);
-                            border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                            font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                            transition:border-color 0.2s;
-                        "
+                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Nome do item</label>
+                    <input id="itemInput" type="text"
+                        placeholder="Ex: iPhone 16 Pro, Adidas Samba, Sofá Ikea..."
+                        style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
                         onfocus="this.style.borderColor='var(--brand)'"
-                        onblur="this.style.borderColor='var(--border)'"
-                    >
+                        onblur="this.style.borderColor='var(--border)'">
                 </div>
+
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Preço (€)</label>
+                        <input id="precoInput" type="number" min="0" placeholder="0.00"
+                            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;transition:border-color 0.2s;"
+                            onfocus="this.style.borderColor='var(--brand)'"
+                            onblur="this.style.borderColor='var(--border)'">
+                    </div>
+                    <div>
+                        <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Categoria</label>
+                        <select id="categoriaInput"
+                            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Outfit',sans-serif;font-size:14px;padding:10px 14px;outline:none;box-sizing:border-box;cursor:pointer;">
+                            <option value="Outros">Outros</option>
+                            <option value="Alimentação">Alimentação</option>
+                            <option value="Tecnologia">Tecnologia</option>
+                            <option value="Vestuário">Vestuário</option>
+                            <option value="Entretenimento">Entretenimento</option>
+                            <option value="Saúde & Beleza">Saúde & Beleza</option>
+                            <option value="Casa & Decoração">Casa & Decoração</option>
+                            <option value="Desporto">Desporto</option>
+                            <option value="Educação">Educação</option>
+                            <option value="Transportes">Transportes</option>
+                        </select>
+                    </div>
+                </div>
+
                 <div>
-                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:6px;">Categoria</label>
-                    <select id="categoriaInput" style="
-                        width:100%; background:var(--surface2); border:1px solid var(--border);
-                        border-radius:8px; color:var(--text); font-family:'Outfit',sans-serif;
-                        font-size:14px; padding:10px 14px; outline:none; box-sizing:border-box;
-                        transition:border-color 0.2s; cursor:pointer;
-                    ">
-                        <option value="Outros">Outros</option>
-                        <option value="Alimentação">Alimentação</option>
-                        <option value="Tecnologia">Tecnologia</option>
-                        <option value="Vestuário">Vestuário</option>
-                        <option value="Entretenimento">Entretenimento</option>
-                        <option value="Saúde & Beleza">Saúde & Beleza</option>
-                        <option value="Casa & Decoração">Casa & Decoração</option>
-                        <option value="Desporto">Desporto</option>
-                        <option value="Educação">Educação</option>
-                        <option value="Transportes">Transportes</option>
-                    </select>
+                    <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:8px;">Com que frequência vais usar?</label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;" id="usoGroup">
+                        {% for key, label in [('daily','Diariamente'),('weekly','Regularmente'),('monthly','Às vezes'),('rarely','Raramente'),('never','Nunca')] %}
+                        <button class="uso-btn" data-uso="{{ key }}"
+                            onclick="selecionarUso('{{ key }}', this)"
+                            style="padding:7px 14px;border-radius:20px;border:1px solid var(--border);background:var(--surface2);color:var(--text-muted);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:all 0.2s;">
+                            {{ label }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <button onclick="analisarCompra()" id="btnAnalisar"
+                    style="background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 24px;font-size:15px;font-weight:700;cursor:pointer;font-family:'Outfit',sans-serif;transition:opacity 0.2s;width:100%;">
+                    Analisar Compra →
+                </button>
+            </div>
+        </div>
+
+        <!-- Resultado (oculto até análise) -->
+        <div id="resultado" style="display:none;">
+            <div class="card">
+                <div class="card-header">
+                    <h3 id="resItem" style="font-size:16px;"></h3>
+                    <span id="resLabel" style="font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;"></span>
+                </div>
+                <div class="card-body">
+                    <div style="display:flex;align-items:center;gap:24px;margin-bottom:16px;">
+                        <div style="position:relative;width:90px;height:90px;flex-shrink:0;">
+                            <svg width="90" height="90" viewBox="0 0 90 90">
+                                <circle cx="45" cy="45" r="36" fill="none" stroke="var(--border)" stroke-width="8"/>
+                                <circle id="scoreCircle" cx="45" cy="45" r="36" fill="none"
+                                    stroke="var(--brand)" stroke-width="8" stroke-linecap="round"
+                                    stroke-dasharray="226" stroke-dashoffset="226"
+                                    transform="rotate(-90 45 45)"
+                                    style="transition:stroke-dashoffset 0.8s ease,stroke 0.4s ease;"/>
+                            </svg>
+                            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;">
+                                <div id="scoreNum" style="font-size:22px;font-weight:800;font-family:'Sora',sans-serif;color:var(--text);"></div>
+                                <div style="font-size:10px;color:var(--text-sub);">/100</div>
+                            </div>
+                        </div>
+                        <div style="flex:1;">
+                            <div id="resMessage" style="font-size:14px;color:var(--text-sub);line-height:1.5;margin-bottom:12px;"></div>
+                            <div id="resChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
-
-            <div>
-                <label style="display:block;font-size:13px;font-weight:600;color:var(--text-sub);margin-bottom:8px;">Com que frequência vais usar?</label>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;" id="usoGroup">
-                    {% for key, label in [('daily','Diariamente'), ('weekly','Regularmente'), ('monthly','Às vezes'), ('rarely','Raramente'), ('never','Nunca')] %}
-                    <button
-                        class="uso-btn"
-                        data-uso="{{ key }}"
-                        onclick="selecionarUso('{{ key }}', this)"
-                        style="
-                            padding:7px 14px; border-radius:20px; border:1px solid var(--border);
-                            background:var(--surface2); color:var(--text-muted);
-                            font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;
-                            transition:all 0.2s;
-                        "
-                    >{{ label }}</button>
-                    {% endfor %}
-                </div>
-            </div>
-
-            <button
-                onclick="analisarCompra()"
-                id="btnAnalisar"
-                style="
-                    background:var(--brand); color:#fff; border:none; border-radius:10px;
-                    padding:12px 24px; font-size:15px; font-weight:700; cursor:pointer;
-                    font-family:'Outfit',sans-serif; transition:opacity 0.2s; width:100%;
-                "
-            >Analisar Compra →</button>
         </div>
     </div>
 
-    <!-- RESULTADO -->
-    <div id="resultado" style="display:none;">
-        <div class="card">
-            <div class="card-header">
-                <h3 id="resItem" style="font-size:16px;"></h3>
-                <span id="resLabel" style="font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;"></span>
+    <!-- COLUNA DIREITA: mapa -->
+    <div>
+        <div class="card" style="overflow:hidden;">
+            <div class="card-header" style="padding:14px 16px;">
+                <h3 style="font-size:14px;">📍 Lojas Próximas</h3>
+                <span id="mapaStatus" style="font-size:12px;color:var(--text-sub);">Analisa um produto para ver lojas</span>
             </div>
-            <div class="card-body">
 
-                <!-- Score ring -->
-                <div style="display:flex;align-items:center;gap:24px;margin-bottom:20px;">
-                    <div style="position:relative;width:90px;height:90px;flex-shrink:0;">
-                        <svg width="90" height="90" viewBox="0 0 90 90">
-                            <circle cx="45" cy="45" r="36" fill="none" stroke="var(--border)" stroke-width="8"/>
-                            <circle id="scoreCircle" cx="45" cy="45" r="36" fill="none"
-                                stroke="var(--brand)" stroke-width="8"
-                                stroke-linecap="round"
-                                stroke-dasharray="226"
-                                stroke-dashoffset="226"
-                                transform="rotate(-90 45 45)"
-                                style="transition:stroke-dashoffset 0.8s ease, stroke 0.4s ease;"
-                            />
-                        </svg>
-                        <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;">
-                            <div id="scoreNum" style="font-size:22px;font-weight:800;font-family:'Sora',sans-serif;color:var(--text);"></div>
-                            <div style="font-size:10px;color:var(--text-sub);">/ 100</div>
-                        </div>
-                    </div>
-                    <div>
-                        <div id="resMessage" style="font-size:14px;color:var(--text-sub);line-height:1.5;margin-bottom:12px;"></div>
-                        <div id="resChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-                    </div>
-                </div>
+            <!-- Estado vazio -->
+            <div id="mapaVazio" style="padding:48px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;color:var(--text-sub);text-align:center;">
+                <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25;">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+                </svg>
+                <p style="font-size:13px;max-width:200px;line-height:1.6;margin:0;" id="mapaVazioMsg">
+                    Após analisar um produto, mostramos lojas próximas onde o podes comprar.
+                </p>
+            </div>
 
+            <!-- Loading -->
+            <div id="mapaLoading" style="display:none;padding:48px 24px;flex-direction:column;align-items:center;gap:12px;color:var(--text-sub);">
+                <div class="mapa-spinner"></div>
+                <p style="font-size:13px;margin:0;">A procurar lojas próximas...</p>
+            </div>
+
+            <!-- Mapa + lista (aparece após pesquisa) -->
+            <div id="mapaConteudo" style="display:none;">
+                <div id="mapaDiv"></div>
+                <div id="lojasList" style="max-height:220px;overflow-y:auto;padding:8px 16px;display:flex;flex-direction:column;gap:0;"></div>
             </div>
         </div>
     </div>
@@ -146,35 +160,20 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+// ── Estado ──────────────────────────────────────────────────────────────────
 let usoSelecionado = 'monthly';
-
-// Selecionar uso
-function selecionarUso(uso, btn) {
-    usoSelecionado = uso;
-    document.querySelectorAll('.uso-btn').forEach(b => {
-        b.style.background = 'var(--surface2)';
-        b.style.color = 'var(--text-muted)';
-        b.style.borderColor = 'var(--border)';
-    });
-    btn.style.background = 'rgba(123,97,255,0.12)';
-    btn.style.color = 'var(--brand)';
-    btn.style.borderColor = 'var(--brand)';
-}
-
-// Selecionar "Às vezes" por defeito ao carregar
-window.addEventListener('DOMContentLoaded', () => {
-    const btn = document.querySelector('[data-uso="monthly"]');
-    if (btn) selecionarUso('monthly', btn);
-});
+let mapaInstance   = null;
+let userLat = null, userLng = null;
 
 const SCORE_COLORS = {
-    green:  { stroke: '#00D68F', bg: 'rgba(0,214,143,0.12)', text: '#00D68F' },
-    brand2: { stroke: '#7B61FF', bg: 'rgba(123,97,255,0.12)', text: '#7B61FF' },
-    yellow: { stroke: '#FFB800', bg: 'rgba(255,184,0,0.12)', text: '#FFB800' },
-    orange: { stroke: '#FF8C00', bg: 'rgba(255,140,0,0.12)', text: '#FF8C00' },
-    red:    { stroke: '#FF4757', bg: 'rgba(255,71,87,0.12)', text: '#FF4757' },
-    muted:  { stroke: 'var(--border)', bg: 'var(--surface2)', text: 'var(--text-muted)' },
+    green:  {stroke:'#00D68F', bg:'rgba(0,214,143,0.12)',  text:'#00D68F'},
+    brand2: {stroke:'#7B61FF', bg:'rgba(123,97,255,0.12)', text:'#7B61FF'},
+    yellow: {stroke:'#FFB800', bg:'rgba(255,184,0,0.12)',  text:'#FFB800'},
+    orange: {stroke:'#FF8C00', bg:'rgba(255,140,0,0.12)',  text:'#FF8C00'},
+    red:    {stroke:'#FF4757', bg:'rgba(255,71,87,0.12)',  text:'#FF4757'},
+    muted:  {stroke:'#333',    bg:'var(--surface2)',        text:'var(--text-muted)'},
 };
 
 const CHIP_STYLES = {
@@ -183,19 +182,54 @@ const CHIP_STYLES = {
     mid:  'background:var(--surface2);color:var(--text-sub);border:1px solid var(--border);',
 };
 
+// ── Init ─────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+    // Seleciona uso padrão
+    const btn = document.querySelector('[data-uso="monthly"]');
+    if (btn) selecionarUso('monthly', btn);
+
+    // Pede GPS logo no carregamento (o browser só pergunta uma vez)
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            pos => { userLat = pos.coords.latitude; userLng = pos.coords.longitude; },
+            ()  => { userLat = null; userLng = null; },
+            {timeout: 8000}
+        );
+    }
+});
+
+// ── Seleção de uso ────────────────────────────────────────────────────────────
+function selecionarUso(uso, btn) {
+    usoSelecionado = uso;
+    document.querySelectorAll('.uso-btn').forEach(b => {
+        b.style.background   = 'var(--surface2)';
+        b.style.color        = 'var(--text-muted)';
+        b.style.borderColor  = 'var(--border)';
+    });
+    btn.style.background  = 'rgba(123,97,255,0.12)';
+    btn.style.color       = 'var(--brand)';
+    btn.style.borderColor = 'var(--brand)';
+}
+
+// ── Analisar compra ───────────────────────────────────────────────────────────
 async function analisarCompra() {
     const item      = document.getElementById('itemInput').value.trim();
     const preco     = parseFloat(document.getElementById('precoInput').value) || 0;
     const categoria = document.getElementById('categoriaInput').value;
 
+    // Validação
     if (!item) {
-        document.getElementById('itemInput').style.borderColor = '#FF4757';
-        document.getElementById('itemInput').focus();
+        const el = document.getElementById('itemInput');
+        el.style.borderColor = '#FF4757';
+        el.focus();
+        setTimeout(() => el.style.borderColor = 'var(--border)', 2000);
         return;
     }
     if (preco <= 0) {
-        document.getElementById('precoInput').style.borderColor = '#FF4757';
-        document.getElementById('precoInput').focus();
+        const el = document.getElementById('precoInput');
+        el.style.borderColor = '#FF4757';
+        el.focus();
+        setTimeout(() => el.style.borderColor = 'var(--border)', 2000);
         return;
     }
 
@@ -203,61 +237,155 @@ async function analisarCompra() {
     btn.disabled = true;
     btn.textContent = 'A analisar...';
 
+    // Mostra loading no mapa em paralelo
+    mostrarMapaLoading(item);
+
     try {
-        const res = await fetch('/scoring/analisar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ item, preco, categoria, uso: usoSelecionado }),
+        const res  = await fetch('/scoring/analisar', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({item, preco, categoria, uso: usoSelecionado}),
         });
         const data = await res.json();
-
-        if (!data.success) throw new Error(data.message || 'Erro');
-
-        mostrarResultado(data.resultado);
+        if (!data.success) throw new Error(data.message || 'Erro desconhecido');
+        mostrarResultado(data.resultado, item);
     } catch (e) {
-        alert('Erro: ' + e.message);
+        alert('Erro ao analisar: ' + e.message);
     } finally {
         btn.disabled = false;
         btn.textContent = 'Analisar Compra →';
     }
+
+    // Busca lojas (não bloqueia o resultado)
+    buscarLojasProximas(item, categoria);
 }
 
-function mostrarResultado(r) {
+// ── Resultado ─────────────────────────────────────────────────────────────────
+function mostrarResultado(r, item) {
     const colors = SCORE_COLORS[r.color] || SCORE_COLORS.muted;
 
-    // Item name
-    document.getElementById('resItem').textContent = r.item || 'Compra';
+    document.getElementById('resItem').textContent = item;
 
-    // Label badge
     const lbl = document.getElementById('resLabel');
     lbl.textContent = r.label;
     lbl.style.cssText = `font-size:13px;font-weight:700;padding:4px 12px;border-radius:12px;background:${colors.bg};color:${colors.text};`;
 
-    // Score number
     document.getElementById('scoreNum').textContent = r.score;
-
-    // Score circle animation
-    const circle = document.getElementById('scoreCircle');
-    const circumference = 226;
-    const offset = circumference - (r.score / 100) * circumference;
     setTimeout(() => {
-        circle.style.strokeDashoffset = offset;
+        const circle = document.getElementById('scoreCircle');
+        circle.style.strokeDashoffset = 226 - (r.score / 100) * 226;
         circle.style.stroke = colors.stroke;
     }, 50);
 
-    // Message
     document.getElementById('resMessage').textContent = r.message;
-
-    // Chips
-    const chipsEl = document.getElementById('resChips');
-    chipsEl.innerHTML = (r.chips || []).map(c =>
+    document.getElementById('resChips').innerHTML = (r.chips || []).map(c =>
         `<span style="font-size:12px;font-weight:600;padding:4px 10px;border-radius:10px;${CHIP_STYLES[c.type] || CHIP_STYLES.mid}">${c.text}</span>`
     ).join('');
 
-    // Show
-    const resDiv = document.getElementById('resultado');
-    resDiv.style.display = 'block';
-    resDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const el = document.getElementById('resultado');
+    el.style.display = 'block';
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+// ── Mapa helpers ──────────────────────────────────────────────────────────────
+function mostrarMapaLoading(item) {
+    document.getElementById('mapaVazio').style.display    = 'none';
+    document.getElementById('mapaLoading').style.display  = 'flex';
+    document.getElementById('mapaConteudo').style.display = 'none';
+    document.getElementById('mapaStatus').textContent = `A procurar "${item}"...`;
+}
+
+function mostrarMapaErro(msg) {
+    document.getElementById('mapaLoading').style.display  = 'none';
+    document.getElementById('mapaConteudo').style.display = 'none';
+    document.getElementById('mapaVazio').style.display    = 'flex';
+    document.getElementById('mapaVazioMsg').textContent   = msg;
+    document.getElementById('mapaStatus').textContent     = 'Sem resultados';
+}
+
+// ── Busca lojas ───────────────────────────────────────────────────────────────
+async function buscarLojasProximas(item, categoria) {
+    // Se não temos GPS ainda, tenta obter agora
+    if (userLat === null || userLng === null) {
+        try {
+            const pos = await new Promise((resolve, reject) =>
+                navigator.geolocation.getCurrentPosition(resolve, reject, {timeout: 6000})
+            );
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+        } catch {
+            mostrarMapaErro('Ativa a localização no browser para ver lojas próximas.');
+            return;
+        }
+    }
+
+    try {
+        const res  = await fetch('/scoring/lojas-proximas', {
+            method:  'POST',
+            headers: {'Content-Type': 'application/json'},
+            body:    JSON.stringify({item, categoria, lat: userLat, lng: userLng}),
+        });
+        const data = await res.json();
+
+        if (!data.success || !data.lojas || data.lojas.length === 0) {
+            mostrarMapaErro('Nenhuma loja encontrada num raio de 5 km.');
+            return;
+        }
+
+        renderizarMapa(data.lojas, item);
+    } catch {
+        mostrarMapaErro('Erro ao procurar lojas. Tenta novamente.');
+    }
+}
+
+// ── Renderiza mapa Leaflet ────────────────────────────────────────────────────
+function renderizarMapa(lojas, item) {
+    document.getElementById('mapaLoading').style.display  = 'none';
+    document.getElementById('mapaVazio').style.display    = 'none';
+    document.getElementById('mapaConteudo').style.display = 'block';
+    document.getElementById('mapaStatus').textContent     = `${lojas.length} loja(s) encontrada(s)`;
+
+    // Remove mapa anterior se existir
+    if (mapaInstance) { mapaInstance.remove(); mapaInstance = null; }
+
+    const map = L.map('mapaDiv', {zoomControl:true, attributionControl:false})
+                 .setView([userLat, userLng], 14);
+    mapaInstance = map;
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {maxZoom:19})
+     .addTo(map);
+
+    // Marcador do utilizador
+    L.marker([userLat, userLng], {
+        icon: L.divIcon({
+            html: `<div style="width:14px;height:14px;background:#7B61FF;border:3px solid white;border-radius:50%;box-shadow:0 0 10px rgba(123,97,255,0.8);"></div>`,
+            className:'', iconAnchor:[7,7],
+        })
+    }).addTo(map).bindPopup('A tua localização');
+
+    // Marcadores das lojas
+    lojas.forEach((loja, i) => {
+        L.marker([loja.lat, loja.lng], {
+            icon: L.divIcon({
+                html: `<div style="width:26px;height:26px;background:linear-gradient(135deg,#4A3AFF,#7B61FF);border:2px solid white;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:white;box-shadow:0 2px 8px rgba(0,0,0,0.5);">${i+1}</div>`,
+                className:'', iconAnchor:[13,13],
+            })
+        }).addTo(map)
+          .bindPopup(`<b>${loja.nome}</b>${loja.endereco ? '<br>' + loja.endereco : ''}`);
+    });
+
+    // Lista
+    const lista = document.getElementById('lojasList');
+    lista.innerHTML = lojas.map((loja, i) => `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+            <div style="width:24px;height:24px;background:linear-gradient(135deg,#4A3AFF,#7B61FF);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:white;flex-shrink:0;">${i+1}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${loja.nome}</div>
+                ${loja.endereco ? `<div style="font-size:11px;color:var(--text-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${loja.endereco}</div>` : ''}
+            </div>
+            ${loja.distancia ? `<div style="font-size:11px;color:var(--brand-2);font-weight:700;flex-shrink:0;">${loja.distancia}</div>` : ''}
+        </div>
+    `).join('');
 }
 </script>
 {% endblock %}
