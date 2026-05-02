@@ -36,10 +36,18 @@ PERSONALIDADES = {
 }
 
 
+# Mapeamento de valores legacy para os 4 canónicos
+PERSONALITY_ALIASES = {
+    'strict':   'pro',
+    'friendly': 'calm',
+    'rebel':    'savage',
+}
+
 def get_personalidade_user():
-    """Lê a personalidade directamente da BD — nunca usa cache."""
+    """Lê a personalidade directamente da BD — normaliza valores legacy."""
     user = User.query.get(current_user.id)
-    return (user.personalidade or 'calm') if user else 'calm'
+    raw  = (user.personalidade or 'calm') if user else 'calm'
+    return PERSONALITY_ALIASES.get(raw, raw) if raw not in PERSONALIDADES else raw
 
 
 @personality_bp.route('/personality')
@@ -55,6 +63,8 @@ def set_personality():
     data = request.json or request.form
     nova = data.get('personalidade', 'calm')
 
+    # Aceitar aliases legacy e normalizar
+    nova = PERSONALITY_ALIASES.get(nova, nova)
     if nova not in PERSONALIDADES:
         if request.is_json:
             return jsonify({'success': False, 'message': 'Personalidade inválida.'})

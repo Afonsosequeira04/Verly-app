@@ -17,6 +17,9 @@ class User(UserMixin, db.Model):
     personalidade = db.Column(db.String(20), default='calm')
     orcamento_mensal = db.Column(db.Float, default=0)
     onboarding_completo = db.Column(db.Boolean, default=False)
+    avatar = db.Column(db.String(255))
+    streak_dias = db.Column(db.Integer, default=0)
+    streak_ultima_atualizacao = db.Column(db.DateTime)
 
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')

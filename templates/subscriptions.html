@@ -1,50 +1,22 @@
 {% extends 'base.html' %}
-{% block title %}Subscription Leak · Verly{% endblock %}
+{% block title %}Leak Detector · Verly{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
         <h1 class="page-title">Subscription Leak Detector</h1>
-        <p class="page-sub">Carrega o teu extrato bancário e a app deteta subscrições automaticamente</p>
+        <p class="page-sub">Descobre subscrições esquecidas que estão a drenar a tua conta todos os meses</p>
     </div>
 </div>
 
-<!-- UPLOAD EXTRATO -->
-<div class="card" style="margin-bottom:24px;">
-    <div class="card-header">
-        <h3>Analisar Extrato Bancário</h3>
-        <span style="font-size:12px;color:var(--text-muted)">TXT ou CSV exportado do teu banco</span>
-    </div>
-    <div class="card-body">
-        <div id="dropZone" style="
-            border: 2px dashed var(--border);
-            border-radius: 12px;
-            padding: 32px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-        " onclick="document.getElementById('extratoInput').click()"
-           ondragover="event.preventDefault(); this.style.borderColor='var(--accent)'"
-           ondragleave="this.style.borderColor='var(--border)'"
-           ondrop="handleDrop(event)">
-            <div style="font-size:28px;margin-bottom:8px;">📄</div>
-            <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;">
-                Arrasta o extrato aqui ou clica para escolher
-            </div>
-            <div style="font-size:12px;color:var(--text-muted)">
-                Suporta TXT e CSV exportados de qualquer banco português
-            </div>
-            <input type="file" id="extratoInput" accept=".txt,.csv" style="display:none" onchange="analisarExtrato(this.files[0])">
-        </div>
-
-        <div id="uploadStatus" style="display:none; margin-top:16px;"></div>
-    </div>
-</div>
-
-<!-- RESUMO (das faturas existentes) -->
-<div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:28px;">
+<!-- MÉTRICAS RESUMO -->
+<div class="metrics-grid" style="grid-template-columns: repeat(3,1fr); margin-bottom:24px;">
     <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+        <div class="metric-icon">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--red)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+        </div>
         <div class="metric-body">
             <span class="metric-label">Desperdiçado / mês</span>
             <span class="metric-value metric-value-sm" style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€</span>
@@ -52,7 +24,11 @@
         </div>
     </div>
     <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <div class="metric-icon">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+        </div>
         <div class="metric-body">
             <span class="metric-label">Subscr. saudáveis</span>
             <span class="metric-value metric-value-sm" style="color:var(--green)">{{ count_ok }}</span>
@@ -60,12 +36,41 @@
         </div>
     </div>
     <div class="metric-card">
-        <div class="metric-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+        <div class="metric-icon">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--yellow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+        </div>
         <div class="metric-body">
             <span class="metric-label">Em risco</span>
             <span class="metric-value metric-value-sm" style="color:var(--yellow)">{{ count_danger + count_warning }}</span>
             <span class="metric-trend trend-bad">{{ count_danger }} para cancelar</span>
         </div>
+    </div>
+</div>
+
+<!-- UPLOAD EXTRATO — zona principal de ação -->
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h3>Analisar Extrato Bancário</h3>
+        <span style="font-size:12px;color:var(--text-muted)">TXT ou CSV exportado do teu banco</span>
+    </div>
+    <div class="card-body">
+        <!-- Upload zone com z-index corretamente gerido -->
+        <div class="upload-zone-lg" id="dropZone">
+            <!-- O input fica por cima de tudo via z-index:2 no CSS -->
+            <input type="file" id="extratoInput" accept=".txt,.csv" onchange="analisarExtrato(this.files[0])">
+            <span class="uz-icon">📄</span>
+            <span class="uz-title">Arrasta o extrato aqui ou clica para escolher</span>
+            <span class="uz-sub">Suporta extratos em TXT e CSV de qualquer banco português</span>
+            <div class="uz-formats">
+                <span class="uz-format-tag">.txt</span>
+                <span class="uz-format-tag">.csv</span>
+            </div>
+        </div>
+
+        <div id="uploadStatus" style="display:none; margin-top:16px; padding:12px 16px; border-radius:9px; font-size:13px; font-weight:500;"></div>
     </div>
 </div>
 
@@ -77,32 +82,29 @@
 <div class="card" style="margin-bottom:24px;">
     <div class="card-header">
         <h3>Subscrições nas Faturas</h3>
-        <span style="font-size:12px;color:var(--text-muted)">{{ subscriptions|length }} serviço(s)</span>
+        <span style="font-size:12px;color:var(--text-muted)">{{ subscriptions|length }} serviço(s) detetado(s)</span>
     </div>
     <div class="card-body" style="padding:0;">
         {% for sub in subscriptions %}
-        <div style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid var(--border);">
-            <div style="width:42px;height:42px;border-radius:10px;
-                background:{% if sub.risk == 'danger' %}rgba(255,71,87,0.1){% elif sub.risk == 'warning' %}rgba(255,184,0,0.1){% else %}rgba(0,214,143,0.08){% endif %};
-                display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">
+        <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--border);transition:background var(--transition);"
+             onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background='transparent'">
+            <div style="width:40px;height:40px;border-radius:10px;flex-shrink:0;
+                background:{% if sub.risk == 'danger' %}var(--red-bg){% elif sub.risk == 'warning' %}var(--yellow-bg){% else %}var(--green-bg){% endif %};
+                display:flex;align-items:center;justify-content:center;font-size:19px;">
                 {{ sub.icone }}
             </div>
-            <div style="flex:1;">
-                <div style="font-size:14px;font-weight:600;color:var(--text);">{{ sub.nome }}</div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">{{ sub.alerta }}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:2px;">{{ sub.nome }}</div>
+                <div style="font-size:12px;color:var(--text-muted);">{{ sub.alerta }}</div>
             </div>
             <div style="text-align:right;flex-shrink:0;">
-                <div style="font-size:15px;font-weight:700;color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
+                <div style="font-size:15px;font-weight:800;font-family:'JetBrains Mono',monospace;
+                    color:{% if sub.risk == 'danger' %}var(--red){% elif sub.risk == 'warning' %}var(--yellow){% else %}var(--green){% endif %};">
                     {{ '%.2f'|format(sub.preco_mensal) }}€/mês
                 </div>
-                <div style="margin-top:4px;">
-                    <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;
-                        {% if sub.risk == 'danger' %}background:rgba(255,71,87,0.15);color:var(--red);
-                        {% elif sub.risk == 'warning' %}background:rgba(255,184,0,0.15);color:var(--yellow);
-                        {% else %}background:rgba(0,214,143,0.1);color:var(--green);{% endif %}">
-                        {{ sub.risk_label }}
-                    </span>
-                </div>
+                <span class="db-badge db-badge-{% if sub.risk == 'danger' %}danger{% elif sub.risk == 'warning' %}warning{% else %}ok{% endif %}" style="margin-top:5px;">
+                    {{ sub.risk_label }}
+                </span>
             </div>
         </div>
         {% endfor %}
@@ -110,103 +112,120 @@
 </div>
 
 {% if total_mensal_desperdicado > 0 %}
-<div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;margin-bottom:24px;">
-    <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
-    <div style="font-size:15px;color:var(--text);line-height:1.6;">
+<div style="background:var(--red-bg);border:1px solid rgba(244,63,94,0.18);border-radius:var(--radius);padding:18px 20px;margin-bottom:24px;">
+    <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:8px;text-transform:uppercase;">⚠ Resumo de Impacto</div>
+    <div style="font-size:14px;color:var(--text);line-height:1.7;">
         Estás a desperdiçar <strong style="color:var(--red)">{{ '%.2f'|format(total_mensal_desperdicado) }}€/mês</strong>
-        em subscrições. Isso é <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong> a ir pelo cano.
+        em subscrições. São <strong style="color:var(--red)">{{ '%.0f'|format(total_anual_desperdicado) }}€/ano</strong> a ir pelo cano.
     </div>
 </div>
 {% endif %}
 
 {% else %}
-<div class="empty-card">
-    <span>📄</span>
-    <p>Carrega o teu extrato bancário acima para detetar subscrições automaticamente.<br>
-    Ou adiciona faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para análise.</p>
+<div class="card">
+    <div class="empty-card">
+        <span>🛡️</span>
+        <p>Carrega o teu extrato bancário acima para detetar subscrições automaticamente.<br>
+        Ou adiciona faturas em <a href="{{ url_for('faturas.faturas') }}">Faturas</a> para análise.</p>
+    </div>
 </div>
 {% endif %}
 
+{% block extra_scripts %}
 <script>
-function handleDrop(e) {
+// ─── Drag & drop events ───────────────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+
+dropZone.addEventListener('dragover', e => {
     e.preventDefault();
-    document.getElementById('dropZone').style.borderColor = 'var(--border)';
+    dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
     const file = e.dataTransfer.files[0];
     if (file) analisarExtrato(file);
-}
+});
 
+// ─── Upload & analyze ────────────────────────────────────────────────────────
 async function analisarExtrato(file) {
     if (!file) return;
 
-    const status = document.getElementById('uploadStatus');
+    const status    = document.getElementById('uploadStatus');
     const resultado = document.getElementById('resultadoExtrato');
 
+    // Reset
+    status.className = '';
     status.style.display = 'block';
-    status.innerHTML = `<div style="color:var(--text-muted);font-size:13px;">⏳ A analisar <strong>${file.name}</strong>...</div>`;
+    status.style.background = 'var(--surface2)';
+    status.style.border = '1px solid var(--border)';
+    status.style.color = 'var(--text-muted)';
+    status.innerHTML = `⏳ A analisar <strong>${file.name}</strong>…`;
     resultado.style.display = 'none';
 
     const formData = new FormData();
     formData.append('extrato', file);
 
     try {
-        const res = await fetch('/subscriptions/analisar-extrato', {
-            method: 'POST',
-            body: formData
-        });
+        const res  = await fetch('/subscriptions/analisar-extrato', { method: 'POST', body: formData });
         const data = await res.json();
 
         if (!data.success) {
-            status.innerHTML = `<div style="color:var(--red);font-size:13px;">❌ ${data.error}</div>`;
+            status.style.background = 'var(--red-bg)';
+            status.style.border = '1px solid rgba(244,63,94,0.2)';
+            status.style.color = 'var(--red)';
+            status.innerHTML = `❌ ${data.error}`;
             return;
         }
 
-        status.innerHTML = `<div style="color:var(--green);font-size:13px;">✓ Extrato analisado — ${data.total_movimentos} movimentos lidos</div>`;
+        status.style.background = 'var(--green-bg)';
+        status.style.border = '1px solid rgba(34,211,160,0.2)';
+        status.style.color = 'var(--green)';
+        status.innerHTML = `✓ Extrato analisado — ${data.total_movimentos} movimentos lidos`;
 
         if (!data.subscriptions || !data.subscriptions.length) {
             resultado.style.display = 'block';
             resultado.innerHTML = `
                 <div class="card">
-                    <div class="card-body" style="text-align:center;padding:32px;color:var(--text-muted);">
-                        ✅ Nenhuma subscrição detetada no extrato.
+                    <div class="card-body" style="text-align:center;padding:40px;color:var(--text-muted);">
+                        ✅ Nenhuma subscrição recorrente detetada neste extrato.
                     </div>
                 </div>`;
             return;
         }
 
         const riskColor = { danger: 'var(--red)', warning: 'var(--yellow)', ok: 'var(--green)' };
-        const riskBg    = { danger: 'rgba(255,71,87,0.1)', warning: 'rgba(255,184,0,0.1)', ok: 'rgba(0,214,143,0.08)' };
-        const riskBadge = { danger: 'rgba(255,71,87,0.15)', warning: 'rgba(255,184,0,0.15)', ok: 'rgba(0,214,143,0.1)' };
+        const riskBg    = { danger: 'var(--red-bg)', warning: 'var(--yellow-bg)', ok: 'var(--green-bg)' };
+        const badgeClass = { danger: 'db-badge-danger', warning: 'db-badge-warning', ok: 'db-badge-ok' };
 
         const linhas = data.subscriptions.map(s => `
-            <div style="display:flex;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid var(--border);">
-                <div style="width:42px;height:42px;border-radius:10px;background:${riskBg[s.risk]};
-                    display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid var(--border);">
+                <div style="width:40px;height:40px;border-radius:10px;background:${riskBg[s.risk]};
+                    display:flex;align-items:center;justify-content:center;font-size:19px;flex-shrink:0;">
                     ${s.icone}
                 </div>
-                <div style="flex:1;">
-                    <div style="font-size:14px;font-weight:600;color:var(--text);">${s.nome}</div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">${s.alerta}</div>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:13.5px;font-weight:700;color:var(--text);margin-bottom:2px;">${s.nome}</div>
+                    <div style="font-size:12px;color:var(--text-muted);">${s.alerta}</div>
                 </div>
                 <div style="text-align:right;flex-shrink:0;">
-                    <div style="font-size:15px;font-weight:700;color:${riskColor[s.risk]};">
+                    <div style="font-size:15px;font-weight:800;font-family:'JetBrains Mono',monospace;color:${riskColor[s.risk]};">
                         ${s.preco_mensal.toFixed(2)}€/mês
                     </div>
-                    <div style="margin-top:4px;">
-                        <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;
-                            background:${riskBadge[s.risk]};color:${riskColor[s.risk]};">
-                            ${s.risk_label}
-                        </span>
-                    </div>
+                    <span class="db-badge ${badgeClass[s.risk]}" style="margin-top:5px;display:inline-block;">
+                        ${s.risk_label}
+                    </span>
                 </div>
             </div>
         `).join('');
 
         const desperdicado = data.total_mensal_desperdicado.toFixed(2);
-        const anual = data.total_anual_desperdicado.toFixed(0);
+        const anual        = data.total_anual_desperdicado.toFixed(0);
 
         resultado.style.display = 'block';
         resultado.innerHTML = `
-            <div class="card" style="margin-bottom:16px;">
+            <div class="card" style="margin-bottom:14px;">
                 <div class="card-header">
                     <h3>Subscrições no Extrato</h3>
                     <span style="font-size:12px;color:var(--text-muted)">${data.subscriptions.length} detetada(s)</span>
@@ -214,17 +233,21 @@ async function analisarExtrato(file) {
                 <div class="card-body" style="padding:0;">${linhas}</div>
             </div>
             ${data.total_mensal_desperdicado > 0 ? `
-            <div style="background:rgba(255,71,87,0.06);border:1px solid rgba(255,71,87,0.15);border-radius:12px;padding:18px 20px;">
-                <div style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:6px;text-transform:uppercase;">Resumo de Dano</div>
-                <div style="font-size:15px;color:var(--text);line-height:1.6;">
+            <div style="background:var(--red-bg);border:1px solid rgba(244,63,94,0.18);border-radius:var(--radius);padding:18px 20px;">
+                <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--red);margin-bottom:8px;text-transform:uppercase;">⚠ Resumo de Impacto</div>
+                <div style="font-size:14px;color:var(--text);line-height:1.7;">
                     Encontrámos <strong style="color:var(--red)">${desperdicado}€/mês</strong> em subscrições recorrentes —
-                    <strong style="color:var(--red)">${anual}€/ano</strong>.
+                    isso são <strong style="color:var(--red)">${anual}€/ano</strong>.
                 </div>
             </div>` : ''}
         `;
     } catch (err) {
-        status.innerHTML = `<div style="color:var(--red);font-size:13px;">❌ Erro ao analisar o ficheiro.</div>`;
+        status.style.background = 'var(--red-bg)';
+        status.style.border = '1px solid rgba(244,63,94,0.2)';
+        status.style.color = 'var(--red)';
+        status.innerHTML = '❌ Erro de ligação ao analisar o ficheiro.';
     }
 }
 </script>
+{% endblock %}
 {% endblock %}

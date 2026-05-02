@@ -46,7 +46,6 @@ def create_app():
     from app.onboarding import onboarding_bp
     from app.metas import metas_bp
     from app.fatura_detalhe import fatura_detalhe_bp
-    from app.banco import banco_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -62,7 +61,6 @@ def create_app():
     app.register_blueprint(onboarding_bp)
     app.register_blueprint(metas_bp)
     app.register_blueprint(fatura_detalhe_bp)
-    app.register_blueprint(banco_bp)
 
     with app.app_context():
         db.create_all()
@@ -85,6 +83,8 @@ def _migrate_db():
         ("users", "orcamento_mensal", "FLOAT DEFAULT 0"),
         ("users", "onboarding_completo", "BOOLEAN DEFAULT 0"),
         ("users", "avatar", "VARCHAR(255)"),
+        ("users", "streak_dias", "INTEGER DEFAULT 0"),
+        ("users", "streak_ultima_atualizacao", "DATETIME"),
     ]
 
     for table, column, col_type in migrations:

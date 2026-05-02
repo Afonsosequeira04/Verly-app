@@ -41,6 +41,19 @@
         .pers-preview { font-size: 12px; color: var(--text-sub); font-style: italic; border-left: 2px solid var(--border); padding-left: 10px; line-height: 1.4; }
         .pers-card.selected .pers-preview { border-color: var(--brand); }
 
+
+        /* Global budget field */
+        .ob-global-budget { background: var(--surface3); border: 2px solid var(--brand); border-radius: 14px; padding: 20px; margin-bottom: 8px; transition: border-color 0.2s; }
+        .ob-global-budget.error { border-color: var(--red); }
+        .ob-global-label { display:flex; align-items:flex-start; gap:12px; margin-bottom:14px; font-size:14px; font-weight:600; color:var(--text); }
+        .ob-global-label span { font-size:20px; flex-shrink:0; }
+        .ob-global-sub { display:block; font-size:12px; font-weight:400; color:var(--text-muted); margin-top:2px; }
+        .ob-global-input-wrap { display:flex; align-items:center; gap:8px; background: var(--surface2); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+        .ob-global-input-wrap:focus-within { border-color: var(--brand); }
+        .ob-global-symbol { font-size:18px; font-weight:700; color: var(--text-sub); }
+        .ob-global-input { background:transparent; border:none; outline:none; color:var(--text); font-size:20px; font-weight:700; width:100%; font-family:'Outfit',sans-serif; }
+        .ob-global-input::placeholder { color:var(--text-sub); font-weight:400; font-size:16px; }
+        .ob-global-error { font-size:12px; color:var(--red); margin-top:8px; }
         /* Budget step */
         .budget-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 28px; }
         .budget-item { background: var(--surface2); border: 1.5px solid var(--border); border-radius: 12px; padding: 16px; transition: border-color 0.2s; }
@@ -138,7 +151,25 @@
         <div class="ob-panel" id="panel-2">
             <div class="ob-eyebrow">Passo 2 de 3</div>
             <h1 class="ob-title">Define o teu orçamento mensal</h1>
-            <p class="ob-sub">Quanto queres gastar por categoria? A Verly vai avisarte quando estiveres perto do limite. Podes deixar em branco o que não quiseres controlar.</p>
+            <p class="ob-sub">Quanto queres gastar por mês no total? A Verly vai avisarte quando estiveres perto do limite.</p>
+
+            <!-- Orçamento global obrigatório -->
+            <div class="ob-global-budget" id="globalBudgetWrap">
+                <div class="ob-global-label">
+                    <span>💰</span>
+                    <div>
+                        <strong>Orçamento mensal total</strong>
+                        <span class="ob-global-sub">Obrigatório — podes afinar por categoria a seguir</span>
+                    </div>
+                </div>
+                <div class="ob-global-input-wrap">
+                    <span class="ob-global-symbol">€</span>
+                    <input type="number" id="orcamentoGlobal" class="ob-global-input" placeholder="ex: 800" min="1" step="10" oninput="onGlobalBudgetChange()">
+                </div>
+                <div class="ob-global-error" id="globalBudgetError" style="display:none;">⚠️ Define um orçamento mensal para continuar.</div>
+            </div>
+
+            <p class="ob-sub" style="margin-top:24px;margin-bottom:12px;">Quer dividir por categoria? (opcional)</p>
 
             <div class="budget-grid">
                 {% for cat in categorias %}
@@ -159,7 +190,7 @@
 
             <div class="ob-actions">
                 <button class="btn-skip" onclick="goToStep(1)">Voltar</button>
-                <button class="btn-ob-next" onclick="goToStep(3)">
+                <button class="btn-ob-next" onclick="validateAndGoStep3()">
                     Continuar
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                 </button>
@@ -272,6 +303,31 @@ function updateTotal() {
     document.getElementById('totalBudget').textContent = total.toFixed(2).replace('.', ',') + ' €';
 }
 
+function onGlobalBudgetChange() {
+    const v = parseFloat(document.getElementById('orcamentoGlobal').value) || 0;
+    const wrap = document.getElementById('globalBudgetWrap');
+    const err = document.getElementById('globalBudgetError');
+    if (v > 0) {
+        wrap.classList.remove('error');
+        err.style.display = 'none';
+    }
+}
+
+function validateAndGoStep3() {
+    const globalVal = parseFloat(document.getElementById('orcamentoGlobal').value) || 0;
+    const wrap = document.getElementById('globalBudgetWrap');
+    const err = document.getElementById('globalBudgetError');
+    if (globalVal <= 0) {
+        wrap.classList.add('error');
+        err.style.display = 'block';
+        document.getElementById('orcamentoGlobal').focus();
+        return;
+    }
+    wrap.classList.remove('error');
+    err.style.display = 'none';
+    goToStep(3);
+}
+
 async function finalizar() {
     const btn = document.getElementById('btnFinalizar');
     btn.disabled = true;
@@ -283,7 +339,9 @@ async function finalizar() {
         if (v > 0) metasFinais[inp.dataset.cat] = v;
     });
 
-    const orcamento = Object.values(metasFinais).reduce((a, b) => a + b, 0);
+    const globalBudget = parseFloat(document.getElementById('orcamentoGlobal').value) || 0;
+    const catSum = Object.values(metasFinais).reduce((a, b) => a + b, 0);
+    const orcamento = globalBudget > 0 ? globalBudget : catSum;
 
     const res = await fetch('/onboarding/save', {
         method: 'POST',

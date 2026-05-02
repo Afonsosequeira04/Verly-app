@@ -112,21 +112,30 @@ async function sendMessage() {
             const lines = chunk.split("\n");
 
             lines.forEach(line => {
-                if (line.startsWith("data: ")) {
-                    const t = line.replace("data: ", "");
-                    fullText += t;
+                if (!line.startsWith("data: ")) return;
+                const raw = line.slice(6).trim();
+                if (raw === "[DONE]" || raw === "") return;
 
-                    // efeito cursor
-                    bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
-
-                    const m = document.getElementById('messages');
-                    m.scrollTop = m.scrollHeight;
+                try {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.delta) {
+                        fullText += parsed.delta;
+                        bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
+                        const m = document.getElementById('messages');
+                        m.scrollTop = m.scrollHeight;
+                    }
+                } catch (_) {
+                    // texto simples de erro (ex: ⚠️ ...)
+                    if (!raw.startsWith("{")) {
+                        fullText += raw;
+                        bubble.innerHTML = fullText + '<span class="cursor">▍</span>';
+                    }
                 }
             });
         }
 
         // remove cursor no fim
-        bubble.innerHTML = fullText;
+        bubble.innerHTML = fullText || "Sem resposta.";
 
     } catch (e) {
         bubble.innerHTML = "Erro de ligação.";
@@ -137,8 +146,17 @@ async function sendMessage() {
 
 async function clearChat() {
     if (!confirm('Apagar todo o histórico?')) return;
-    await fetch('/chat/clear', {method:'POST'});
-    location.reload();
+    try {
+        const r = await fetch('/chat/limpar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await r.json();
+        if (data.success) location.reload();
+        else alert('Erro ao limpar o histórico.');
+    } catch(e) {
+        alert('Erro de ligação.');
+    }
 }
 
 function handleKey(e) {
