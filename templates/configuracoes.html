@@ -1,0 +1,365 @@
+{% extends 'base.html' %}
+{% block title %}Configurações · Verly{% endblock %}
+
+{% block extra_head %}
+<style>
+.config-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 24px;
+    max-width: 860px;
+}
+.config-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.config-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    text-align: left;
+    transition: all 0.15s;
+    width: 100%;
+}
+.config-tab:hover { background: var(--surface2); color: var(--text); }
+.config-tab.active { background: var(--brand-light); color: var(--brand); font-weight: 600; }
+.config-tab svg { flex-shrink: 0; }
+
+.config-panel { display: none; }
+.config-panel.active { display: block; }
+
+.config-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+.config-section h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    margin: 0 0 18px;
+}
+.config-field {
+    margin-bottom: 16px;
+}
+.config-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.config-field input,
+.config-field select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 9px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+.config-field input:focus,
+.config-field select:focus { border-color: var(--brand); }
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.toggle-row:last-child { border-bottom: none; }
+.toggle-info { flex: 1; }
+.toggle-info .toggle-title { font-size: 14px; font-weight: 500; color: var(--text); }
+.toggle-info .toggle-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.toggle-switch {
+    position: relative;
+    width: 40px; height: 22px;
+    flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute; inset: 0;
+    background: var(--surface3);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    left: 3px; top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--brand); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* Personalidade cards */
+.pers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.pers-card {
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+.pers-card:hover { border-color: var(--brand); }
+.pers-card.ativo { border-color: var(--brand); background: var(--brand-light); }
+.pers-card .badge {
+    display: none;
+    position: absolute; top: 10px; right: 10px;
+    background: var(--brand); color: white;
+    font-size: 9px; font-weight: 700; padding: 2px 7px;
+    border-radius: 4px; letter-spacing: .5px;
+}
+.pers-card.ativo .badge { display: block; }
+.pers-nome { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.pers-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+
+/* Língua */
+.lingua-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+.lingua-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.lingua-card:hover { border-color: var(--brand); }
+.lingua-card.ativo { border-color: var(--brand); background: var(--brand-light); }
+.lingua-flag { font-size: 20px; }
+.lingua-nome { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.btn-guardar {
+    background: var(--brand);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s;
+    margin-top: 4px;
+}
+.btn-guardar:hover { opacity: 0.88; }
+
+#confirmMsg {
+    display: none;
+    margin-top: 12px;
+    background: rgba(0,214,143,0.08);
+    border: 1px solid rgba(0,214,143,0.2);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: #00D68F;
+    font-weight: 600;
+}
+
+@media (max-width: 600px) {
+    .config-layout { grid-template-columns: 1fr; }
+    .config-tabs { flex-direction: row; overflow-x: auto; }
+    .pers-grid, .lingua-grid { grid-template-columns: 1fr; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Configurações</h1>
+        <p class="page-sub">Personaliza a tua experiência com a Verly.</p>
+    </div>
+</div>
+
+<div class="config-layout">
+
+    <!-- Tabs -->
+    <div class="config-tabs">
+        <button class="config-tab active" onclick="showTab('personalidade', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Personalidade
+        </button>
+        <button class="config-tab" onclick="showTab('lingua', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Língua
+        </button>
+        <button class="config-tab" onclick="showTab('preferencias', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M5.34 18.66l-1.41 1.41M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M5.34 5.34 3.93 3.93M12 20v2M12 2v2"/></svg>
+            Preferências
+        </button>
+    </div>
+
+    <!-- Painéis -->
+    <div>
+
+        <!-- Personalidade -->
+        <div class="config-panel active" id="panel-personalidade">
+            <div class="config-section">
+                <h3>Como a Verly te fala</h3>
+                <div class="pers-grid">
+                    {% for key, p in personalidades.items() %}
+                    <div class="pers-card {% if key == atual_personalidade %}ativo{% endif %}"
+                         data-key="{{ key }}" data-cor="{{ p.cor }}"
+                         onclick="selecionarPersonalidade('{{ key }}', this)">
+                        <div class="badge">ATIVO</div>
+                        <div class="pers-nome">{{ p.nome }}</div>
+                        <div class="pers-desc">{{ p.descricao }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="confirmMsg"></div>
+                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
+                    Afeta o Chat, Score de Compras, Relatório Mensal e Impulse Control.
+                </p>
+            </div>
+        </div>
+
+        <!-- Língua -->
+        <div class="config-panel" id="panel-lingua">
+            <div class="config-section">
+                <h3>Idioma da interface</h3>
+                <div class="lingua-grid">
+                    {% for key, l in linguas.items() %}
+                    <div class="lingua-card {% if key == lingua_atual %}ativo{% endif %}"
+                         data-key="{{ key }}" onclick="selecionarLingua('{{ key }}', this)">
+                        <span class="lingua-flag">{{ l.flag }}</span>
+                        <span class="lingua-nome">{{ l.nome }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="confirmLingua" style="display:none;margin-top:12px;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.2);border-radius:8px;padding:10px 16px;font-size:13px;color:#00D68F;font-weight:600;"></div>
+                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
+                    A tradução completa da interface está em desenvolvimento. Por agora guarda a tua preferência.
+                </p>
+            </div>
+        </div>
+
+        <!-- Preferências -->
+        <div class="config-panel" id="panel-preferencias">
+            <div class="config-section">
+                <h3>Conta</h3>
+                <form method="POST" action="{{ url_for('configuracoes.set_preferencias') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="config-field">
+                        <label>Nome</label>
+                        <input type="text" name="nome" value="{{ current_user.nome }}" placeholder="O teu nome">
+                    </div>
+                    <div class="config-field">
+                        <label>Orçamento Mensal (€)</label>
+                        <input type="number" name="orcamento_mensal" step="0.01" min="0"
+                               value="{{ current_user.orcamento_mensal or '' }}" placeholder="ex: 500">
+                    </div>
+                    <button type="submit" class="btn-guardar">Guardar alterações</button>
+                </form>
+            </div>
+
+            <div class="config-section">
+                <h3>Notificações</h3>
+                <div class="toggle-row">
+                    <div class="toggle-info">
+                        <div class="toggle-title">Notificações por email</div>
+                        <div class="toggle-desc">Recebe alertas de subscrições e relatórios mensais</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleNotif"
+                               {% if current_user.notificacoes_email %}checked{% endif %}
+                               onchange="guardarNotif(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+function showTab(id, btn) {
+    document.querySelectorAll('.config-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.config-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('panel-' + id).classList.add('active');
+    btn.classList.add('active');
+}
+
+async function selecionarPersonalidade(key, card) {
+    try {
+        const res = await fetch('/configuracoes/personalidade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ personalidade: key })
+        });
+        const data = await res.json();
+        if (!data.success) return;
+        document.querySelectorAll('.pers-card').forEach(c => c.classList.remove('ativo'));
+        card.classList.add('ativo');
+        const msg = document.getElementById('confirmMsg');
+        msg.textContent = `Personalidade "${data.info.nome}" ativada.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+    } catch(e) { console.error(e); }
+}
+
+async function selecionarLingua(key, card) {
+    try {
+        const res = await fetch('/configuracoes/lingua', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lingua: key })
+        });
+        const data = await res.json();
+        if (!data.success) return;
+        document.querySelectorAll('.lingua-card').forEach(c => c.classList.remove('ativo'));
+        card.classList.add('ativo');
+        const msg = document.getElementById('confirmLingua');
+        msg.textContent = `Língua "${data.nome}" guardada.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+    } catch(e) { console.error(e); }
+}
+
+async function guardarNotif(val) {
+    await fetch('/perfil/atualizar', {
+        method: 'POST',
+        body: new URLSearchParams({ notificacoes_email: val ? 'on' : '' })
+    });
+}
+</script>
+{% endblock %}

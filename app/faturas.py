@@ -1,20 +1,43 @@
+"""
+faturas.py — Gestão de faturas com validação segura de uploads
+
+Melhorias de segurança vs versão anterior:
+  - Validação de MIME type real (magic bytes) — não só extensão
+  - Sanitização do nome de ficheiro (path traversal protection)
+  - Rate limiting no endpoint de upload
+  - Tratamento de erros estruturado com logging
+  - Inputs sanitizados em editar_fatura
+"""
+
 import os
 import json
+import logging
 from flask import Blueprint, render_template, request, jsonify, current_app
 from flask_login import login_required, current_user
 from app import db
 from app.models import Fatura, CATEGORIAS
 from app.ai import get_user_paths, rebuild_index, extract_invoice_info, extract_invoice_info_from_text
+from security import validate_upload, sanitize_filename, sanitize_text_input, check_rate_limit
 
+logger = logging.getLogger(__name__)
 faturas_bp = Blueprint('faturas', __name__)
 
 
 @faturas_bp.route('/faturas')
 @login_required
 def faturas():
-    search = request.args.get('q', '').strip()
-    categoria = request.args.get('categoria', '')
-    ordenar = request.args.get('ordenar', 'recente')
+    search = sanitize_text_input(request.args.get('q', ''), max_length=200)
+    categoria = request.args.get('categoria', '').strip()
+    ordenar = request.args.get('ordenar', 'recente').strip()
+
+    # Validar categoria contra lista conhecida (evita SQL injection por bypass)
+    if categoria and categoria not in CATEGORIAS:
+        categoria = ''
+
+    # Validar ordenação contra valores permitidos
+    ordenar_permitido = {'recente', 'antigo', 'maior', 'menor'}
+    if ordenar not in ordenar_permitido:
+        ordenar = 'recente'
 
     query = Fatura.query.filter_by(user_id=current_user.id)
 
@@ -29,14 +52,13 @@ def faturas():
     if categoria:
         query = query.filter_by(categoria=categoria)
 
-    if ordenar == 'recente':
-        query = query.order_by(Fatura.data_upload.desc())
-    elif ordenar == 'antigo':
-        query = query.order_by(Fatura.data_upload.asc())
-    elif ordenar == 'maior':
-        query = query.order_by(Fatura.total.desc())
-    elif ordenar == 'menor':
-        query = query.order_by(Fatura.total.asc())
+    order_map = {
+        'recente': Fatura.data_upload.desc(),
+        'antigo':  Fatura.data_upload.asc(),
+        'maior':   Fatura.total.desc(),
+        'menor':   Fatura.total.asc(),
+    }
+    query = query.order_by(order_map[ordenar])
 
     todas = query.all()
     for f in todas:
@@ -60,43 +82,76 @@ def faturas():
 @faturas_bp.route('/faturas/upload', methods=['POST'])
 @login_required
 def upload():
+    # ── Rate limiting: 20 uploads por hora por utilizador ────────────────────
+    rate_key = f'upload:{current_user.id}'
+    allowed, remaining = check_rate_limit(rate_key, max_requests=20, window_seconds=3600)
+    if not allowed:
+        logger.warning(f'Rate limit de upload excedido — user_id={current_user.id}')
+        return jsonify({
+            'success': False,
+            'message': 'Demasiados uploads. Tenta novamente em 1 hora.'
+        }), 429
+
+    # ── Verificar que ficheiro existe no pedido ───────────────────────────────
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': 'Nenhum ficheiro enviado.'})
+
     file = request.files['file']
     if not file or file.filename == '':
         return jsonify({'success': False, 'message': 'Ficheiro inválido.'})
 
-    allowed = {'.pdf', '.png', '.jpg', '.jpeg', '.txt'}
-    ext = os.path.splitext(file.filename)[1].lower()
-    if ext not in allowed:
-        return jsonify({'success': False, 'message': f'Tipo não suportado: {ext}'})
+    # ── Validar upload (extensão + magic bytes) ───────────────────────────────
+    allowed_ext = current_app.config.get('ALLOWED_EXTENSIONS', {'.pdf', '.png', '.jpg', '.jpeg', '.txt'})
+    is_valid, error_msg = validate_upload(file, allowed_ext)
+    if not is_valid:
+        logger.warning(
+            f'Upload rejeitado — user_id={current_user.id} '
+            f'filename={file.filename!r} motivo={error_msg!r}'
+        )
+        return jsonify({'success': False, 'message': error_msg})
 
+    # ── Sanitizar nome de ficheiro ────────────────────────────────────────────
+    original_name = file.filename
+    safe_name = sanitize_filename(original_name)
+    if not safe_name:
+        return jsonify({'success': False, 'message': 'Nome de ficheiro inválido.'})
+
+    # ── Obter paths do utilizador ─────────────────────────────────────────────
     data_dir, storage_dir = get_user_paths(
         current_app.config['UPLOAD_FOLDER'],
         current_app.config['STORAGE_FOLDER'],
         current_user.id
     )
+    os.makedirs(data_dir, exist_ok=True)
 
-    file_path = os.path.join(data_dir, file.filename)
-    file.save(file_path)
+    # Evitar sobrescrever ficheiros existentes (adicionar sufixo se necessário)
+    file_path = _unique_path(data_dir, safe_name)
+    final_name = os.path.basename(file_path)
+
+    # ── Guardar e processar ficheiro ──────────────────────────────────────────
+    try:
+        file.save(file_path)
+    except OSError as e:
+        logger.error(f'Erro ao guardar ficheiro — user_id={current_user.id}: {e}')
+        return jsonify({'success': False, 'message': 'Erro ao guardar o ficheiro.'})
 
     try:
+        ext = os.path.splitext(safe_name)[1].lower()
+
         if ext == '.txt':
-            # Lê directamente o texto — sem IA, 100% fiável
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f_txt:
                 texto = f_txt.read()
-            info = extract_invoice_info_from_text(texto, file.filename)
+            info = extract_invoice_info_from_text(texto, final_name)
         else:
-            # PDF / imagem — usa IA
             index = rebuild_index(data_dir, storage_dir)
-            info = extract_invoice_info(index, file.filename)
+            info = extract_invoice_info(index, final_name)
 
-        # Reconstrói o índice para o chat ficar actualizado
+        # Atualizar índice para o chat
         rebuild_index(data_dir, storage_dir)
 
         fatura = Fatura(
             user_id=current_user.id,
-            nome_ficheiro=file.filename,
+            nome_ficheiro=final_name,
             loja=info['loja'],
             data_compra=info['data_compra'],
             total=info['total'],
@@ -108,15 +163,28 @@ def upload():
         db.session.add(fatura)
         db.session.commit()
 
+        logger.info(
+            f'Fatura criada — user_id={current_user.id} '
+            f'fatura_id={fatura.id} loja={info["loja"]!r}'
+        )
+
         return jsonify({
             'success': True,
-            'message': f'{file.filename} analisado com sucesso!',
+            'message': f'{final_name} analisado com sucesso!',
             'loja': info['loja'],
             'total': info['total'],
             'categoria': info['categoria'],
         })
+
     except Exception as e:
-        return jsonify({'success': False, 'message': f'Erro: {str(e)}'})
+        # Limpar ficheiro se o processamento falhar
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        except OSError:
+            pass
+        logger.exception(f'Erro ao processar fatura — user_id={current_user.id}')
+        return jsonify({'success': False, 'message': f'Erro ao processar o ficheiro: {str(e)}'})
 
 
 @faturas_bp.route('/faturas/editar/<int:fatura_id>', methods=['POST'])
@@ -124,16 +192,36 @@ def upload():
 def editar_fatura(fatura_id):
     fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
     if not fatura:
-        return jsonify({'success': False, 'message': 'Não encontrada.'})
-    data = request.json
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'}), 404
+
+    data = request.get_json(silent=True) or {}
+
     if 'categoria' in data:
-        fatura.categoria = data['categoria']
+        # Validar contra lista conhecida
+        if data['categoria'] in CATEGORIAS:
+            fatura.categoria = data['categoria']
+
     if 'loja' in data:
-        fatura.loja = data['loja']
+        fatura.loja = sanitize_text_input(str(data['loja']), max_length=150)
+
     if 'total' in data:
-        fatura.total = float(data['total'])
-    db.session.commit()
-    return jsonify({'success': True})
+        try:
+            total = float(data['total'])
+            if 0 <= total <= 1_000_000:  # sanity check
+                fatura.total = round(total, 2)
+        except (ValueError, TypeError):
+            return jsonify({'success': False, 'message': 'Total inválido.'}), 400
+
+    if 'notas' in data:
+        fatura.notas = sanitize_text_input(str(data['notas']), max_length=1000, allow_newlines=True)
+
+    try:
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception:
+        db.session.rollback()
+        logger.exception(f'Erro ao editar fatura — fatura_id={fatura_id}')
+        return jsonify({'success': False, 'message': 'Erro ao guardar alterações.'}), 500
 
 
 @faturas_bp.route('/faturas/delete/<int:fatura_id>', methods=['DELETE'])
@@ -141,20 +229,34 @@ def editar_fatura(fatura_id):
 def delete_fatura(fatura_id):
     fatura = Fatura.query.filter_by(id=fatura_id, user_id=current_user.id).first()
     if not fatura:
-        return jsonify({'success': False, 'message': 'Não encontrada.'})
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'}), 404
 
     data_dir, storage_dir = get_user_paths(
         current_app.config['UPLOAD_FOLDER'],
         current_app.config['STORAGE_FOLDER'],
         current_user.id
     )
-    file_path = os.path.join(data_dir, fatura.nome_ficheiro)
-    if os.path.exists(file_path):
-        os.remove(file_path)
 
-    db.session.delete(fatura)
-    db.session.commit()
+    # Garantir que o path resolvido está dentro da pasta do utilizador
+    # (proteção adicional contra path traversal via nome de ficheiro na BD)
+    file_path = os.path.realpath(os.path.join(data_dir, fatura.nome_ficheiro))
+    data_dir_real = os.path.realpath(data_dir)
 
+    if file_path.startswith(data_dir_real) and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except OSError as e:
+            logger.warning(f'Não foi possível remover ficheiro {file_path}: {e}')
+
+    try:
+        db.session.delete(fatura)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception(f'Erro ao eliminar fatura — fatura_id={fatura_id}')
+        return jsonify({'success': False, 'message': 'Erro ao eliminar fatura.'}), 500
+
+    # Reconstruir índice após remoção
     try:
         if os.path.exists(data_dir) and os.listdir(data_dir):
             rebuild_index(data_dir, storage_dir)
@@ -162,6 +264,28 @@ def delete_fatura(fatura_id):
             import shutil
             shutil.rmtree(storage_dir)
     except Exception:
-        pass
+        logger.warning('Não foi possível reconstruir índice após remoção de fatura')
 
+    logger.info(f'Fatura eliminada — user_id={current_user.id} fatura_id={fatura_id}')
     return jsonify({'success': True})
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _unique_path(directory: str, filename: str) -> str:
+    """
+    Gera um path único — adiciona sufixo _2, _3, etc. se o ficheiro já existir.
+    Evita sobrescrever uploads anteriores com o mesmo nome.
+    """
+    path = os.path.join(directory, filename)
+    if not os.path.exists(path):
+        return path
+
+    name, ext = os.path.splitext(filename)
+    counter = 2
+    while True:
+        new_name = f'{name}_{counter}{ext}'
+        path = os.path.join(directory, new_name)
+        if not os.path.exists(path):
+            return path
+        counter += 1

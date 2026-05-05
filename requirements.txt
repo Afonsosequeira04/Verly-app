@@ -1,12 +1,26 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
 flask
 flask-sqlalchemy
 flask-login
+flask-wtf          # CSRF protection (novo)
+
+# ── Segurança ─────────────────────────────────────────────────────────────────
 python-dotenv
 werkzeug
-reportlab
+
+# ── Base de dados ─────────────────────────────────────────────────────────────
+# PostgreSQL (para produção — não é necessário em development com SQLite)
+psycopg2-binary
+
+# ── IA e processamento ────────────────────────────────────────────────────────
 llama-index-core
 llama-index-llms-groq
 llama-index-embeddings-huggingface
 sentence-transformers
+
+# ── Exportação ────────────────────────────────────────────────────────────────
+reportlab
+
+# ── Autenticação / tokens ─────────────────────────────────────────────────────
 PyJWT
 cryptography

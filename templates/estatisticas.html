@@ -1,0 +1,237 @@
+{% extends 'base.html' %}
+{% block title %}Estatísticas · Verly{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+}
+.stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+}
+.stat-card .stat-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.stat-card .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--text);
+}
+.stat-card .stat-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+.chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+}
+.chart-card h3 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    margin: 0 0 16px;
+}
+.chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 220px;
+}
+.chart-card.full { grid-column: 1 / -1; }
+@media (max-width: 700px) {
+    .charts-grid { grid-template-columns: 1fr; }
+    .chart-card.full { grid-column: auto; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Estatísticas</h1>
+        <p class="page-sub">Uma visão detalhada dos teus padrões de consumo.</p>
+    </div>
+</div>
+
+<!-- KPIs -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-label">Total Gasto</div>
+        <div class="stat-value">{{ total_geral }} €</div>
+        <div class="stat-sub">em {{ num_faturas }} faturas</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Média por Fatura</div>
+        <div class="stat-value">{{ media_fatura }} €</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Mês Mais Caro</div>
+        <div class="stat-value">{{ melhor_mes_valor }} €</div>
+        <div class="stat-sub">{{ melhor_mes_nome or '—' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Categorias</div>
+        <div class="stat-value">{{ cats_labels | length }}</div>
+        <div class="stat-sub">diferentes</div>
+    </div>
+</div>
+
+<!-- Gráficos -->
+<div class="charts-grid">
+
+    <!-- Evolução mensal -->
+    <div class="chart-card full">
+        <h3>Evolução Mensal</h3>
+        <div class="chart-wrap" style="height:240px;">
+            <canvas id="trendChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Por categoria -->
+    <div class="chart-card">
+        <h3>Por Categoria</h3>
+        <div class="chart-wrap">
+            <canvas id="catChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Por loja -->
+    <div class="chart-card">
+        <h3>Top Lojas</h3>
+        <div class="chart-wrap">
+            <canvas id="lojaChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Por dia da semana -->
+    <div class="chart-card full">
+        <h3>Gastos por Dia da Semana</h3>
+        <div class="chart-wrap" style="height:180px;">
+            <canvas id="diaSemanaChart"></canvas>
+        </div>
+    </div>
+
+</div>
+
+<script>
+const PALETTE = ['#4A3AFF','#7B61FF','#00D68F','#FFB800','#FF4757','#00B4D8','#FF6B6B','#A8DADC'];
+const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+const textColor = isDark ? '#9999AA' : '#6B6B80';
+
+Chart.defaults.color = textColor;
+Chart.defaults.borderColor = gridColor;
+
+// Evolução mensal
+new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+        labels: {{ meses_labels | tojson }},
+        datasets: [{
+            data: {{ meses_values | tojson }},
+            borderColor: PALETTE[0],
+            borderWidth: 2,
+            pointBackgroundColor: PALETTE[0],
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            fill: true,
+            backgroundColor: function(ctx) {
+                const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 200);
+                g.addColorStop(0, PALETTE[0] + '30');
+                g.addColorStop(1, PALETTE[0] + '00');
+                return g;
+            },
+            tension: 0.4,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { ticks: { callback: v => v + '€' }, grid: { color: gridColor } },
+            x: { grid: { display: false } }
+        }
+    }
+});
+
+// Por categoria (donut)
+new Chart(document.getElementById('catChart'), {
+    type: 'doughnut',
+    data: {
+        labels: {{ cats_labels | tojson }},
+        datasets: [{ data: {{ cats_values | tojson }}, backgroundColor: PALETTE, borderWidth: 0, hoverOffset: 6 }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        cutout: '65%',
+        plugins: {
+            legend: { position: 'right', labels: { boxWidth: 10, padding: 12, font: { size: 11 } } }
+        }
+    }
+});
+
+// Top lojas (barras horizontais)
+new Chart(document.getElementById('lojaChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ top_lojas_labels | tojson }},
+        datasets: [{
+            data: {{ top_lojas_values | tojson }},
+            backgroundColor: PALETTE[1] + 'CC',
+            borderRadius: 6,
+        }]
+    },
+    options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            x: { ticks: { callback: v => v + '€' }, grid: { color: gridColor } },
+            y: { grid: { display: false } }
+        }
+    }
+});
+
+// Por dia da semana
+new Chart(document.getElementById('diaSemanaChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ dia_semana_labels | tojson }},
+        datasets: [{
+            data: {{ dia_semana_values | tojson }},
+            backgroundColor: PALETTE.map(c => c + 'BB'),
+            borderRadius: 8,
+        }]
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { ticks: { callback: v => v + '€' }, grid: { color: gridColor } },
+            x: { grid: { display: false } }
+        }
+    }
+});
+</script>
+{% endblock %}
