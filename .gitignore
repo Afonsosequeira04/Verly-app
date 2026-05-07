@@ -4,3 +4,5 @@ __pycache__/
 finetune/
 dados_reduzidos/
 *.pyc
+verly-mobile/node_modules/
+verly-mobile/.expo/

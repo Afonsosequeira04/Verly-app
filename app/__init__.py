@@ -15,6 +15,8 @@ from flask import Flask, redirect, url_for, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_jwt_extended import JWTManager
+from datetime import timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +42,12 @@ def create_app(config_override=None):
     login_manager.init_app(app)
     csrf.init_app(app)
 
+    # ✅ JWT (Configurado dentro da função)
+    jwt = JWTManager(app)
+
+    app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
+
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Precisas de fazer login primeiro.'
     login_manager.login_message_category = 'warning'
@@ -55,7 +63,7 @@ def create_app(config_override=None):
             response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
         return response
 
-    # ── Tratar erros de CSRF graciosamente ────────────────────────────────────
+    # ── CSRF error handler ────────────────────────────────────────────────────
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
         app.logger.warning(f'CSRF error: {e.description} — IP: {request.remote_addr}')
@@ -65,19 +73,22 @@ def create_app(config_override=None):
                 'message': 'Sessão expirada. Recarrega a página e tenta novamente.',
                 'csrf_error': True
             }), 403
+
         from flask import flash
         flash('A tua sessão expirou. Faz login novamente.', 'error')
         return redirect(url_for('auth.login'))
 
-    # ── Tratar uploads demasiado grandes ─────────────────────────────────────
+    # ── Upload too large ──────────────────────────────────────────────────────
     @app.errorhandler(413)
     def handle_too_large(e):
         max_mb = app.config.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024) // (1024 * 1024)
+
         if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({
                 'success': False,
                 'message': f'Ficheiro demasiado grande. Máximo permitido: {max_mb} MB.'
             }), 413
+
         from flask import flash
         flash(f'Ficheiro demasiado grande. Máximo: {max_mb} MB.', 'error')
         return redirect(url_for('faturas.faturas'))
@@ -89,25 +100,29 @@ def create_app(config_override=None):
     def load_user(user_id):
         return User.query.get(int(user_id))
 
-    # ── Registar blueprints ───────────────────────────────────────────────────
-    from app.auth          import auth_bp
-    from app.dashboard     import dashboard_bp
-    from app.faturas       import faturas_bp
-    from app.chat          import chat_bp
-    from app.perfil        import perfil_bp
-    from app.exportar      import exportar_bp
-    from app.scoring       import scoring_bp
-    from app.subscriptions import subscriptions_bp
-    from app.impulse       import impulse_bp
-    from app.reports       import reports_bp
-    from app.personality   import personality_bp
-    from app.onboarding    import onboarding_bp
-    from app.metas         import metas_bp
+    # ── Blueprints ────────────────────────────────────────────────────────────
+    from app.auth           import auth_bp
+    from app.dashboard      import dashboard_bp
+    from app.faturas        import faturas_bp
+    from app.chat           import chat_bp
+    from app.perfil         import perfil_bp
+    from app.exportar       import exportar_bp
+    from app.scoring        import scoring_bp
+    from app.subscriptions  import subscriptions_bp
+    from app.impulse        import impulse_bp
+    from app.reports        import reports_bp
+    from app.personality    import personality_bp
+    from app.onboarding     import onboarding_bp
+    from app.metas          import metas_bp
     from app.fatura_detalhe import fatura_detalhe_bp
-    from app.estatisticas  import estatisticas_bp
-    from app.historico     import historico_bp
-    from app.configuracoes import configuracoes_bp
-    from app.notificacoes  import notificacoes_bp
+    from app.estatisticas   import estatisticas_bp
+    from app.historico      import historico_bp
+    from app.configuracoes  import configuracoes_bp
+    from app.notificacoes   import notificacoes_bp
+    from app.email_routes   import email_bp
+    
+    # ✅ NOVO: Importar Blueprint da API
+    from app.api            import api_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -127,6 +142,10 @@ def create_app(config_override=None):
     app.register_blueprint(historico_bp)
     app.register_blueprint(configuracoes_bp)
     app.register_blueprint(notificacoes_bp)
+    app.register_blueprint(email_bp)
+    
+    # ✅ NOVO: Registar Blueprint da API com o prefixo v1
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
 
     with app.app_context():
         db.create_all()
@@ -137,7 +156,6 @@ def create_app(config_override=None):
 
 
 def _setup_logging(app: Flask):
-    """Configura logging estruturado."""
     level = logging.DEBUG if app.config.get('DEBUG') else logging.INFO
 
     handler = logging.StreamHandler()
@@ -155,7 +173,6 @@ def _setup_logging(app: Flask):
 
 
 def _migrate_db():
-    """Migrações manuais de schema — compatível com SQLite e PostgreSQL."""
     from sqlalchemy import text, inspect
 
     inspector = inspect(db.engine)
@@ -165,19 +182,19 @@ def _migrate_db():
         return column in cols
 
     migrations = [
-        ('faturas', 'categoria',                "VARCHAR(50) DEFAULT 'Outros'"),
-        ('faturas', 'data_garantia',             'VARCHAR(50)'),
-        ('faturas', 'data_devolucao',            'VARCHAR(50)'),
-        ('faturas', 'notas',                     'TEXT'),
-        ('users',   'notificacoes_email',        'BOOLEAN DEFAULT 0'),
-        ('users',   'email_notificacoes',        'VARCHAR(150)'),
-        ('users',   'personalidade',             "VARCHAR(20) DEFAULT 'calm'"),
-        ('users',   'orcamento_mensal',          'FLOAT DEFAULT 0'),
-        ('users',   'onboarding_completo',       'BOOLEAN DEFAULT 0'),
-        ('users',   'avatar',                    'VARCHAR(255)'),
-        ('users',   'streak_dias',               'INTEGER DEFAULT 0'),
-        ('users',   'streak_ultima_atualizacao', 'DATETIME'),
-        ('users',   'lingua',                    "VARCHAR(10) DEFAULT 'pt'"),
+        ('faturas', 'categoria', "VARCHAR(50) DEFAULT 'Outros'"),
+        ('faturas', 'data_garantia', 'VARCHAR(50)'),
+        ('faturas', 'data_devolucao', 'VARCHAR(50)'),
+        ('faturas', 'notas', 'TEXT'),
+        ('users', 'notificacoes_email', 'BOOLEAN DEFAULT 0'),
+        ('users', 'email_notificacoes', 'VARCHAR(150)'),
+        ('users', 'personalidade', "VARCHAR(20) DEFAULT 'calm'"),
+        ('users', 'orcamento_mensal', 'FLOAT DEFAULT 0'),
+        ('users', 'onboarding_completo', 'BOOLEAN DEFAULT 0'),
+        ('users', 'avatar', 'VARCHAR(255)'),
+        ('users', 'streak_dias', 'INTEGER DEFAULT 0'),
+        ('users', 'streak_ultima_atualizacao', 'DATETIME'),
+        ('users', 'lingua', "VARCHAR(10) DEFAULT 'pt'"),
     ]
 
     for table, column, col_type in migrations:
@@ -185,5 +202,5 @@ def _migrate_db():
             try:
                 db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
                 db.session.commit()
-            except Exception as e:
+            except Exception:
                 db.session.rollback()

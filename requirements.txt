@@ -2,7 +2,9 @@
 flask
 flask-sqlalchemy
 flask-login
-flask-wtf          # CSRF protection (novo)
+flask-wtf  
+flask-jwt-extended
+        # CSRF protection (novo)
 
 # ── Segurança ─────────────────────────────────────────────────────────────────
 python-dotenv
@@ -24,3 +26,6 @@ reportlab
 # ── Autenticação / tokens ─────────────────────────────────────────────────────
 PyJWT
 cryptography
+
+# ── Envio de emails ───────────────────────────────────────────────────────
+resend

@@ -181,6 +181,29 @@
 }
 .btn-guardar:hover { opacity: 0.88; }
 
+/* Botão de teste de email */
+.btn-teste-email {
+    background: transparent;
+    color: var(--brand);
+    border: 1px solid var(--brand);
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+    margin-top: 10px;
+}
+.btn-teste-email:hover { background: var(--brand-light); }
+.btn-teste-email:disabled { opacity: 0.5; cursor: not-allowed; }
+.email-teste-msg {
+    display: block;
+    font-size: 12px;
+    margin-top: 8px;
+    min-height: 18px;
+}
+
 #confirmMsg {
     display: none;
     margin-top: 12px;
@@ -296,7 +319,7 @@
                 <div class="toggle-row">
                     <div class="toggle-info">
                         <div class="toggle-title">Notificações por email</div>
-                        <div class="toggle-desc">Recebe alertas de subscrições e relatórios mensais</div>
+                        <div class="toggle-desc">Recebe alertas de garantias, orçamento e subscrições</div>
                     </div>
                     <label class="toggle-switch">
                         <input type="checkbox" id="toggleNotif"
@@ -304,6 +327,15 @@
                                onchange="guardarNotif(this.checked)">
                         <span class="toggle-slider"></span>
                     </label>
+                </div>
+
+                <!-- Botão de teste — só visível quando o toggle está activo -->
+                <div id="email-teste-wrapper" style="padding-top: 14px; {% if not current_user.notificacoes_email %}display:none;{% endif %}">
+                    <button type="button" class="btn-teste-email" id="btn-teste-email"
+                            onclick="testarEmail()">
+                        Enviar email de teste
+                    </button>
+                    <span class="email-teste-msg" id="email-teste-msg"></span>
                 </div>
             </div>
         </div>
@@ -360,6 +392,36 @@ async function guardarNotif(val) {
         method: 'POST',
         body: new URLSearchParams({ notificacoes_email: val ? 'on' : '' })
     });
+    // Mostrar/esconder botão de teste
+    document.getElementById('email-teste-wrapper').style.display = val ? 'block' : 'none';
+    document.getElementById('email-teste-msg').textContent = '';
+}
+
+async function testarEmail() {
+    const btn = document.getElementById('btn-teste-email');
+    const msg = document.getElementById('email-teste-msg');
+    btn.disabled = true;
+    msg.textContent = 'A enviar…';
+    msg.style.color = 'var(--text-muted)';
+
+    try {
+        const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const res = await fetch('/alertas/teste', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': token,
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+        const data = await res.json();
+        msg.textContent = data.message;
+        msg.style.color = data.success ? '#00D68F' : '#E24B4A';
+    } catch (e) {
+        msg.textContent = 'Erro de rede. Tenta novamente.';
+        msg.style.color = '#E24B4A';
+    } finally {
+        btn.disabled = false;
+    }
 }
 </script>
 {% endblock %}
