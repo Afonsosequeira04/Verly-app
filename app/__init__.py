@@ -15,6 +15,7 @@ from flask import Flask, redirect, url_for, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -41,6 +42,9 @@ def create_app(config_override=None):
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+
+    # ✅ CORS — permite pedidos da app mobile e do browser
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     # ✅ JWT (Configurado dentro da função)
     jwt = JWTManager(app)
@@ -120,7 +124,7 @@ def create_app(config_override=None):
     from app.configuracoes  import configuracoes_bp
     from app.notificacoes   import notificacoes_bp
     from app.email_routes   import email_bp
-    
+
     # ✅ NOVO: Importar Blueprint da API
     from app.api            import api_bp
 
@@ -143,7 +147,7 @@ def create_app(config_override=None):
     app.register_blueprint(configuracoes_bp)
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(email_bp)
-    
+
     # ✅ NOVO: Registar Blueprint da API com o prefixo v1
     app.register_blueprint(api_bp, url_prefix='/api/v1')
 

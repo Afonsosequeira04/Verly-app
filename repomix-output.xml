@@ -127,10 +127,19 @@ templates/subscriptions.html
 verly-mobile/.npmrc
 verly-mobile/App.js
 verly-mobile/package.json
+verly-mobile/src/components/TabIcon.js
+verly-mobile/src/constants/theme.js
 verly-mobile/src/context/AuthContext.js
 verly-mobile/src/navigation/AppNavigator.js
-verly-mobile/src/screens/auth/DashboardScreen.js
 verly-mobile/src/screens/auth/LoginScreen.js
+verly-mobile/src/screens/auth/RegisterScreen.js
+verly-mobile/src/screens/ChatScreen.js
+verly-mobile/src/screens/DashboardScreen.js
+verly-mobile/src/screens/FaturaDetalheScreen.js
+verly-mobile/src/screens/FaturasScreen.js
+verly-mobile/src/screens/NotificacoesScreen.js
+verly-mobile/src/screens/PerfilScreen.js
+verly-mobile/src/screens/SubscricoesScreen.js
 verly-mobile/src/services/api.js
 </directory_structure>
 
@@ -3898,37 +3907,70 @@ export default function App() {
 }
 </file>
 
-<file path="verly-mobile/package.json">
-{
-  "name": "verly-mobile",
-  "version": "1.0.0",
-  "main": "node_modules/expo/AppEntry.js",
-  "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web"
-  },
-  "dependencies": {
-    "@react-navigation/bottom-tabs": "^6.5.11",
-    "@react-navigation/native": "^6.1.9",
-    "@react-navigation/native-stack": "^7.14.14",
-    "@react-navigation/stack": "^6.3.20",
-    "axios": "^1.6.7",
-    "expo": "^54.0.34",
-    "expo-status-bar": "~3.0.9",
-    "lucide-react-native": "^0.322.0",
-    "react": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.20.0"
-  },
-  "private": true
+<file path="verly-mobile/src/components/TabIcon.js">
+/**
+ * src/components/TabIcon.js
+ */
+import React from 'react';
+import Svg, { Path, Line, Polyline, Circle, Rect } from 'react-native-svg';
+
+export default function TabIcon({ name, color, size = 22 }) {
+  const s = size * 0.85;
+  switch (name) {
+    case 'Dashboard':
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Rect x="3" y="3" width="7" height="7" rx="1" /><Rect x="14" y="3" width="7" height="7" rx="1" />
+          <Rect x="3" y="14" width="7" height="7" rx="1" /><Rect x="14" y="14" width="7" height="7" rx="1" />
+        </Svg>
+      );
+    case 'Faturas':
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <Polyline points="14 2 14 8 20 8" /><Line x1="16" y1="13" x2="8" y2="13" /><Line x1="16" y1="17" x2="8" y2="17" />
+        </Svg>
+      );
+    case 'Chat':
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </Svg>
+      );
+    case 'Subscricoes':
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        </Svg>
+      );
+    case 'Perfil':
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><Circle cx="12" cy="7" r="4" />
+        </Svg>
+      );
+    default:
+      return <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2"><Circle cx="12" cy="12" r="10" /></Svg>;
+  }
 }
+</file>
+
+<file path="verly-mobile/src/constants/theme.js">
+export const COLORS = {
+  bg: '#0F0F1A',
+  surface: '#171726',
+  surface2: '#1F1F32',
+  border: '#2A2A40',
+
+  brand: '#534AB7',
+
+  text: '#FFFFFF',
+  textSub: '#9CA3AF',
+
+  green: '#22C55E',
+  yellow: '#F59E0B',
+  red: '#FF4757',
+};
 </file>
 
 <file path="verly-mobile/src/context/AuthContext.js">
@@ -4002,149 +4044,281 @@ export const useAuth = () => {
 };
 </file>
 
-<file path="verly-mobile/src/navigation/AppNavigator.js">
-/**
- * src/navigation/AppNavigator.js
- * Navegação principal da app.
- *
- * Estrutura:
- *   - Stack raiz → AuthStack | MainStack
- *   - AuthStack  → Login, Register
- *   - MainStack  → Bottom Tabs + ecrãs de detalhe
- *   - Bottom Tabs → Dashboard, Faturas, Chat, Subscrições, Perfil
- */
+<file path="verly-mobile/src/screens/auth/RegisterScreen.js">
+import React, { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity,
+  StyleSheet, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, ScrollView,
+} from 'react-native';
+import { useAuth } from '../../context/AuthContext';
+import { COLORS } from '../../constants/theme';
 
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, View } from 'react-native';
+export default function RegisterScreen({ navigation }) {
+  const { register } = useAuth();
+  const [nome, setNome]       = useState('');
+  const [email, setEmail]     = useState('');
+  const [password, setPass]   = useState('');
+  const [loading, setLoading] = useState(false);
 
-import { useAuth } from '../context/AuthContext';
+  const handleRegister = async () => {
+    if (!nome.trim() || !email.trim() || !password) {
+      Alert.alert('Erro', 'Preenche todos os campos.');
+      return;
+    }
+    if (password.length < 8) {
+      Alert.alert('Erro', 'A password deve ter pelo menos 8 caracteres.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await register(nome.trim(), email.trim().toLowerCase(), password);
+    } catch (err) {
+      Alert.alert('Erro', err.message || 'Não foi possível criar a conta.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-// ── Ecrãs de autenticação ─────────────────────────────────────────────────────
-import LoginScreen    from '../screens/auth/LoginScreen';
-import RegisterScreen from '../screens/auth/RegisterScreen';
-
-// ── Ecrãs principais ──────────────────────────────────────────────────────────
-import DashboardScreen    from '../screens/DashboardScreen';
-import FaturasScreen      from '../screens/FaturasScreen';
-import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen         from '../screens/ChatScreen';
-import SubscricoesScreen  from '../screens/SubscricoesScreen';
-import PerfilScreen       from '../screens/PerfilScreen';
-import NotificacoesScreen from '../screens/NotificacoesScreen';
-
-// ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
-import { TabIcon } from '../components/TabIcon';
-
-const Stack   = createNativeStackNavigator();
-const Tab     = createBottomTabNavigator();
-const AuthStack = createNativeStackNavigator();
-const MainStack = createNativeStackNavigator();
-
-// Cores e estilo global
-export const COLORS = {
-  brand:     '#534AB7',
-  brandLight:'#EEF0FF',
-  bg:        '#0F0F1A',
-  surface:   '#1A1A2E',
-  surface2:  '#22223A',
-  border:    '#2E2E4E',
-  text:      '#F0F0F8',
-  textSub:   '#8888AA',
-  green:     '#00D68F',
-  red:       '#FF4757',
-  yellow:    '#FFB800',
-};
-
-
-// ── Auth Stack ────────────────────────────────────────────────────────────────
-
-function AuthNavigator() {
   return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Login"    component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-    </AuthStack.Navigator>
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <View style={styles.logoWrap}>
+          <Text style={styles.logo}>💰 Verly</Text>
+          <Text style={styles.logoSub}>Começa a verificar as tuas finanças hoje.</Text>
+        </View>
+        <View style={styles.card}>
+          <Text style={styles.title}>Criar conta</Text>
+
+          <Text style={styles.label}>Nome</Text>
+          <TextInput style={styles.input} value={nome} onChangeText={setNome}
+            placeholder="O teu nome" placeholderTextColor={COLORS.textSub} autoCapitalize="words" />
+
+          <Text style={styles.label}>Email</Text>
+          <TextInput style={styles.input} value={email} onChangeText={setEmail}
+            placeholder="o.teu@email.com" placeholderTextColor={COLORS.textSub}
+            keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+
+          <Text style={styles.label}>Password</Text>
+          <TextInput style={styles.input} value={password} onChangeText={setPass}
+            placeholder="Mínimo 8 caracteres" placeholderTextColor={COLORS.textSub} secureTextEntry />
+
+          <TouchableOpacity style={[styles.btn, loading && styles.btnDisabled]}
+            onPress={handleRegister} disabled={loading}>
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Criar conta →</Text>}
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.linkWrap} onPress={() => navigation.navigate('Login')}>
+            <Text style={styles.link}>Já tens conta? <Text style={styles.linkBold}>Iniciar sessão</Text></Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-
-// ── Bottom Tabs ───────────────────────────────────────────────────────────────
-
-function MainTabs() {
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown:    false,
-        tabBarStyle:    {
-          backgroundColor: COLORS.surface,
-          borderTopColor:  COLORS.border,
-          borderTopWidth:  1,
-          paddingBottom:   8,
-          paddingTop:      8,
-          height:          64,
-        },
-        tabBarActiveTintColor:   COLORS.brand,
-        tabBarInactiveTintColor: COLORS.textSub,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
-        tabBarIcon: ({ color, size }) => (
-          <TabIcon name={route.name} color={color} size={size} />
-        ),
-      })}
-    >
-      <Tab.Screen name="Dashboard"   component={DashboardScreen}   options={{ tabBarLabel: 'Início' }} />
-      <Tab.Screen name="Faturas"     component={FaturasScreen}      options={{ tabBarLabel: 'Faturas' }} />
-      <Tab.Screen name="Chat"        component={ChatScreen}         options={{ tabBarLabel: 'Chat IA' }} />
-      <Tab.Screen name="Subscricoes" component={SubscricoesScreen}  options={{ tabBarLabel: 'Subs' }} />
-      <Tab.Screen name="Perfil"      component={PerfilScreen}       options={{ tabBarLabel: 'Perfil' }} />
-    </Tab.Navigator>
-  );
-}
-
-
-// ── Main Stack (tabs + ecrãs de detalhe) ─────────────────────────────────────
-
-function MainNavigator() {
-  return (
-    <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs"           component={MainTabs} />
-      <MainStack.Screen name="FaturaDetalhe"  component={FaturaDetalheScreen} />
-      <MainStack.Screen name="Notificacoes"   component={NotificacoesScreen} />
-    </MainStack.Navigator>
-  );
-}
-
-
-// ── Root Navigator ────────────────────────────────────────────────────────────
-
-export default function AppNavigator() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
-        <ActivityIndicator size="large" color={COLORS.brand} />
-      </View>
-    );
-  }
-
-  return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainNavigator} />
-        ) : (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-}
+const styles = StyleSheet.create({
+  root:      { flex: 1, backgroundColor: COLORS.bg },
+  scroll:    { flexGrow: 1, justifyContent: 'center', padding: 24 },
+  logoWrap:  { alignItems: 'center', marginBottom: 36 },
+  logo:      { fontSize: 32, fontWeight: '800', color: COLORS.text, letterSpacing: -0.5 },
+  logoSub:   { fontSize: 14, color: COLORS.textSub, marginTop: 6, textAlign: 'center' },
+  card:      { backgroundColor: COLORS.surface, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: COLORS.border },
+  title:     { fontSize: 22, fontWeight: '700', color: COLORS.text, marginBottom: 20 },
+  label:     { fontSize: 13, fontWeight: '600', color: COLORS.textSub, marginBottom: 6, marginTop: 12 },
+  input:     { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
+  btn:       { backgroundColor: COLORS.brand, borderRadius: 12, padding: 15, alignItems: 'center', marginTop: 24 },
+  btnDisabled: { opacity: 0.6 },
+  btnText:   { color: '#fff', fontSize: 16, fontWeight: '700' },
+  linkWrap:  { alignItems: 'center', marginTop: 16 },
+  link:      { color: COLORS.textSub, fontSize: 14 },
+  linkBold:  { color: COLORS.brand, fontWeight: '700' },
+});
 </file>
 
-<file path="verly-mobile/src/screens/auth/DashboardScreen.js">
+<file path="verly-mobile/src/screens/ChatScreen.js">
+/**
+ * src/screens/ChatScreen.js
+ */
+import React, { useState, useRef, useEffect } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity, FlatList,
+  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
+  Alert,
+} from 'react-native';
+import { chatAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+import { useAuth } from '../context/AuthContext';
+
+const SUGESTOES = [
+  'Quanto gastei este mês?',
+  'Qual a minha categoria mais cara?',
+  'Tenho garantias a expirar?',
+  'Onde gasto mais dinheiro?',
+];
+
+function Bubble({ msg }) {
+  const isUser = msg.role === 'user';
+  return (
+    <View style={[styles.bubbleWrap, isUser && styles.bubbleWrapUser]}>
+      {!isUser && <View style={styles.avatar}><Text style={styles.avatarText}>✦</Text></View>}
+      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleBot]}>
+        <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>{msg.text}</Text>
+      </View>
+    </View>
+  );
+}
+
+export default function ChatScreen() {
+  const { user } = useAuth();
+  const [messages, setMessages] = useState([]);
+  const [input, setInput]       = useState('');
+  const [loading, setLoading]   = useState(false);
+  const [histLoading, setHistLoading] = useState(true);
+  const flatRef = useRef(null);
+
+  useEffect(() => {
+    chatAPI.historico(20).then(data => {
+      const msgs = [];
+      (data.historico || []).forEach(c => {
+        msgs.push({ id: `u-${c.id}`, role: 'user', text: c.pergunta });
+        msgs.push({ id: `b-${c.id}`, role: 'bot',  text: c.resposta });
+      });
+      setMessages(msgs);
+    }).catch(() => {}).finally(() => setHistLoading(false));
+  }, []);
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    const userMsg = { id: Date.now().toString(), role: 'user', text };
+    setMessages(prev => [...prev, userMsg]);
+    setLoading(true);
+    try {
+      const data = await chatAPI.enviar(text);
+      setMessages(prev => [...prev, { id: Date.now().toString() + 'b', role: 'bot', text: data.resposta }]);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const clearChat = () => {
+    Alert.alert('Limpar histórico', 'Tens a certeza?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Limpar', style: 'destructive', onPress: async () => {
+        await chatAPI.limpar();
+        setMessages([]);
+      }},
+    ]);
+  };
+
+  const allMessages = loading
+    ? [...messages, { id: 'loading', role: 'bot', text: '...' }]
+    : messages;
+
+  return (
+    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <View style={styles.statusDot} />
+          <Text style={styles.headerTitle}>Assistente Verly</Text>
+        </View>
+        <TouchableOpacity onPress={clearChat}>
+          <Text style={styles.clearBtn}>Limpar</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Messages */}
+      {histLoading ? (
+        <View style={styles.center}><ActivityIndicator color={COLORS.brand} /></View>
+      ) : (
+        <FlatList
+          ref={flatRef}
+          data={allMessages}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.messageList}
+          onContentSizeChange={() => flatRef.current?.scrollToEnd({ animated: true })}
+          ListEmptyComponent={
+            <View style={styles.emptyChat}>
+              <Text style={styles.emptyChatIcon}>✦</Text>
+              <Text style={styles.emptyChatTitle}>Assistente Verly</Text>
+              <Text style={styles.emptyChatSub}>Faz perguntas sobre as tuas faturas e gastos.</Text>
+              <View style={styles.sugestoesWrap}>
+                {SUGESTOES.map((s, i) => (
+                  <TouchableOpacity key={i} style={styles.sugestao} onPress={() => { setInput(s); }}>
+                    <Text style={styles.sugestaoText}>{s}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          }
+          renderItem={({ item }) => (
+            item.id === 'loading'
+              ? <View style={styles.bubbleWrap}><View style={styles.avatar}><Text style={styles.avatarText}>✦</Text></View><View style={styles.bubbleBot}><Text style={styles.bubbleText}>...</Text></View></View>
+              : <Bubble msg={item} />
+          )}
+        />
+      )}
+
+      {/* Input */}
+      <View style={styles.inputArea}>
+        <TextInput
+          style={styles.input}
+          value={input}
+          onChangeText={setInput}
+          placeholder="Pergunta algo..."
+          placeholderTextColor={COLORS.textSub}
+          multiline
+          maxLength={500}
+          onSubmitEditing={sendMessage}
+        />
+        <TouchableOpacity style={[styles.sendBtn, (!input.trim() || loading) && styles.sendBtnDisabled]}
+          onPress={sendMessage} disabled={!input.trim() || loading}>
+          <Text style={styles.sendBtnText}>↑</Text>
+        </TouchableOpacity>
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: COLORS.surface },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.green },
+  headerTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
+  clearBtn: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
+  messageList: { padding: 16, paddingBottom: 8, flexGrow: 1 },
+  bubbleWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12, maxWidth: '82%' },
+  bubbleWrapUser: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
+  avatar: { width: 30, height: 30, borderRadius: 8, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
+  avatarText: { color: '#fff', fontSize: 13, fontWeight: '700' },
+  bubble: { borderRadius: 14, padding: 12 },
+  bubbleBot: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderBottomLeftRadius: 4 },
+  bubbleUser: { backgroundColor: COLORS.brand, borderBottomRightRadius: 4 },
+  bubbleText: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
+  bubbleTextUser: { color: '#fff' },
+  emptyChat: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+  emptyChatIcon: { fontSize: 40, color: COLORS.brand, marginBottom: 12, opacity: 0.4 },
+  emptyChatTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
+  emptyChatSub: { fontSize: 13, color: COLORS.textSub, marginBottom: 24, textAlign: 'center' },
+  sugestoesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', paddingHorizontal: 20 },
+  sugestao: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
+  sugestaoText: { fontSize: 12, color: COLORS.textSub, fontWeight: '600' },
+  inputArea: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, padding: 12, borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: COLORS.surface },
+  input: { flex: 1, backgroundColor: COLORS.surface2, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 14, padding: 12, maxHeight: 100 },
+  sendBtn: { width: 42, height: 42, backgroundColor: COLORS.brand, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  sendBtnDisabled: { opacity: 0.4 },
+  sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/DashboardScreen.js">
 /**
  * src/screens/DashboardScreen.js
  * Ecrã principal — dashboard financeiro.
@@ -4158,7 +4332,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { dashboardAPI } from '../services/api';
-import { COLORS } from '../navigation/AppNavigator';
+import { COLORS } from '../constants/theme';
 
 // ── Sub-componentes ───────────────────────────────────────────────────────────
 
@@ -4459,186 +4633,726 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/auth/LoginScreen.js">
+<file path="verly-mobile/src/screens/FaturaDetalheScreen.js">
 /**
- * src/screens/auth/LoginScreen.js
+ * src/screens/FaturaDetalheScreen.js
  */
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Alert, ScrollView,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  ActivityIndicator, Alert,
 } from 'react-native';
-import { useAuth } from '../../context/AuthContext';
-import { COLORS } from '../../navigation/AppNavigator';
+import { faturasAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
 
-export default function LoginScreen({ navigation }) {
-  const { login } = useAuth();
-  const [email,    setEmail]    = useState('');
-  const [password, setPassword] = useState('');
-  const [loading,  setLoading]  = useState(false);
+const CAT_ICONS = {
+  'Tecnologia': '💻', 'Alimentação': '🍽️', 'Vestuário': '👕',
+  'Casa & Decoração': '🏠', 'Saúde & Beleza': '💊', 'Desporto': '🏋️',
+  'Entretenimento': '🎬', 'Transportes': '🚗', 'Educação': '📚', 'Outros': '📦',
+};
 
-  const handleLogin = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert('Erro', 'Preenche o email e a password.');
-      return;
-    }
-    setLoading(true);
-    try {
-      await login(email.trim().toLowerCase(), password);
-      // Navegação automática pelo AuthContext → AppNavigator
-    } catch (err) {
-      Alert.alert('Erro', err.message || 'Credenciais inválidas.');
-    } finally {
-      setLoading(false);
-    }
+function InfoRow({ label, value, valueColor }) {
+  if (!value) return null;
+  return (
+    <View style={styles.infoRow}>
+      <Text style={styles.infoLabel}>{label}</Text>
+      <Text style={[styles.infoValue, valueColor && { color: valueColor }]}>{value}</Text>
+    </View>
+  );
+}
+
+export default function FaturaDetalheScreen({ route, navigation }) {
+  const { id } = route.params;
+  const [fatura, setFatura]   = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    faturasAPI.detalhe(id)
+      .then(data => setFatura(data))
+      .catch(e => { Alert.alert('Erro', e.message); navigation.goBack(); })
+      .finally(() => setLoading(false));
+  }, [id]);
+
+  const handleDelete = () => {
+    Alert.alert('Eliminar', 'Tens a certeza que queres eliminar esta fatura?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar', style: 'destructive',
+        onPress: async () => {
+          try {
+            await faturasAPI.apagar(id);
+            navigation.goBack();
+          } catch (e) { Alert.alert('Erro', e.message); }
+        },
+      },
+    ]);
   };
 
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+  if (!fatura) return null;
+
+  const items = Array.isArray(fatura.items) ? fatura.items : [];
+
   return (
-    <KeyboardAvoidingView
-      style={styles.root}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
+      {/* Header com botão voltar */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.backText}>← Faturas</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+          <Text style={styles.deleteBtnText}>Eliminar</Text>
+        </TouchableOpacity>
+      </View>
 
-        {/* Logo */}
-        <View style={styles.logoWrap}>
-          <Text style={styles.logo}>💰 Verly</Text>
-          <Text style={styles.logoSub}>O teu assistente financeiro pessoal</Text>
+      {/* Hero */}
+      <View style={styles.hero}>
+        <View style={styles.heroIcon}>
+          <Text style={styles.heroIconText}>{CAT_ICONS[fatura.categoria] || '📄'}</Text>
         </View>
-
-        {/* Form */}
-        <View style={styles.card}>
-          <Text style={styles.title}>Entrar</Text>
-
-          <Text style={styles.label}>Email</Text>
-          <TextInput
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            placeholder="o.teu@email.com"
-            placeholderTextColor={COLORS.textSub}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
-
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder="••••••••"
-            placeholderTextColor={COLORS.textSub}
-            secureTextEntry
-          />
-
-          <TouchableOpacity
-            style={[styles.btn, loading && styles.btnDisabled]}
-            onPress={handleLogin}
-            disabled={loading}
-          >
-            {loading
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.btnText}>Entrar →</Text>
-            }
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.linkWrap}
-            onPress={() => navigation.navigate('Register')}
-          >
-            <Text style={styles.link}>Não tens conta? <Text style={styles.linkBold}>Regista-te</Text></Text>
-          </TouchableOpacity>
+        <Text style={styles.heroLoja}>{fatura.loja || fatura.nome_ficheiro}</Text>
+        <Text style={styles.heroTotal}>{(fatura.total || 0).toFixed(2)}€</Text>
+        <View style={styles.heroCatBadge}>
+          <Text style={styles.heroCatText}>{fatura.categoria}</Text>
         </View>
+      </View>
 
-      </ScrollView>
-    </KeyboardAvoidingView>
+      {/* Info */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Detalhes</Text>
+        <View style={styles.infoBox}>
+          <InfoRow label="Data de compra" value={fatura.data_compra} />
+          <InfoRow label="Ficheiro" value={fatura.nome_ficheiro} />
+          <InfoRow label="Data de upload" value={fatura.data_upload?.slice(0, 10)} />
+        </View>
+      </View>
+
+      {/* Prazos */}
+      {(fatura.data_garantia || fatura.data_devolucao) && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Prazos</Text>
+          <View style={styles.infoBox}>
+            <InfoRow label="🛡 Garantia até" value={fatura.data_garantia} valueColor={COLORS.green} />
+            <InfoRow label="↩ Devolução até" value={fatura.data_devolucao} valueColor={COLORS.yellow} />
+          </View>
+        </View>
+      )}
+
+      {/* Items */}
+      {items.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Items</Text>
+          <View style={styles.infoBox}>
+            {items.map((item, i) => (
+              <View key={i} style={styles.itemRow}>
+                <View style={styles.itemDot} />
+                <Text style={styles.itemText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-  },
-  scroll: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  logoWrap: {
-    alignItems: 'center',
-    marginBottom: 36,
-  },
-  logo: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: COLORS.text,
-    letterSpacing: -0.5,
-  },
-  logoSub: {
-    fontSize: 14,
-    color: COLORS.textSub,
-    marginTop: 6,
-  },
-  card: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 20,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.textSub,
-    marginBottom: 6,
-    marginTop: 12,
-  },
-  input: {
-    backgroundColor: COLORS.surface2,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    color: COLORS.text,
-    fontSize: 15,
-    padding: 12,
-  },
-  btn: {
-    backgroundColor: COLORS.brand,
-    borderRadius: 12,
-    padding: 15,
-    alignItems: 'center',
-    marginTop: 24,
-  },
-  btnDisabled: {
-    opacity: 0.6,
-  },
-  btnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  linkWrap: {
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  link: {
-    color: COLORS.textSub,
-    fontSize: 14,
-  },
-  linkBold: {
-    color: COLORS.brand,
-    fontWeight: '700',
-  },
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  content: { padding: 20, paddingBottom: 40 },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  backBtn: { padding: 4 },
+  backText: { color: COLORS.brand, fontSize: 15, fontWeight: '600' },
+  deleteBtn: { backgroundColor: 'rgba(255,71,87,0.12)', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7, borderWidth: 1, borderColor: 'rgba(255,71,87,0.25)' },
+  deleteBtnText: { color: COLORS.red, fontSize: 13, fontWeight: '600' },
+  hero:    { alignItems: 'center', marginBottom: 28 },
+  heroIcon: { width: 72, height: 72, backgroundColor: COLORS.surface, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 14, borderWidth: 1, borderColor: COLORS.border },
+  heroIconText: { fontSize: 36 },
+  heroLoja: { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
+  heroTotal: { fontSize: 36, fontWeight: '800', color: COLORS.brand, marginBottom: 10 },
+  heroCatBadge: { backgroundColor: 'rgba(83,74,183,0.15)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(83,74,183,0.3)' },
+  heroCatText: { color: COLORS.brand, fontSize: 13, fontWeight: '700' },
+  section: { marginBottom: 20 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
+  infoBox: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 4, borderWidth: 1, borderColor: COLORS.border },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  infoLabel: { fontSize: 13, color: COLORS.textSub },
+  infoValue: { fontSize: 13, fontWeight: '600', color: COLORS.text, maxWidth: '60%', textAlign: 'right' },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  itemDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.brand },
+  itemText: { fontSize: 13, color: COLORS.text, flex: 1 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/FaturasScreen.js">
+/**
+ * src/screens/FaturasScreen.js
+ */
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, FlatList, TouchableOpacity, StyleSheet,
+  TextInput, RefreshControl, ActivityIndicator, Alert,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { faturasAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const CAT_ICONS = {
+  'Tecnologia': '💻', 'Alimentação': '🍽️', 'Vestuário': '👕',
+  'Casa & Decoração': '🏠', 'Saúde & Beleza': '💊', 'Desporto': '🏋️',
+  'Entretenimento': '🎬', 'Transportes': '🚗', 'Educação': '📚', 'Outros': '📦',
+};
+
+function FaturaCard({ fatura, onPress, onDelete }) {
+  return (
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.cardIcon}>
+        <Text style={styles.cardIconText}>{CAT_ICONS[fatura.categoria] || '📄'}</Text>
+      </View>
+      <View style={styles.cardInfo}>
+        <Text style={styles.cardLoja} numberOfLines={1}>{fatura.loja || 'Sem nome'}</Text>
+        <Text style={styles.cardMeta}>{fatura.categoria} · {fatura.data_compra || fatura.data_upload?.slice(0, 10) || '—'}</Text>
+        {(fatura.data_garantia || fatura.data_devolucao) && (
+          <View style={styles.prazosRow}>
+            {fatura.data_devolucao && <Text style={styles.devTag}>↩ Dev: {fatura.data_devolucao}</Text>}
+            {fatura.data_garantia && <Text style={styles.garTag}>🛡 Gar: {fatura.data_garantia}</Text>}
+          </View>
+        )}
+      </View>
+      <View style={styles.cardRight}>
+        <Text style={[styles.cardTotal, fatura.total > 100 && styles.totalDanger]}>
+          {(fatura.total || 0).toFixed(2)}€
+        </Text>
+        <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(fatura.id)}>
+          <Text style={styles.deleteBtnText}>✕</Text>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+export default function FaturasScreen({ navigation }) {
+  const [faturas, setFaturas]     = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefresh]  = useState(false);
+  const [search, setSearch]       = useState('');
+  const [total, setTotal]         = useState(0);
+
+  const fetchFaturas = async (q = '') => {
+    try {
+      const data = await faturasAPI.listar(q ? { q } : {});
+      setFaturas(data.faturas || []);
+      setTotal(data.total || 0);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  };
+
+  useFocusEffect(useCallback(() => { setLoading(true); fetchFaturas(); }, []));
+
+  const handleSearch = (text) => {
+    setSearch(text);
+    fetchFaturas(text);
+  };
+
+  const handleDelete = (id) => {
+    Alert.alert('Eliminar', 'Tens a certeza que queres eliminar esta fatura?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar', style: 'destructive',
+        onPress: async () => {
+          try {
+            await faturasAPI.apagar(id);
+            setFaturas(prev => prev.filter(f => f.id !== id));
+          } catch (e) { Alert.alert('Erro', e.message); }
+        },
+      },
+    ]);
+  };
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.title}>Faturas</Text>
+          <Text style={styles.sub}>{faturas.length} faturas · {total.toFixed(2)}€</Text>
+        </View>
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchWrap}>
+        <Text style={styles.searchIcon}>🔍</Text>
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={handleSearch}
+          placeholder="Pesquisar loja..."
+          placeholderTextColor={COLORS.textSub}
+        />
+      </View>
+
+      {/* List */}
+      <FlatList
+        data={faturas}
+        keyExtractor={item => String(item.id)}
+        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchFaturas(search); }} tintColor={COLORS.brand} />}
+        renderItem={({ item }) => (
+          <FaturaCard
+            fatura={item}
+            onPress={() => navigation.navigate('FaturaDetalhe', { id: item.id })}
+            onDelete={handleDelete}
+          />
+        )}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🧾</Text>
+            <Text style={styles.emptyTitle}>Sem faturas</Text>
+            <Text style={styles.emptySub}>Carrega a tua primeira fatura através da app web.</Text>
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: COLORS.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 12 },
+  title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
+  sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 12, marginHorizontal: 20, marginBottom: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.border },
+  searchIcon: { fontSize: 16, marginRight: 8 },
+  searchInput: { flex: 1, color: COLORS.text, fontSize: 14, paddingVertical: 12 },
+  list: { paddingHorizontal: 20, paddingBottom: 32 },
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border, gap: 12 },
+  cardIcon: { width: 44, height: 44, borderRadius: 12, backgroundColor: COLORS.surface2, justifyContent: 'center', alignItems: 'center' },
+  cardIconText: { fontSize: 22 },
+  cardInfo: { flex: 1 },
+  cardLoja: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  cardMeta: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  prazosRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  devTag: { fontSize: 11, color: COLORS.yellow },
+  garTag: { fontSize: 11, color: COLORS.green },
+  cardRight: { alignItems: 'flex-end', gap: 6 },
+  cardTotal: { fontSize: 16, fontWeight: '800', color: COLORS.text },
+  totalDanger: { color: COLORS.red },
+  deleteBtn: { padding: 4 },
+  deleteBtnText: { fontSize: 12, color: COLORS.textSub },
+  empty: { alignItems: 'center', paddingTop: 60 },
+  emptyIcon: { fontSize: 48, marginBottom: 12, opacity: 0.3 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  emptySub: { fontSize: 13, color: COLORS.textSub, textAlign: 'center', maxWidth: 260, lineHeight: 20 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/NotificacoesScreen.js">
+/**
+ * src/screens/NotificacoesScreen.js
+ */
+import React, { useState, useEffect } from 'react';
+import {
+  View, Text, FlatList, StyleSheet,
+  TouchableOpacity, ActivityIndicator,
+} from 'react-native';
+import { notificacoesAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const URGENCIA_COLORS = { alta: COLORS.red, media: COLORS.yellow, info: COLORS.brand };
+
+export default function NotificacoesScreen({ navigation }) {
+  const [notifs, setNotifs]   = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    notificacoesAPI.listar()
+      .then(data => setNotifs(data.notificacoes || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Text style={styles.back}>← Voltar</Text>
+        </TouchableOpacity>
+        <Text style={styles.title}>Notificações</Text>
+        <View style={{ width: 60 }} />
+      </View>
+
+      <FlatList
+        data={notifs}
+        keyExtractor={(item, i) => `${item.tipo}-${i}`}
+        contentContainerStyle={styles.list}
+        renderItem={({ item }) => {
+          const color = URGENCIA_COLORS[item.urgencia] || COLORS.textSub;
+          return (
+            <TouchableOpacity
+              style={[styles.card, { borderLeftColor: color, borderLeftWidth: 3 }]}
+              onPress={() => {}}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.cardIcon}>{item.icone}</Text>
+              <View style={styles.cardBody}>
+                <Text style={styles.cardTitle}>{item.titulo}</Text>
+                <Text style={styles.cardMsg}>{item.mensagem}</Text>
+                <View style={[styles.urgBadge, { backgroundColor: `${color}22` }]}>
+                  <Text style={[styles.urgBadgeText, { color }]}>
+                    {item.urgencia === 'alta' ? 'URGENTE' : item.urgencia === 'media' ? 'ATENÇÃO' : 'INFO'}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        }}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>✅</Text>
+            <Text style={styles.emptyTitle}>Tudo em ordem!</Text>
+            <Text style={styles.emptySub}>Não tens notificações por agora.</Text>
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: COLORS.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 20, paddingTop: 16, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  back:   { color: COLORS.brand, fontSize: 15, fontWeight: '600', width: 60 },
+  title:  { fontSize: 17, fontWeight: '800', color: COLORS.text },
+  list:   { padding: 20, paddingBottom: 40 },
+  card:   { flexDirection: 'row', alignItems: 'flex-start', gap: 12, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border },
+  cardIcon: { fontSize: 22, marginTop: 2 },
+  cardBody: { flex: 1, gap: 4 },
+  cardTitle: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  cardMsg:   { fontSize: 13, color: COLORS.textSub, lineHeight: 19 },
+  urgBadge:  { borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2, alignSelf: 'flex-start', marginTop: 4 },
+  urgBadgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+  empty:      { alignItems: 'center', paddingTop: 80 },
+  emptyIcon:  { fontSize: 48, marginBottom: 12 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  emptySub:   { fontSize: 13, color: COLORS.textSub },
+});
+</file>
+
+<file path="verly-mobile/src/screens/PerfilScreen.js">
+/**
+ * src/screens/PerfilScreen.js
+ */
+import React, { useState } from 'react';
+import {
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  Alert, Switch,
+} from 'react-native';
+import { useAuth } from '../context/AuthContext';
+import { authAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const PERSONALIDADES = [
+  { key: 'calm',      nome: 'Calmo',          desc: 'Coach gentil e construtivo.', cor: COLORS.green },
+  { key: 'pro',       nome: 'Profissional',   desc: 'CFO pessoal. Números e factos.', cor: COLORS.brand },
+  { key: 'savage',    nome: 'Savage',         desc: 'Sem filtros. Verdade brutal.', cor: COLORS.red },
+  { key: 'sarcastic', nome: 'Sarcástico',     desc: 'Ironia refinada. Construtivo.', cor: COLORS.yellow },
+];
+
+export default function PerfilScreen() {
+  const { user, logout, updateUser } = useAuth();
+  const [saving, setSaving] = useState(false);
+
+  const handlePersonalidade = async (key) => {
+    try {
+      setSaving(true);
+      await authAPI.updateMe({ personalidade: key });
+      updateUser({ personalidade: key });
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleNotifToggle = async (val) => {
+    try {
+      await authAPI.updateMe({ notificacoes_email: val });
+      updateUser({ notificacoes_email: val });
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    }
+  };
+
+  const handleLogout = () => {
+    Alert.alert('Terminar sessão', 'Tens a certeza?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sair', style: 'destructive', onPress: logout },
+    ]);
+  };
+
+  const initial = user?.nome?.[0]?.toUpperCase() || '?';
+  const personalidade = user?.personalidade || 'calm';
+
+  return (
+    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
+      {/* Hero */}
+      <View style={styles.hero}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initial}</Text>
+        </View>
+        <Text style={styles.heroNome}>{user?.nome}</Text>
+        <Text style={styles.heroEmail}>{user?.email}</Text>
+        {user?.streak_dias > 0 && (
+          <View style={styles.streakBadge}>
+            <Text style={styles.streakText}>🔥 {user.streak_dias} dias de streak</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Stats */}
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{user?.orcamento_mensal ? `${user.orcamento_mensal}€` : '—'}</Text>
+          <Text style={styles.statLabel}>Orçamento</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{user?.streak_dias || 0}</Text>
+          <Text style={styles.statLabel}>Streak dias</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{personalidade[0].toUpperCase() + personalidade.slice(1)}</Text>
+          <Text style={styles.statLabel}>Modo</Text>
+        </View>
+      </View>
+
+      {/* Personalidade */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Personalidade da Verly</Text>
+        <View style={styles.persGrid}>
+          {PERSONALIDADES.map(p => (
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.persCard, personalidade === p.key && { borderColor: p.cor, backgroundColor: `${p.cor}15` }]}
+              onPress={() => handlePersonalidade(p.key)}
+              disabled={saving}
+            >
+              {personalidade === p.key && (
+                <View style={[styles.persDot, { backgroundColor: p.cor }]} />
+              )}
+              <Text style={[styles.persNome, personalidade === p.key && { color: p.cor }]}>{p.nome}</Text>
+              <Text style={styles.persDesc}>{p.desc}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {/* Notificações */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Preferências</Text>
+        <View style={styles.settingRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingLabel}>Notificações por email</Text>
+            <Text style={styles.settingDesc}>Alertas de garantias e orçamento</Text>
+          </View>
+          <Switch
+            value={user?.notificacoes_email || false}
+            onValueChange={handleNotifToggle}
+            trackColor={{ false: COLORS.surface2, true: COLORS.brand }}
+            thumbColor="#fff"
+          />
+        </View>
+      </View>
+
+      {/* Logout */}
+      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+        <Text style={styles.logoutText}>Terminar sessão</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  content: { padding: 20, paddingBottom: 40 },
+  hero:    { alignItems: 'center', paddingVertical: 24 },
+  avatar:  { width: 80, height: 80, borderRadius: 24, background: 'linear-gradient(135deg, #534AB7, #7B61FF)', backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  avatarText: { fontSize: 32, fontWeight: '800', color: '#fff' },
+  heroNome:  { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  heroEmail: { fontSize: 14, color: COLORS.textSub },
+  streakBadge: { marginTop: 10, backgroundColor: 'rgba(255,107,53,0.12)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)' },
+  streakText: { color: '#FF6B35', fontSize: 13, fontWeight: '700' },
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
+  statCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  statVal:   { fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  statLabel: { fontSize: 11, color: COLORS.textSub, textAlign: 'center' },
+  section:   { marginBottom: 24 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
+  persGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  persCard: { width: '47%', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: COLORS.border, position: 'relative' },
+  persDot:  { position: 'absolute', top: 10, right: 10, width: 8, height: 8, borderRadius: 4 },
+  persNome: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
+  persDesc: { fontSize: 11, color: COLORS.textSub, lineHeight: 15 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: COLORS.border },
+  settingLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 3 },
+  settingDesc:  { fontSize: 12, color: COLORS.textSub },
+  logoutBtn: { backgroundColor: 'rgba(255,71,87,0.08)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
+  logoutText: { color: COLORS.red, fontSize: 15, fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/SubscricoesScreen.js">
+/**
+ * src/screens/SubscricoesScreen.js
+ */
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, FlatList, StyleSheet,
+  RefreshControl, ActivityIndicator,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { subscricoesAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const RISK_COLORS = { danger: COLORS.red, warning: COLORS.yellow, ok: COLORS.green };
+
+function SubCard({ sub }) {
+  const riskColor = RISK_COLORS[sub.risk] || COLORS.textSub;
+  return (
+    <View style={[styles.card, { borderLeftColor: riskColor, borderLeftWidth: 3 }]}>
+      <View style={styles.cardLeft}>
+        <Text style={styles.cardIcon}>{sub.icone}</Text>
+      </View>
+      <View style={styles.cardInfo}>
+        <Text style={styles.cardNome}>{sub.nome}</Text>
+        <Text style={styles.cardAlerta}>{sub.alerta}</Text>
+        <View style={[styles.badge, { backgroundColor: `${riskColor}22` }]}>
+          <Text style={[styles.badgeText, { color: riskColor }]}>{sub.risk_label}</Text>
+        </View>
+      </View>
+      <View style={styles.cardRight}>
+        <Text style={[styles.cardPreco, { color: riskColor }]}>{sub.preco_mensal.toFixed(2)}€</Text>
+        <Text style={styles.cardPrecoPeriod}>/mês</Text>
+      </View>
+    </View>
+  );
+}
+
+export default function SubscricoesScreen() {
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [refreshing, setRefresh]= useState(false);
+
+  const fetchData = async () => {
+    try {
+      const result = await subscricoesAPI.listar();
+      setData(result);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  };
+
+  useFocusEffect(useCallback(() => { fetchData(); }, []));
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+
+  const subs = data?.subscriptions || [];
+  const totalMensal = data?.total_mensal_desperdicado || 0;
+  const countDanger = data?.count_danger || 0;
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Leak Detector</Text>
+        <Text style={styles.sub}>Subscrições que drenam a tua conta</Text>
+      </View>
+
+      {/* Resumo */}
+      {totalMensal > 0 && (
+        <View style={styles.wasteBox}>
+          <View>
+            <Text style={styles.wasteLabel}>DESPERDÍCIO / MÊS</Text>
+            <Text style={styles.wasteVal}>{totalMensal.toFixed(2)}€</Text>
+            <Text style={styles.wasteAnual}>≈ {Math.round(totalMensal * 12)}€/ano</Text>
+          </View>
+          {countDanger > 0 && (
+            <View style={styles.dangerBadge}>
+              <Text style={styles.dangerBadgeNum}>{countDanger}</Text>
+              <Text style={styles.dangerBadgeLabel}>para cancelar</Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Lista */}
+      <FlatList
+        data={subs}
+        keyExtractor={(item, i) => item.db_id?.toString() || item.nome + i}
+        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchData(); }} tintColor={COLORS.brand} />}
+        renderItem={({ item }) => <SubCard sub={item} />}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🛡️</Text>
+            <Text style={styles.emptyTitle}>Sem subscrições detetadas</Text>
+            <Text style={styles.emptySub}>Carrega um extrato bancário na app web para detetar subscrições automáticas.</Text>
+          </View>
+        }
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: COLORS.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  header: { padding: 20, paddingBottom: 12 },
+  title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
+  sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
+  wasteBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,71,87,0.07)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.15)', borderRadius: 14, marginHorizontal: 20, marginBottom: 16, padding: 16 },
+  wasteLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, color: COLORS.red, marginBottom: 4 },
+  wasteVal:   { fontSize: 28, fontWeight: '800', color: COLORS.red },
+  wasteAnual: { fontSize: 11, color: COLORS.red, opacity: 0.7, marginTop: 2 },
+  dangerBadge: { backgroundColor: 'rgba(255,71,87,0.12)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 12, padding: 12, alignItems: 'center' },
+  dangerBadgeNum: { fontSize: 22, fontWeight: '800', color: COLORS.red },
+  dangerBadgeLabel: { fontSize: 10, color: COLORS.red },
+  list: { paddingHorizontal: 20, paddingBottom: 32 },
+  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border, gap: 12 },
+  cardLeft: { width: 40, height: 40, borderRadius: 10, backgroundColor: COLORS.surface2, justifyContent: 'center', alignItems: 'center' },
+  cardIcon: { fontSize: 20 },
+  cardInfo: { flex: 1, gap: 3 },
+  cardNome:   { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  cardAlerta: { fontSize: 12, color: COLORS.textSub },
+  badge: { borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2, alignSelf: 'flex-start', marginTop: 2 },
+  badgeText: { fontSize: 10, fontWeight: '700' },
+  cardRight: { alignItems: 'flex-end' },
+  cardPreco:  { fontSize: 16, fontWeight: '800' },
+  cardPrecoPeriod: { fontSize: 11, color: COLORS.textSub },
+  empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
+  emptyIcon:  { fontSize: 48, marginBottom: 12, opacity: 0.3 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center', lineHeight: 20 },
 });
 </file>
 
@@ -6722,6 +7436,331 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
+<file path="verly-mobile/src/navigation/AppNavigator.js">
+/**
+ * src/navigation/AppNavigator.js
+ * Navegação principal da app.
+ *
+ * Estrutura:
+ *   - Stack raiz → AuthStack | MainStack
+ *   - AuthStack  → Login, Register
+ *   - MainStack  → Bottom Tabs + ecrãs de detalhe
+ *   - Bottom Tabs → Dashboard, Faturas, Chat, Subscrições, Perfil
+ */
+
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { ActivityIndicator, View } from 'react-native';
+
+import { useAuth } from '../context/AuthContext';
+
+// ── Ecrãs de autenticação ─────────────────────────────────────────────────────
+import LoginScreen    from '../screens/auth/LoginScreen';
+import RegisterScreen from '../screens/auth/RegisterScreen';
+
+// ── Ecrãs principais ──────────────────────────────────────────────────────────
+import DashboardScreen    from '../screens/DashboardScreen';
+import FaturasScreen      from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen         from '../screens/ChatScreen';
+import SubscricoesScreen  from '../screens/SubscricoesScreen';
+import PerfilScreen       from '../screens/PerfilScreen';
+import NotificacoesScreen from '../screens/NotificacoesScreen';
+
+// ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
+import TabIcon from '../components/TabIcon';
+
+const Stack   = createNativeStackNavigator();
+const Tab     = createBottomTabNavigator();
+const AuthStack = createNativeStackNavigator();
+const MainStack = createNativeStackNavigator();
+
+// Cores e estilo global
+export const COLORS = {
+  brand:     '#534AB7',
+  brandLight:'#EEF0FF',
+  bg:        '#0F0F1A',
+  surface:   '#1A1A2E',
+  surface2:  '#22223A',
+  border:    '#2E2E4E',
+  text:      '#F0F0F8',
+  textSub:   '#8888AA',
+  green:     '#00D68F',
+  red:       '#FF4757',
+  yellow:    '#FFB800',
+};
+
+
+// ── Auth Stack ────────────────────────────────────────────────────────────────
+
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+
+// ── Bottom Tabs ───────────────────────────────────────────────────────────────
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown:    false,
+        tabBarStyle:    {
+          backgroundColor: COLORS.surface,
+          borderTopColor:  COLORS.border,
+          borderTopWidth:  1,
+          paddingBottom:   8,
+          paddingTop:      8,
+          height:          64,
+        },
+        tabBarActiveTintColor:   COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => (
+          <TabIcon name={route.name} color={color} size={size} />
+        ),
+      })}
+    >
+      <Tab.Screen name="Dashboard"   component={DashboardScreen}   options={{ tabBarLabel: 'Início' }} />
+      <Tab.Screen name="Faturas"     component={FaturasScreen}      options={{ tabBarLabel: 'Faturas' }} />
+      <Tab.Screen name="Chat"        component={ChatScreen}         options={{ tabBarLabel: 'Chat IA' }} />
+      <Tab.Screen name="Subscricoes" component={SubscricoesScreen}  options={{ tabBarLabel: 'Subs' }} />
+      <Tab.Screen name="Perfil"      component={PerfilScreen}       options={{ tabBarLabel: 'Perfil' }} />
+    </Tab.Navigator>
+  );
+}
+
+
+// ── Main Stack (tabs + ecrãs de detalhe) ─────────────────────────────────────
+
+function MainNavigator() {
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"           component={MainTabs} />
+      <MainStack.Screen name="FaturaDetalhe"  component={FaturaDetalheScreen} />
+      <MainStack.Screen name="Notificacoes"   component={NotificacoesScreen} />
+    </MainStack.Navigator>
+  );
+}
+
+
+// ── Root Navigator ────────────────────────────────────────────────────────────
+
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainNavigator} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+</file>
+
+<file path="verly-mobile/src/screens/auth/LoginScreen.js">
+/**
+ * src/screens/auth/LoginScreen.js
+ */
+
+import React, { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity,
+  StyleSheet, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, ScrollView,
+} from 'react-native';
+import { useAuth } from '../../context/AuthContext';
+import { COLORS } from '../../constants/theme';
+
+export default function LoginScreen({ navigation }) {
+  const { login } = useAuth();
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [loading,  setLoading]  = useState(false);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      Alert.alert('Erro', 'Preenche o email e a password.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await login(email.trim().toLowerCase(), password);
+      // Navegação automática pelo AuthContext → AppNavigator
+    } catch (err) {
+      Alert.alert('Erro', err.message || 'Credenciais inválidas.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+
+        {/* Logo */}
+        <View style={styles.logoWrap}>
+          <Text style={styles.logo}>💰 Verly</Text>
+          <Text style={styles.logoSub}>O teu assistente financeiro pessoal</Text>
+        </View>
+
+        {/* Form */}
+        <View style={styles.card}>
+          <Text style={styles.title}>Entrar</Text>
+
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            placeholder="o.teu@email.com"
+            placeholderTextColor={COLORS.textSub}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+            placeholder="••••••••"
+            placeholderTextColor={COLORS.textSub}
+            secureTextEntry
+          />
+
+          <TouchableOpacity
+            style={[styles.btn, loading && styles.btnDisabled]}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.btnText}>Entrar →</Text>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.linkWrap}
+            onPress={() => navigation.navigate('Register')}
+          >
+            <Text style={styles.link}>Não tens conta? <Text style={styles.linkBold}>Regista-te</Text></Text>
+          </TouchableOpacity>
+        </View>
+
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  scroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 24,
+  },
+  logoWrap: {
+    alignItems: 'center',
+    marginBottom: 36,
+  },
+  logo: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: COLORS.text,
+    letterSpacing: -0.5,
+  },
+  logoSub: {
+    fontSize: 14,
+    color: COLORS.textSub,
+    marginTop: 6,
+  },
+  card: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  input: {
+    backgroundColor: COLORS.surface2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    color: COLORS.text,
+    fontSize: 15,
+    padding: 12,
+  },
+  btn: {
+    backgroundColor: COLORS.brand,
+    borderRadius: 12,
+    padding: 15,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  btnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  linkWrap: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  link: {
+    color: COLORS.textSub,
+    fontSize: 14,
+  },
+  linkBold: {
+    color: COLORS.brand,
+    fontWeight: '700',
+  },
+});
+</file>
+
 <file path=".gitignore">
 venv/
 storage/
@@ -7542,6 +8581,41 @@ Run the Application:
 /static: Assets, including custom CSS and inline SVG icons.
 
 /user_data: Isolated storage for text data and vector indices per user (Privacy First).
+</file>
+
+<file path="verly-mobile/package.json">
+{
+  "name": "verly-mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/bottom-tabs": "^6.5.11",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/native-stack": "^7.14.14",
+    "@react-navigation/stack": "^6.3.20",
+    "axios": "^1.6.7",
+    "expo": "^54.0.34",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^0.322.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
 </file>
 
 <file path="verly-mobile/src/services/api.js">

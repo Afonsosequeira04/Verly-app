@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   root:    { flex: 1, backgroundColor: COLORS.bg },
   content: { padding: 20, paddingBottom: 40 },
   hero:    { alignItems: 'center', paddingVertical: 24 },
-  avatar:  { width: 80, height: 80, borderRadius: 24, background: 'linear-gradient(135deg, #534AB7, #7B61FF)', backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  avatar:  { width: 80, height: 80, borderRadius: 24, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
   avatarText: { fontSize: 32, fontWeight: '800', color: '#fff' },
   heroNome:  { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
   heroEmail: { fontSize: 14, color: COLORS.textSub },

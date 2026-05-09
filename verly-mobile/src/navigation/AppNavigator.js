@@ -11,7 +11,7 @@
 
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { ActivityIndicator, View } from 'react-native';
 
@@ -22,35 +22,35 @@ import LoginScreen    from '../screens/auth/LoginScreen';
 import RegisterScreen from '../screens/auth/RegisterScreen';
 
 // ── Ecrãs principais ──────────────────────────────────────────────────────────
-import DashboardScreen    from '../screens/DashboardScreen';
-import FaturasScreen      from '../screens/FaturasScreen';
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
 import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen         from '../screens/ChatScreen';
-import SubscricoesScreen  from '../screens/SubscricoesScreen';
-import PerfilScreen       from '../screens/PerfilScreen';
-import NotificacoesScreen from '../screens/NotificacoesScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
 
-// ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
+// ── Ícones ────────────────────────────────────────────────────────────────────
 import TabIcon from '../components/TabIcon';
 
-const Stack   = createNativeStackNavigator();
-const Tab     = createBottomTabNavigator();
-const AuthStack = createNativeStackNavigator();
-const MainStack = createNativeStackNavigator();
+const Stack     = createStackNavigator();
+const Tab       = createBottomTabNavigator();
+const AuthStack = createStackNavigator();
+const MainStack = createStackNavigator();
 
 // Cores e estilo global
 export const COLORS = {
-  brand:     '#534AB7',
-  brandLight:'#EEF0FF',
-  bg:        '#0F0F1A',
-  surface:   '#1A1A2E',
-  surface2:  '#22223A',
-  border:    '#2E2E4E',
-  text:      '#F0F0F8',
-  textSub:   '#8888AA',
-  green:     '#00D68F',
-  red:       '#FF4757',
-  yellow:    '#FFB800',
+  brand:      '#534AB7',
+  brandLight: '#EEF0FF',
+  bg:         '#0F0F1A',
+  surface:    '#1A1A2E',
+  surface2:   '#22223A',
+  border:     '#2E2E4E',
+  text:       '#F0F0F8',
+  textSub:    '#8888AA',
+  green:      '#00D68F',
+  red:        '#FF4757',
+  yellow:     '#FFB800',
 };
 
 
@@ -72,8 +72,8 @@ function MainTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerShown:    false,
-        tabBarStyle:    {
+        headerShown: false,
+        tabBarStyle: {
           backgroundColor: COLORS.surface,
           borderTopColor:  COLORS.border,
           borderTopWidth:  1,
@@ -89,11 +89,11 @@ function MainTabs() {
         ),
       })}
     >
-      <Tab.Screen name="Dashboard"   component={DashboardScreen}   options={{ tabBarLabel: 'Início' }} />
-      <Tab.Screen name="Faturas"     component={FaturasScreen}      options={{ tabBarLabel: 'Faturas' }} />
-      <Tab.Screen name="Chat"        component={ChatScreen}         options={{ tabBarLabel: 'Chat IA' }} />
-      <Tab.Screen name="Subscricoes" component={SubscricoesScreen}  options={{ tabBarLabel: 'Subs' }} />
-      <Tab.Screen name="Perfil"      component={PerfilScreen}       options={{ tabBarLabel: 'Perfil' }} />
+      <Tab.Screen name="Dashboard"   component={DashboardScreen}  options={{ tabBarLabel: 'Início' }} />
+      <Tab.Screen name="Faturas"     component={FaturasScreen}     options={{ tabBarLabel: 'Faturas' }} />
+      <Tab.Screen name="Chat"        component={ChatScreen}        options={{ tabBarLabel: 'Chat IA' }} />
+      <Tab.Screen name="Subscricoes" component={SubscricoesScreen} options={{ tabBarLabel: 'Subs' }} />
+      <Tab.Screen name="Perfil"      component={PerfilScreen}      options={{ tabBarLabel: 'Perfil' }} />
     </Tab.Navigator>
   );
 }
@@ -104,9 +104,9 @@ function MainTabs() {
 function MainNavigator() {
   return (
     <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs"           component={MainTabs} />
-      <MainStack.Screen name="FaturaDetalhe"  component={FaturaDetalheScreen} />
-      <MainStack.Screen name="Notificacoes"   component={NotificacoesScreen} />
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen} />
     </MainStack.Navigator>
   );
 }

@@ -10,7 +10,11 @@ Regista no __init__.py principal:
 """
 
 from flask import Blueprint
+from app import csrf
 
 api_bp = Blueprint('api', __name__)
+
+# Excluir as rotas da API do CSRF protection (usam JWT em vez de CSRF)
+csrf.exempt(api_bp)
 
 from app.api import auth, dashboard, faturas, chat  # noqa
