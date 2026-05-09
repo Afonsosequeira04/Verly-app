@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Muda para o IP da tua máquina quando testares em dispositivo físico
 // Em emulador Android: http://10.0.2.2:5000/api/v1
 // Em emulador iOS:     http://localhost:5000/api/v1
-const BASE_URL = 'http://192.168.1.250:5000/api/v1';
+const BASE_URL = 'http://192.168.1.251:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
