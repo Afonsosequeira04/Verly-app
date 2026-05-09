@@ -9,7 +9,7 @@ import {
   ActivityIndicator, Alert, ScrollView,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
-import { COLORS } from '../../navigation/AppNavigator';
+import { COLORS } from '../../constants/theme';
 
 export default function LoginScreen({ navigation }) {
   const { login } = useAuth();

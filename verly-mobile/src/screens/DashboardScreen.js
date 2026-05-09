@@ -11,7 +11,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { dashboardAPI } from '../services/api';
-import { COLORS } from '../navigation/AppNavigator';
+import { COLORS } from '../constants/theme';
 
 // ── Sub-componentes ───────────────────────────────────────────────────────────
 

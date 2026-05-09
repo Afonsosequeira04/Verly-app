@@ -31,7 +31,7 @@ import PerfilScreen       from '../screens/PerfilScreen';
 import NotificacoesScreen from '../screens/NotificacoesScreen';
 
 // ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
-import { TabIcon } from '../components/TabIcon';
+import TabIcon from '../components/TabIcon';
 
 const Stack   = createNativeStackNavigator();
 const Tab     = createBottomTabNavigator();
