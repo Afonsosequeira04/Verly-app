@@ -43,6 +43,11 @@ The content is organized as follows:
 .gitignore
 app/__init__.py
 app/ai.py
+app/api/__init__.py
+app/api/auth.py
+app/api/chat.py
+app/api/dashboard.py
+app/api/faturas.py
 app/auth.py
 app/chat.py
 app/configuracoes.py
@@ -119,10 +124,740 @@ templates/perfil.html
 templates/relatorio.html
 templates/scoring.html
 templates/subscriptions.html
+verly-mobile/App.js
+verly-mobile/package.json
+verly-mobile/src/context/AuthContext.js
+verly-mobile/src/navigation/AppNavigator.js
+verly-mobile/src/screens/auth/DashboardScreen.js
+verly-mobile/src/screens/auth/LoginScreen.js
+verly-mobile/src/services/api.js
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/__init__.py">
+"""
+app/api/__init__.py — Blueprint da API REST para o React Native
+
+Todos os endpoints aqui retornam JSON.
+Autenticação via JWT (flask-jwt-extended).
+
+Regista no __init__.py principal:
+    from app.api import api_bp
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
+"""
+
+from flask import Blueprint
+
+api_bp = Blueprint('api', __name__)
+
+from app.api import auth, dashboard, faturas, notificacoes, chat, subscricoes, metas  # noqa
+</file>
+
+<file path="app/api/auth.py">
+"""
+app/api/auth.py — Endpoints de autenticação para o mobile
+
+POST /api/v1/auth/login     → {access_token, user}
+POST /api/v1/auth/register  → {access_token, user}
+GET  /api/v1/auth/me        → {user}
+POST /api/v1/auth/logout    → {success}
+"""
+
+import logging
+import re
+from flask import request, jsonify
+from flask_jwt_extended import (
+    create_access_token, jwt_required, get_jwt_identity, get_jwt
+)
+from app.api import api_bp
+from app.models import User
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _user_to_dict(user):
+    """Serializa o utilizador para JSON (sem dados sensíveis)."""
+    return {
+        'id':                  user.id,
+        'nome':                user.nome,
+        'email':               user.email,
+        'orcamento_mensal':    user.orcamento_mensal or 0,
+        'personalidade':       getattr(user, 'personalidade', 'calm') or 'calm',
+        'notificacoes_email':  getattr(user, 'notificacoes_email', False),
+        'onboarding_completo': getattr(user, 'onboarding_completo', False),
+        'streak_dias':         getattr(user, 'streak_dias', 0) or 0,
+    }
+
+
+@api_bp.route('/auth/login', methods=['POST'])
+def login():
+    """
+    Login com email + password.
+    Body JSON: {email, password}
+    """
+    data = request.get_json(silent=True) or {}
+    email    = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not email or not password:
+        return jsonify({'error': 'Email e password são obrigatórios.'}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.check_password(password):
+        logger.warning(f'Tentativa de login falhada — email={email!r}')
+        return jsonify({'error': 'Credenciais inválidas.'}), 401
+
+    access_token = create_access_token(identity=str(user.id))
+    logger.info(f'Login mobile — user_id={user.id}')
+
+    return jsonify({
+        'access_token': access_token,
+        'user': _user_to_dict(user),
+    })
+
+
+@api_bp.route('/auth/register', methods=['POST'])
+def register():
+    """
+    Registo de novo utilizador.
+    Body JSON: {nome, email, password}
+    """
+    data = request.get_json(silent=True) or {}
+    nome     = (data.get('nome') or '').strip()
+    email    = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    # Validações básicas
+    errors = []
+    if not nome or len(nome) < 2:
+        errors.append('Nome deve ter pelo menos 2 caracteres.')
+    if not email or not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+        errors.append('Email inválido.')
+    if not password or len(password) < 8:
+        errors.append('Password deve ter pelo menos 8 caracteres.')
+    elif not re.search(r'[A-Za-z]', password) or not re.search(r'[0-9]', password):
+        errors.append('Password deve conter letras e números.')
+
+    if errors:
+        return jsonify({'error': errors[0]}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': 'Este email já está registado.'}), 409
+
+    user = User(nome=nome, email=email, onboarding_completo=False)
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+    logger.info(f'Novo utilizador (mobile) — user_id={user.id}')
+
+    return jsonify({
+        'access_token': access_token,
+        'user': _user_to_dict(user),
+    }), 201
+
+
+@api_bp.route('/auth/me', methods=['GET'])
+@jwt_required()
+def me():
+    """Retorna os dados do utilizador autenticado."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    return jsonify({'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/me', methods=['PATCH'])
+@jwt_required()
+def update_me():
+    """
+    Atualiza perfil do utilizador.
+    Body JSON: {nome?, orcamento_mensal?, personalidade?, notificacoes_email?}
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    data = request.get_json(silent=True) or {}
+
+    PERSONALIDADES_VALIDAS = {'calm', 'pro', 'savage', 'sarcastic'}
+
+    if 'nome' in data and data['nome']:
+        user.nome = data['nome'].strip()[:100]
+    if 'orcamento_mensal' in data:
+        try:
+            user.orcamento_mensal = max(0, float(data['orcamento_mensal']))
+        except (ValueError, TypeError):
+            pass
+    if 'personalidade' in data and data['personalidade'] in PERSONALIDADES_VALIDAS:
+        user.personalidade = data['personalidade']
+    if 'notificacoes_email' in data:
+        user.notificacoes_email = bool(data['notificacoes_email'])
+
+    db.session.commit()
+    return jsonify({'user': _user_to_dict(user)})
+</file>
+
+<file path="app/api/chat.py">
+"""
+app/api/chat.py — Chat para o mobile
+POST /api/v1/chat/mensagem  → envia mensagem e recebe resposta da IA
+GET  /api/v1/chat/historico → histórico da conversa
+POST /api/v1/chat/limpar    → limpa histórico
+"""
+import logging
+from flask import request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Conversa, User
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+@api_bp.route('/chat/mensagem', methods=['POST'])
+@jwt_required()
+def chat_mensagem():
+    from app.ai import get_user_paths, rebuild_index, ask_question
+    user_id = int(get_jwt_identity())
+    user    = User.query.get_or_404(user_id)
+
+    data    = request.get_json(silent=True) or {}
+    mensagem = (data.get('mensagem') or '').strip()[:2000]
+
+    if not mensagem:
+        return jsonify({'error': 'Mensagem vazia.'}), 400
+
+    data_dir, storage_dir = get_user_paths(
+        current_app.config['UPLOAD_FOLDER'],
+        current_app.config['STORAGE_FOLDER'],
+        user_id
+    )
+
+    try:
+        index    = rebuild_index(data_dir, storage_dir)
+        resposta = ask_question(
+            index, mensagem, user_id,
+            personalidade=getattr(user, 'personalidade', 'calm')
+        )
+    except Exception as e:
+        logger.error(f'Erro no chat API: {e}')
+        return jsonify({'error': 'Erro ao processar a mensagem.'}), 500
+
+    # Guardar conversa
+    conversa = Conversa(user_id=user_id, pergunta=mensagem, resposta=resposta)
+    db.session.add(conversa)
+    db.session.commit()
+
+    return jsonify({'resposta': resposta, 'id': conversa.id})
+
+
+@api_bp.route('/chat/historico', methods=['GET'])
+@jwt_required()
+def chat_historico():
+    user_id = int(get_jwt_identity())
+    limite  = min(int(request.args.get('limite', 20)), 50)
+    conversas = (Conversa.query
+                 .filter_by(user_id=user_id)
+                 .order_by(Conversa.timestamp.desc())
+                 .limit(limite).all())
+    return jsonify({'historico': [
+        {
+            'id':        c.id,
+            'pergunta':  c.pergunta,
+            'resposta':  c.resposta,
+            'timestamp': c.timestamp.isoformat() if c.timestamp else None,
+        }
+        for c in reversed(conversas)
+    ]})
+
+
+@api_bp.route('/chat/limpar', methods=['POST'])
+@jwt_required()
+def chat_limpar():
+    user_id = int(get_jwt_identity())
+    Conversa.query.filter_by(user_id=user_id).delete()
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+app/api/subscricoes.py — Subscrições para o mobile
+GET /api/v1/subscricoes → lista de subscrições detectadas
+"""
+from app.subscriptions import detect_subscriptions
+
+
+@api_bp.route('/subscricoes', methods=['GET'])
+@jwt_required()
+def subscricoes():
+    user_id = int(get_jwt_identity())
+    data    = detect_subscriptions(user_id)
+    return jsonify(data)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+app/api/metas.py — Metas financeiras para o mobile
+GET  /api/v1/metas           → lista de metas
+POST /api/v1/metas           → criar meta
+DELETE /api/v1/metas/<id>    → apagar meta
+"""
+from app.models import Meta
+
+
+@api_bp.route('/metas', methods=['GET'])
+@jwt_required()
+def listar_metas():
+    user_id = int(get_jwt_identity())
+    metas   = Meta.query.filter_by(user_id=user_id).all()
+    return jsonify({'metas': [
+        {
+            'id':        m.id,
+            'nome':      m.nome,
+            'limite':    m.limite,
+            'categoria': m.categoria,
+        }
+        for m in metas
+    ]})
+
+
+@api_bp.route('/metas', methods=['POST'])
+@jwt_required()
+def criar_meta():
+    user_id = int(get_jwt_identity())
+    data    = request.get_json(silent=True) or {}
+    nome    = (data.get('nome') or '').strip()[:100]
+    limite  = data.get('limite')
+    categoria = (data.get('categoria') or 'Outros').strip()
+
+    if not nome or limite is None:
+        return jsonify({'error': 'Nome e limite são obrigatórios.'}), 400
+
+    try:
+        limite = float(limite)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Limite inválido.'}), 400
+
+    meta = Meta(user_id=user_id, nome=nome, limite=limite, categoria=categoria)
+    db.session.add(meta)
+    db.session.commit()
+    return jsonify({'id': meta.id, 'nome': meta.nome, 'limite': meta.limite}), 201
+
+
+@api_bp.route('/metas/<int:meta_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_meta(meta_id):
+    user_id = int(get_jwt_identity())
+    meta    = Meta.query.filter_by(id=meta_id, user_id=user_id).first_or_404()
+    db.session.delete(meta)
+    db.session.commit()
+    return jsonify({'success': True})
+</file>
+
+<file path="app/api/dashboard.py">
+"""
+app/api/dashboard.py — Endpoint do dashboard para o mobile
+
+GET /api/v1/dashboard → resumo completo
+"""
+
+import json
+import logging
+from collections import defaultdict
+from datetime import datetime
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, Conversa
+from app.subscriptions import detect_subscriptions
+from app.dashboard import (
+    _normalise_personality, _calcular_mood, _atualizar_streak,
+    _evolucao_mensal_real, _comparacao_mensal, _get_metas_dashboard,
+    _gerar_feed_verly, _score_ultima_fatura, _parse_date
+)
+from app.notificacoes import gerar_notificacoes
+from app.reports import _regret_factor
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+@api_bp.route('/dashboard', methods=['GET'])
+@jwt_required()
+def dashboard():
+    """
+    Retorna todos os dados do dashboard em JSON.
+    O React Native usa este endpoint para montar o ecrã principal.
+    """
+    from app.models import User
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+
+    faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
+    conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
+
+    total_gasto = sum(f.total or 0 for f in faturas)
+    num_faturas = len(faturas)
+    orcamento   = getattr(user, 'orcamento_mensal', 0) or 0
+    personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
+
+    # Categorias
+    categorias = defaultdict(float)
+    for f in faturas:
+        categorias[f.categoria or 'Outros'] += f.total or 0
+
+    # Lojas
+    lojas = defaultdict(float)
+    for f in faturas:
+        lojas[f.loja or 'Desconhecida'] += f.total or 0
+    top_loja = max(lojas, key=lojas.get) if lojas else None
+
+    # Alertas de garantia/devolução
+    hoje = datetime.now()
+    alertas = []
+    for f in faturas:
+        data_dev = _parse_date(f.data_devolucao)
+        if data_dev and data_dev >= hoje:
+            dias = (data_dev - hoje).days
+            if dias <= 7:
+                alertas.append({
+                    'tipo': 'devolucao', 'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—', 'data': f.data_devolucao,
+                    'dias': dias, 'urgencia': 'critico' if dias <= 3 else 'aviso'
+                })
+        data_gar = _parse_date(f.data_garantia)
+        if data_gar and data_gar >= hoje:
+            dias = (data_gar - hoje).days
+            if dias <= 30:
+                alertas.append({
+                    'tipo': 'garantia', 'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—', 'data': f.data_garantia,
+                    'dias': dias, 'urgencia': 'critico' if dias <= 7 else 'aviso'
+                })
+    alertas.sort(key=lambda x: x['dias'])
+
+    subs_data    = detect_subscriptions(user_id)
+    metas_info   = _get_metas_dashboard(user_id)
+    mood         = _calcular_mood(total_gasto, orcamento, len(alertas), personalidade)
+    streak       = _atualizar_streak(user, faturas, orcamento)
+    feed_verly   = _gerar_feed_verly(faturas, conversas, orcamento, subs_data, personalidade, metas_info)
+    comparacao   = _comparacao_mensal(faturas)
+    trend_labels, trend_values = _evolucao_mensal_real(faturas)
+
+    ultima_fatura = faturas[0] if faturas else None
+    score_ultima  = _score_ultima_fatura(ultima_fatura)
+
+    desperdicado_mes = sum(
+        (f.total or 0) * _regret_factor(f.categoria or 'Outros') for f in faturas
+    )
+
+    # Últimas faturas (para lista no dashboard)
+    def fatura_mini(f):
+        return {
+            'id':          f.id,
+            'loja':        f.loja or f.nome_ficheiro,
+            'total':       f.total or 0,
+            'categoria':   f.categoria or 'Outros',
+            'data_compra': f.data_compra,
+            'data_upload': f.data_upload.isoformat() if f.data_upload else None,
+        }
+
+    return jsonify({
+        'total_gasto':    round(total_gasto, 2),
+        'num_faturas':    num_faturas,
+        'top_loja':       top_loja,
+        'orcamento':      orcamento,
+        'streak':         streak,
+        'mood':           mood,
+        'feed':           feed_verly,
+        'alertas':        alertas,
+        'comparacao':     comparacao,
+        'score_ultima':   score_ultima,
+        'desperdicado_mes': round(desperdicado_mes, 2),
+        'categorias':     [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        'lojas':          [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
+        'evolucao':       {'labels': trend_labels, 'values': trend_values},
+        'subscricoes': {
+            'total_mensal': round(subs_data['total_mensal_desperdicado'], 2),
+            'count_danger': subs_data['count_danger'],
+            'count_warning': subs_data['count_warning'],
+            'top3': subs_data['subscriptions'][:3],
+        },
+        'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
+    })
+</file>
+
+<file path="app/api/faturas.py">
+"""
+app/api/faturas.py — CRUD de faturas para o mobile
+
+GET    /api/v1/faturas           → lista
+POST   /api/v1/faturas/upload    → upload de ficheiro
+GET    /api/v1/faturas/<id>      → detalhe
+DELETE /api/v1/faturas/<id>      → apagar
+"""
+
+import os
+import json
+import logging
+from flask import request, jsonify, current_app
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, CATEGORIAS
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _fatura_to_dict(f):
+    try:
+        items = json.loads(f.items) if f.items else []
+    except Exception:
+        items = []
+    return {
+        'id':             f.id,
+        'nome_ficheiro':  f.nome_ficheiro,
+        'loja':           f.loja,
+        'data_compra':    f.data_compra,
+        'data_upload':    f.data_upload.isoformat() if f.data_upload else None,
+        'total':          f.total or 0,
+        'items':          items,
+        'categoria':      f.categoria or 'Outros',
+        'data_garantia':  f.data_garantia,
+        'data_devolucao': f.data_devolucao,
+    }
+
+
+@api_bp.route('/faturas', methods=['GET'])
+@jwt_required()
+def listar_faturas():
+    user_id   = int(get_jwt_identity())
+    search    = request.args.get('q', '').strip()[:200]
+    categoria = request.args.get('categoria', '').strip()
+    ordenar   = request.args.get('ordenar', 'recente').strip()
+
+    if categoria and categoria not in CATEGORIAS:
+        categoria = ''
+    if ordenar not in {'recente', 'antigo', 'maior', 'menor'}:
+        ordenar = 'recente'
+
+    query = Fatura.query.filter_by(user_id=user_id)
+    if search:
+        query = query.filter(
+            db.or_(
+                Fatura.loja.ilike(f'%{search}%'),
+                Fatura.nome_ficheiro.ilike(f'%{search}%'),
+            )
+        )
+    if categoria:
+        query = query.filter_by(categoria=categoria)
+
+    order_map = {
+        'recente': Fatura.data_upload.desc(),
+        'antigo':  Fatura.data_upload.asc(),
+        'maior':   Fatura.total.desc(),
+        'menor':   Fatura.total.asc(),
+    }
+    faturas = query.order_by(order_map[ordenar]).all()
+
+    return jsonify({
+        'faturas':    [_fatura_to_dict(f) for f in faturas],
+        'total':      round(sum(f.total or 0 for f in faturas), 2),
+        'categorias': CATEGORIAS,
+    })
+
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['GET'])
+@jwt_required()
+def detalhe_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+    return jsonify(_fatura_to_dict(f))
+
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+    db.session.delete(f)
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@api_bp.route('/faturas/upload', methods=['POST'])
+@jwt_required()
+def upload_fatura():
+    """
+    Upload de fatura via multipart/form-data.
+    O processamento é igual ao da web app.
+    """
+    from app.ai import get_user_paths, rebuild_index, extract_invoice_info, extract_invoice_info_from_text
+    from security import validate_upload, sanitize_filename, check_rate_limit
+
+    user_id = int(get_jwt_identity())
+
+    rate_key = f'upload:{user_id}'
+    allowed, _ = check_rate_limit(rate_key, max_requests=20, window_seconds=3600)
+    if not allowed:
+        return jsonify({'error': 'Demasiados uploads. Tenta em 1 hora.'}), 429
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Nenhum ficheiro enviado.'}), 400
+
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({'error': 'Ficheiro inválido.'}), 400
+
+    allowed_ext = current_app.config.get('ALLOWED_EXTENSIONS', {'.pdf', '.png', '.jpg', '.jpeg', '.txt'})
+    is_valid, error_msg = validate_upload(file, allowed_ext)
+    if not is_valid:
+        return jsonify({'error': error_msg}), 400
+
+    safe_name = sanitize_filename(file.filename)
+    if not safe_name:
+        return jsonify({'error': 'Nome de ficheiro inválido.'}), 400
+
+    data_dir, storage_dir = get_user_paths(
+        current_app.config['UPLOAD_FOLDER'],
+        current_app.config['STORAGE_FOLDER'],
+        user_id
+    )
+    os.makedirs(data_dir, exist_ok=True)
+
+    file_path  = os.path.join(data_dir, safe_name)
+    final_name = os.path.basename(file_path)
+
+    try:
+        file.save(file_path)
+    except OSError as e:
+        logger.error(f'Erro ao guardar ficheiro: {e}')
+        return jsonify({'error': 'Erro ao guardar o ficheiro.'}), 500
+
+    try:
+        ext = os.path.splitext(safe_name)[1].lower()
+        if ext == '.txt':
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f_txt:
+                texto = f_txt.read()
+            info = extract_invoice_info_from_text(texto, final_name)
+        else:
+            index = rebuild_index(data_dir, storage_dir)
+            info  = extract_invoice_info(index, final_name)
+
+        rebuild_index(data_dir, storage_dir)
+
+        fatura = Fatura(
+            user_id=user_id,
+            nome_ficheiro=final_name,
+            loja=info['loja'],
+            data_compra=info['data_compra'],
+            total=info['total'],
+            items=info['items'],
+            categoria=info['categoria'],
+            data_garantia=info['data_garantia'],
+            data_devolucao=info['data_devolucao'],
+        )
+        db.session.add(fatura)
+        db.session.commit()
+
+        return jsonify({'success': True, 'fatura': _fatura_to_dict(fatura)}), 201
+
+    except Exception as e:
+        logger.error(f'Erro ao processar fatura: {e}')
+        return jsonify({'error': 'Erro ao processar a fatura.'}), 500
+</file>
+
+<file path="app/configuracoes.py">
+"""
+configuracoes.py — Página de configurações (personalidade, língua, preferências)
+"""
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
+from flask_login import login_required, current_user
+from app import db
+from app.models import User
+from app.personality import PERSONALIDADES, PERSONALITY_ALIASES
+
+configuracoes_bp = Blueprint('configuracoes', __name__)
+
+LINGUAS = {
+    'pt': {'nome': 'Português', 'flag': '🇵🇹'},
+    'en': {'nome': 'English',   'flag': '🇬🇧'},
+    'es': {'nome': 'Español',   'flag': '🇪🇸'},
+    'fr': {'nome': 'Français',  'flag': '🇫🇷'},
+}
+
+
+def get_personalidade_user():
+    user = User.query.get(current_user.id)
+    raw = (user.personalidade or 'calm') if user else 'calm'
+    return PERSONALITY_ALIASES.get(raw, raw) if raw not in PERSONALIDADES else raw
+
+
+@configuracoes_bp.route('/configuracoes')
+@login_required
+def configuracoes():
+    atual_personalidade = get_personalidade_user()
+    lingua_atual = getattr(current_user, 'lingua', 'pt') or 'pt'
+    return render_template('configuracoes.html',
+        personalidades=PERSONALIDADES,
+        atual_personalidade=atual_personalidade,
+        linguas=LINGUAS,
+        lingua_atual=lingua_atual,
+    )
+
+
+@configuracoes_bp.route('/configuracoes/personalidade', methods=['POST'])
+@login_required
+def set_personalidade():
+    data = request.get_json(silent=True) or {}
+    key = data.get('personalidade') or request.form.get('personalidade', '')
+    if key not in PERSONALIDADES:
+        return jsonify({'success': False, 'message': 'Personalidade inválida.'}), 400
+    current_user.personalidade = key
+    db.session.commit()
+    info = PERSONALIDADES[key]
+    return jsonify({'success': True, 'info': {'nome': info['nome'], 'cor': info['cor']}})
+
+
+@configuracoes_bp.route('/configuracoes/lingua', methods=['POST'])
+@login_required
+def set_lingua():
+    data = request.get_json(silent=True) or {}
+    lingua = data.get('lingua') or request.form.get('lingua', 'pt')
+    if lingua not in LINGUAS:
+        return jsonify({'success': False, 'message': 'Língua inválida.'}), 400
+    # Guarda na sessão (e no user se tiveres o campo)
+    try:
+        current_user.lingua = lingua
+        db.session.commit()
+    except Exception:
+        pass  # campo pode não existir ainda — migration opcional
+    return jsonify({'success': True, 'lingua': lingua, 'nome': LINGUAS[lingua]['nome']})
+
+
+@configuracoes_bp.route('/configuracoes/preferencias', methods=['POST'])
+@login_required
+def set_preferencias():
+    nome = request.form.get('nome', '').strip()
+    notif = request.form.get('notificacoes_email') == 'on'
+    orcamento = request.form.get('orcamento_mensal', '').strip()
+
+    if nome:
+        current_user.nome = nome
+    current_user.notificacoes_email = notif
+    if orcamento:
+        try:
+            current_user.orcamento_mensal = float(orcamento)
+        except ValueError:
+            pass
+
+    db.session.commit()
+    flash('Configurações guardadas com sucesso!', 'success')
+    return redirect(url_for('configuracoes.configuracoes'))
+</file>
 
 <file path="app/email_routes.py">
 """
@@ -481,216 +1216,6 @@ def enviar_email_alertas(
         logger.error(f"Erro ao enviar email para {destinatario_email}: {e}")
         print(f"RESEND EXCEPTION: {e}")
         return False
-</file>
-
-<file path="enviar_alertas.py">
-#!/usr/bin/env python3
-"""
-enviar_alertas.py — Script de cron para envio diário de emails de alerta
-
-Uso:
-    python enviar_alertas.py
-
-Agendar (crontab):
-    # Correr todos os dias às 9h da manhã
-    0 9 * * * cd /caminho/para/verly && python enviar_alertas.py >> logs/alertas.log 2>&1
-
-    # Ou com venv:
-    0 9 * * * cd /caminho/para/verly && ./venv/bin/python enviar_alertas.py >> logs/alertas.log 2>&1
-
-Variáveis de ambiente necessárias (no .env):
-    RESEND_API_KEY   — chave da API do Resend
-    EMAIL_FROM       — ex: "Verly <alertas@verly.app>"
-    APP_URL          — ex: "https://verly.app"
-    DATABASE_URL     — (opcional, usa SQLite por omissão)
-    FLASK_ENV        — development | production
-"""
-
-import os
-import sys
-import logging
-from datetime import datetime
-
-# Garantir que o script encontra os módulos da app
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from dotenv import load_dotenv
-load_dotenv()
-
-# ── Logging ───────────────────────────────────────────────────────────────────
-
-os.makedirs("logs", exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s — %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-logger = logging.getLogger("alertas")
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-def main():
-    logger.info("=" * 60)
-    logger.info(f"Verly Alertas — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info("=" * 60)
-
-    # Inicializar Flask app (necessário para SQLAlchemy)
-    from app import create_app, db
-    from app.models import User
-    from app.notificacoes import gerar_notificacoes
-    from app.email_service import enviar_email_alertas
-
-    app = create_app()
-
-    with app.app_context():
-        # Buscar apenas utilizadores com notificações activadas
-        utilizadores = User.query.filter_by(notificacoes_email=True).all()
-
-        if not utilizadores:
-            logger.info("Nenhum utilizador com notificações activadas.")
-            return
-
-        logger.info(f"{len(utilizadores)} utilizador(es) com alertas activos.")
-
-        enviados  = 0
-        saltados  = 0
-        erros     = 0
-
-        for user in utilizadores:
-            try:
-                # Email de destino: usa email_notificacoes se definido, senão o email da conta
-                email_destino = (
-                    getattr(user, "email_notificacoes", None) or user.email
-                ).strip()
-
-                if not email_destino:
-                    logger.warning(f"user_id={user.id} sem email — a saltar.")
-                    saltados += 1
-                    continue
-
-                orcamento = getattr(user, "orcamento_mensal", 0) or 0
-                notifs    = gerar_notificacoes(user.id, orcamento)
-
-                sucesso = enviar_email_alertas(
-                    destinatario_email=email_destino,
-                    destinatario_nome=user.nome or "utilizador",
-                    notificacoes=notifs,
-                )
-
-                if sucesso:
-                    enviados += 1
-                    logger.info(f"✓ user_id={user.id} ({email_destino})")
-                else:
-                    erros += 1
-                    logger.warning(f"✗ user_id={user.id} — falha no envio.")
-
-            except Exception as exc:
-                erros += 1
-                logger.error(f"Erro inesperado para user_id={user.id}: {exc}", exc_info=True)
-
-        # Resumo final
-        logger.info("-" * 60)
-        logger.info(
-            f"Concluído — enviados: {enviados} | saltados: {saltados} | erros: {erros}"
-        )
-
-
-if __name__ == "__main__":
-    main()
-</file>
-
-<file path="app/configuracoes.py">
-"""
-configuracoes.py — Página de configurações (personalidade, língua, preferências)
-"""
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, flash
-from flask_login import login_required, current_user
-from app import db
-from app.models import User
-from app.personality import PERSONALIDADES, PERSONALITY_ALIASES
-
-configuracoes_bp = Blueprint('configuracoes', __name__)
-
-LINGUAS = {
-    'pt': {'nome': 'Português', 'flag': '🇵🇹'},
-    'en': {'nome': 'English',   'flag': '🇬🇧'},
-    'es': {'nome': 'Español',   'flag': '🇪🇸'},
-    'fr': {'nome': 'Français',  'flag': '🇫🇷'},
-}
-
-
-def get_personalidade_user():
-    user = User.query.get(current_user.id)
-    raw = (user.personalidade or 'calm') if user else 'calm'
-    return PERSONALITY_ALIASES.get(raw, raw) if raw not in PERSONALIDADES else raw
-
-
-@configuracoes_bp.route('/configuracoes')
-@login_required
-def configuracoes():
-    atual_personalidade = get_personalidade_user()
-    lingua_atual = getattr(current_user, 'lingua', 'pt') or 'pt'
-    return render_template('configuracoes.html',
-        personalidades=PERSONALIDADES,
-        atual_personalidade=atual_personalidade,
-        linguas=LINGUAS,
-        lingua_atual=lingua_atual,
-    )
-
-
-@configuracoes_bp.route('/configuracoes/personalidade', methods=['POST'])
-@login_required
-def set_personalidade():
-    data = request.get_json(silent=True) or {}
-    key = data.get('personalidade') or request.form.get('personalidade', '')
-    if key not in PERSONALIDADES:
-        return jsonify({'success': False, 'message': 'Personalidade inválida.'}), 400
-    current_user.personalidade = key
-    db.session.commit()
-    info = PERSONALIDADES[key]
-    return jsonify({'success': True, 'info': {'nome': info['nome'], 'cor': info['cor']}})
-
-
-@configuracoes_bp.route('/configuracoes/lingua', methods=['POST'])
-@login_required
-def set_lingua():
-    data = request.get_json(silent=True) or {}
-    lingua = data.get('lingua') or request.form.get('lingua', 'pt')
-    if lingua not in LINGUAS:
-        return jsonify({'success': False, 'message': 'Língua inválida.'}), 400
-    # Guarda na sessão (e no user se tiveres o campo)
-    try:
-        current_user.lingua = lingua
-        db.session.commit()
-    except Exception:
-        pass  # campo pode não existir ainda — migration opcional
-    return jsonify({'success': True, 'lingua': lingua, 'nome': LINGUAS[lingua]['nome']})
-
-
-@configuracoes_bp.route('/configuracoes/preferencias', methods=['POST'])
-@login_required
-def set_preferencias():
-    nome = request.form.get('nome', '').strip()
-    notif = request.form.get('notificacoes_email') == 'on'
-    orcamento = request.form.get('orcamento_mensal', '').strip()
-
-    if nome:
-        current_user.nome = nome
-    current_user.notificacoes_email = notif
-    if orcamento:
-        try:
-            current_user.orcamento_mensal = float(orcamento)
-        except ValueError:
-            pass
-
-    db.session.commit()
-    flash('Configurações guardadas com sucesso!', 'success')
-    return redirect(url_for('configuracoes.configuracoes'))
 </file>
 
 <file path="app/estatisticas.py">
@@ -1996,6 +2521,127 @@ RESUMO DE VALORES
 ================================================================================
 </file>
 
+<file path="enviar_alertas.py">
+#!/usr/bin/env python3
+"""
+enviar_alertas.py — Script de cron para envio diário de emails de alerta
+
+Uso:
+    python enviar_alertas.py
+
+Agendar (crontab):
+    # Correr todos os dias às 9h da manhã
+    0 9 * * * cd /caminho/para/verly && python enviar_alertas.py >> logs/alertas.log 2>&1
+
+    # Ou com venv:
+    0 9 * * * cd /caminho/para/verly && ./venv/bin/python enviar_alertas.py >> logs/alertas.log 2>&1
+
+Variáveis de ambiente necessárias (no .env):
+    RESEND_API_KEY   — chave da API do Resend
+    EMAIL_FROM       — ex: "Verly <alertas@verly.app>"
+    APP_URL          — ex: "https://verly.app"
+    DATABASE_URL     — (opcional, usa SQLite por omissão)
+    FLASK_ENV        — development | production
+"""
+
+import os
+import sys
+import logging
+from datetime import datetime
+
+# Garantir que o script encontra os módulos da app
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+os.makedirs("logs", exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(levelname)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("alertas")
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    logger.info("=" * 60)
+    logger.info(f"Verly Alertas — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info("=" * 60)
+
+    # Inicializar Flask app (necessário para SQLAlchemy)
+    from app import create_app, db
+    from app.models import User
+    from app.notificacoes import gerar_notificacoes
+    from app.email_service import enviar_email_alertas
+
+    app = create_app()
+
+    with app.app_context():
+        # Buscar apenas utilizadores com notificações activadas
+        utilizadores = User.query.filter_by(notificacoes_email=True).all()
+
+        if not utilizadores:
+            logger.info("Nenhum utilizador com notificações activadas.")
+            return
+
+        logger.info(f"{len(utilizadores)} utilizador(es) com alertas activos.")
+
+        enviados  = 0
+        saltados  = 0
+        erros     = 0
+
+        for user in utilizadores:
+            try:
+                # Email de destino: usa email_notificacoes se definido, senão o email da conta
+                email_destino = (
+                    getattr(user, "email_notificacoes", None) or user.email
+                ).strip()
+
+                if not email_destino:
+                    logger.warning(f"user_id={user.id} sem email — a saltar.")
+                    saltados += 1
+                    continue
+
+                orcamento = getattr(user, "orcamento_mensal", 0) or 0
+                notifs    = gerar_notificacoes(user.id, orcamento)
+
+                sucesso = enviar_email_alertas(
+                    destinatario_email=email_destino,
+                    destinatario_nome=user.nome or "utilizador",
+                    notificacoes=notifs,
+                )
+
+                if sucesso:
+                    enviados += 1
+                    logger.info(f"✓ user_id={user.id} ({email_destino})")
+                else:
+                    erros += 1
+                    logger.warning(f"✗ user_id={user.id} — falha no envio.")
+
+            except Exception as exc:
+                erros += 1
+                logger.error(f"Erro inesperado para user_id={user.id}: {exc}", exc_info=True)
+
+        # Resumo final
+        logger.info("-" * 60)
+        logger.info(
+            f"Concluído — enviados: {enviados} | saltados: {saltados} | erros: {erros}"
+        )
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
 <file path="migration_personalidade.py">
 """
 migration_personalidade.py
@@ -2365,436 +3011,6 @@ def sanitize_text_input(value: str, max_length: int = 500, allow_newlines: bool 
 
 <file path="storage_utilizadores/5/index_store.json">
 {"index_store/data": {"23164bf7-8e77-4882-b70f-73e0c358b122": {"__type__": "vector_store", "__data__": "{\"index_id\": \"23164bf7-8e77-4882-b70f-73e0c358b122\", \"summary\": null, \"nodes_dict\": {\"cbba1955-1416-4bda-9339-d821f86f5fd9\": \"cbba1955-1416-4bda-9339-d821f86f5fd9\"}, \"doc_id_dict\": {}, \"embeddings_dict\": {}}"}}}
-</file>
-
-<file path="templates/configuracoes.html">
-{% extends 'base.html' %}
-{% block title %}Configurações · Verly{% endblock %}
-
-{% block extra_head %}
-<style>
-.config-layout {
-    display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 24px;
-    max-width: 860px;
-}
-.config-tabs {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-.config-tab {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    border: none;
-    background: transparent;
-    text-align: left;
-    transition: all 0.15s;
-    width: 100%;
-}
-.config-tab:hover { background: var(--surface2); color: var(--text); }
-.config-tab.active { background: var(--brand-light); color: var(--brand); font-weight: 600; }
-.config-tab svg { flex-shrink: 0; }
-
-.config-panel { display: none; }
-.config-panel.active { display: block; }
-
-.config-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 24px;
-    margin-bottom: 20px;
-}
-.config-section h3 {
-    font-size: 13px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    color: var(--text-muted);
-    margin: 0 0 18px;
-}
-.config-field {
-    margin-bottom: 16px;
-}
-.config-field label {
-    display: block;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    margin-bottom: 6px;
-}
-.config-field input,
-.config-field select {
-    width: 100%;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text);
-    padding: 9px 12px;
-    font-size: 14px;
-    font-family: inherit;
-    outline: none;
-    box-sizing: border-box;
-    transition: border-color 0.15s;
-}
-.config-field input:focus,
-.config-field select:focus { border-color: var(--brand); }
-
-.toggle-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--border);
-}
-.toggle-row:last-child { border-bottom: none; }
-.toggle-info { flex: 1; }
-.toggle-info .toggle-title { font-size: 14px; font-weight: 500; color: var(--text); }
-.toggle-info .toggle-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.toggle-switch {
-    position: relative;
-    width: 40px; height: 22px;
-    flex-shrink: 0;
-}
-.toggle-switch input { opacity: 0; width: 0; height: 0; }
-.toggle-slider {
-    position: absolute; inset: 0;
-    background: var(--surface3);
-    border-radius: 11px;
-    cursor: pointer;
-    transition: background 0.2s;
-}
-.toggle-slider::before {
-    content: '';
-    position: absolute;
-    width: 16px; height: 16px;
-    left: 3px; top: 3px;
-    background: white;
-    border-radius: 50%;
-    transition: transform 0.2s;
-}
-.toggle-switch input:checked + .toggle-slider { background: var(--brand); }
-.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
-
-/* Personalidade cards */
-.pers-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-.pers-card {
-    background: var(--surface2);
-    border: 2px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    cursor: pointer;
-    transition: all 0.2s;
-    position: relative;
-    overflow: hidden;
-}
-.pers-card:hover { border-color: var(--brand); }
-.pers-card.ativo { border-color: var(--brand); background: var(--brand-light); }
-.pers-card .badge {
-    display: none;
-    position: absolute; top: 10px; right: 10px;
-    background: var(--brand); color: white;
-    font-size: 9px; font-weight: 700; padding: 2px 7px;
-    border-radius: 4px; letter-spacing: .5px;
-}
-.pers-card.ativo .badge { display: block; }
-.pers-nome { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
-.pers-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
-
-/* Língua */
-.lingua-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-}
-.lingua-card {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 14px;
-    background: var(--surface2);
-    border: 2px solid var(--border);
-    border-radius: 10px;
-    cursor: pointer;
-    transition: all 0.15s;
-}
-.lingua-card:hover { border-color: var(--brand); }
-.lingua-card.ativo { border-color: var(--brand); background: var(--brand-light); }
-.lingua-flag { font-size: 20px; }
-.lingua-nome { font-size: 13px; font-weight: 600; color: var(--text); }
-
-.btn-guardar {
-    background: var(--brand);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    padding: 10px 22px;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: opacity 0.15s;
-    margin-top: 4px;
-}
-.btn-guardar:hover { opacity: 0.88; }
-
-/* Botão de teste de email */
-.btn-teste-email {
-    background: transparent;
-    color: var(--brand);
-    border: 1px solid var(--brand);
-    border-radius: 8px;
-    padding: 7px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.15s;
-    margin-top: 10px;
-}
-.btn-teste-email:hover { background: var(--brand-light); }
-.btn-teste-email:disabled { opacity: 0.5; cursor: not-allowed; }
-.email-teste-msg {
-    display: block;
-    font-size: 12px;
-    margin-top: 8px;
-    min-height: 18px;
-}
-
-#confirmMsg {
-    display: none;
-    margin-top: 12px;
-    background: rgba(0,214,143,0.08);
-    border: 1px solid rgba(0,214,143,0.2);
-    border-radius: 8px;
-    padding: 10px 16px;
-    font-size: 13px;
-    color: #00D68F;
-    font-weight: 600;
-}
-
-@media (max-width: 600px) {
-    .config-layout { grid-template-columns: 1fr; }
-    .config-tabs { flex-direction: row; overflow-x: auto; }
-    .pers-grid, .lingua-grid { grid-template-columns: 1fr; }
-}
-</style>
-{% endblock %}
-
-{% block content %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title">Configurações</h1>
-        <p class="page-sub">Personaliza a tua experiência com a Verly.</p>
-    </div>
-</div>
-
-<div class="config-layout">
-
-    <!-- Tabs -->
-    <div class="config-tabs">
-        <button class="config-tab active" onclick="showTab('personalidade', this)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-            Personalidade
-        </button>
-        <button class="config-tab" onclick="showTab('lingua', this)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-            Língua
-        </button>
-        <button class="config-tab" onclick="showTab('preferencias', this)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M5.34 18.66l-1.41 1.41M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M5.34 5.34 3.93 3.93M12 20v2M12 2v2"/></svg>
-            Preferências
-        </button>
-    </div>
-
-    <!-- Painéis -->
-    <div>
-
-        <!-- Personalidade -->
-        <div class="config-panel active" id="panel-personalidade">
-            <div class="config-section">
-                <h3>Como a Verly te fala</h3>
-                <div class="pers-grid">
-                    {% for key, p in personalidades.items() %}
-                    <div class="pers-card {% if key == atual_personalidade %}ativo{% endif %}"
-                         data-key="{{ key }}" data-cor="{{ p.cor }}"
-                         onclick="selecionarPersonalidade('{{ key }}', this)">
-                        <div class="badge">ATIVO</div>
-                        <div class="pers-nome">{{ p.nome }}</div>
-                        <div class="pers-desc">{{ p.descricao }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div id="confirmMsg"></div>
-                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
-                    Afeta o Chat, Score de Compras, Relatório Mensal e Impulse Control.
-                </p>
-            </div>
-        </div>
-
-        <!-- Língua -->
-        <div class="config-panel" id="panel-lingua">
-            <div class="config-section">
-                <h3>Idioma da interface</h3>
-                <div class="lingua-grid">
-                    {% for key, l in linguas.items() %}
-                    <div class="lingua-card {% if key == lingua_atual %}ativo{% endif %}"
-                         data-key="{{ key }}" onclick="selecionarLingua('{{ key }}', this)">
-                        <span class="lingua-flag">{{ l.flag }}</span>
-                        <span class="lingua-nome">{{ l.nome }}</span>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div id="confirmLingua" style="display:none;margin-top:12px;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.2);border-radius:8px;padding:10px 16px;font-size:13px;color:#00D68F;font-weight:600;"></div>
-                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
-                    A tradução completa da interface está em desenvolvimento. Por agora guarda a tua preferência.
-                </p>
-            </div>
-        </div>
-
-        <!-- Preferências -->
-        <div class="config-panel" id="panel-preferencias">
-            <div class="config-section">
-                <h3>Conta</h3>
-                <form method="POST" action="{{ url_for('configuracoes.set_preferencias') }}">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <div class="config-field">
-                        <label>Nome</label>
-                        <input type="text" name="nome" value="{{ current_user.nome }}" placeholder="O teu nome">
-                    </div>
-                    <div class="config-field">
-                        <label>Orçamento Mensal (€)</label>
-                        <input type="number" name="orcamento_mensal" step="0.01" min="0"
-                               value="{{ current_user.orcamento_mensal or '' }}" placeholder="ex: 500">
-                    </div>
-                    <button type="submit" class="btn-guardar">Guardar alterações</button>
-                </form>
-            </div>
-
-            <div class="config-section">
-                <h3>Notificações</h3>
-                <div class="toggle-row">
-                    <div class="toggle-info">
-                        <div class="toggle-title">Notificações por email</div>
-                        <div class="toggle-desc">Recebe alertas de garantias, orçamento e subscrições</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="toggleNotif"
-                               {% if current_user.notificacoes_email %}checked{% endif %}
-                               onchange="guardarNotif(this.checked)">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <!-- Botão de teste — só visível quando o toggle está activo -->
-                <div id="email-teste-wrapper" style="padding-top: 14px; {% if not current_user.notificacoes_email %}display:none;{% endif %}">
-                    <button type="button" class="btn-teste-email" id="btn-teste-email"
-                            onclick="testarEmail()">
-                        Enviar email de teste
-                    </button>
-                    <span class="email-teste-msg" id="email-teste-msg"></span>
-                </div>
-            </div>
-        </div>
-
-    </div>
-</div>
-
-<script>
-function showTab(id, btn) {
-    document.querySelectorAll('.config-panel').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.config-tab').forEach(t => t.classList.remove('active'));
-    document.getElementById('panel-' + id).classList.add('active');
-    btn.classList.add('active');
-}
-
-async function selecionarPersonalidade(key, card) {
-    try {
-        const res = await fetch('/configuracoes/personalidade', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ personalidade: key })
-        });
-        const data = await res.json();
-        if (!data.success) return;
-        document.querySelectorAll('.pers-card').forEach(c => c.classList.remove('ativo'));
-        card.classList.add('ativo');
-        const msg = document.getElementById('confirmMsg');
-        msg.textContent = `Personalidade "${data.info.nome}" ativada.`;
-        msg.style.display = 'block';
-        setTimeout(() => msg.style.display = 'none', 3000);
-    } catch(e) { console.error(e); }
-}
-
-async function selecionarLingua(key, card) {
-    try {
-        const res = await fetch('/configuracoes/lingua', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lingua: key })
-        });
-        const data = await res.json();
-        if (!data.success) return;
-        document.querySelectorAll('.lingua-card').forEach(c => c.classList.remove('ativo'));
-        card.classList.add('ativo');
-        const msg = document.getElementById('confirmLingua');
-        msg.textContent = `Língua "${data.nome}" guardada.`;
-        msg.style.display = 'block';
-        setTimeout(() => msg.style.display = 'none', 3000);
-    } catch(e) { console.error(e); }
-}
-
-async function guardarNotif(val) {
-    await fetch('/perfil/atualizar', {
-        method: 'POST',
-        body: new URLSearchParams({ notificacoes_email: val ? 'on' : '' })
-    });
-    // Mostrar/esconder botão de teste
-    document.getElementById('email-teste-wrapper').style.display = val ? 'block' : 'none';
-    document.getElementById('email-teste-msg').textContent = '';
-}
-
-async function testarEmail() {
-    const btn = document.getElementById('btn-teste-email');
-    const msg = document.getElementById('email-teste-msg');
-    btn.disabled = true;
-    msg.textContent = 'A enviar…';
-    msg.style.color = 'var(--text-muted)';
-
-    try {
-        const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        const res = await fetch('/alertas/teste', {
-            method: 'POST',
-            headers: {
-                'X-CSRFToken': token,
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        });
-        const data = await res.json();
-        msg.textContent = data.message;
-        msg.style.color = data.success ? '#00D68F' : '#E24B4A';
-    } catch (e) {
-        msg.textContent = 'Erro de rede. Tenta novamente.';
-        msg.style.color = '#E24B4A';
-    } finally {
-        btn.disabled = false;
-    }
-}
-</script>
-{% endblock %}
 </file>
 
 <file path="templates/estatisticas.html">
@@ -3676,13 +3892,943 @@ document.getElementById('metaModal').addEventListener('click', function(e) {
 {% endblock %}
 </file>
 
-<file path=".gitignore">
-venv/
-storage/
-__pycache__/
-finetune/
-dados_reduzidos/
-*.pyc
+<file path="verly-mobile/App.js">
+/**
+ * App.js — Ponto de entrada da app Verly Mobile
+ */
+
+import React from 'react';
+import { StatusBar } from 'react-native';
+import { AuthProvider } from './src/context/AuthContext';
+import AppNavigator, { COLORS } from './src/navigation/AppNavigator';
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+      <AppNavigator />
+    </AuthProvider>
+  );
+}
+</file>
+
+<file path="verly-mobile/package.json">
+{
+  "name": "verly-mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-navigation/bottom-tabs": "^6.5.11",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/stack": "^6.3.20",
+    "axios": "^1.6.7",
+    "expo": "^55.0.23",
+    "expo-status-bar": "~55.0.6",
+    "lucide-react-native": "^0.322.0",
+    "react": "19.2.0",
+    "react-native": "0.83.6",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.23.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "overrides": {
+    "@expo/cli": "^0.18.0"
+  },
+  "private": true
+}
+</file>
+
+<file path="verly-mobile/src/context/AuthContext.js">
+/**
+ * src/context/AuthContext.js
+ * Contexto global de autenticação.
+ * Disponibiliza o utilizador e as funções de login/logout para toda a app.
+ */
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authAPI, saveToken, removeToken, getToken } from '../services/api';
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser]       = useState(null);
+  const [loading, setLoading] = useState(true); // a verificar token guardado
+
+  // Ao arrancar a app: verificar se há token guardado
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = await getToken();
+        if (token) {
+          const data = await authAPI.me();
+          setUser(data.user);
+        }
+      } catch {
+        // Token inválido ou expirado → ignorar
+        await removeToken();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  const login = async (email, password) => {
+    const data = await authAPI.login(email, password);
+    await saveToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  const register = async (nome, email, password) => {
+    const data = await authAPI.register(nome, email, password);
+    await saveToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  const logout = async () => {
+    await removeToken();
+    setUser(null);
+  };
+
+  const updateUser = (updates) => {
+    setUser((prev) => ({ ...prev, ...updates }));
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, loading, login, register, logout, updateUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider');
+  return ctx;
+};
+</file>
+
+<file path="verly-mobile/src/navigation/AppNavigator.js">
+/**
+ * src/navigation/AppNavigator.js
+ * Navegação principal da app.
+ *
+ * Estrutura:
+ *   - Stack raiz → AuthStack | MainStack
+ *   - AuthStack  → Login, Register
+ *   - MainStack  → Bottom Tabs + ecrãs de detalhe
+ *   - Bottom Tabs → Dashboard, Faturas, Chat, Subscrições, Perfil
+ */
+
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { ActivityIndicator, View } from 'react-native';
+
+import { useAuth } from '../context/AuthContext';
+
+// ── Ecrãs de autenticação ─────────────────────────────────────────────────────
+import LoginScreen    from '../screens/auth/LoginScreen';
+import RegisterScreen from '../screens/auth/RegisterScreen';
+
+// ── Ecrãs principais ──────────────────────────────────────────────────────────
+import DashboardScreen    from '../screens/DashboardScreen';
+import FaturasScreen      from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen         from '../screens/ChatScreen';
+import SubscricoesScreen  from '../screens/SubscricoesScreen';
+import PerfilScreen       from '../screens/PerfilScreen';
+import NotificacoesScreen from '../screens/NotificacoesScreen';
+
+// ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
+import { TabIcon } from '../components/TabIcon';
+
+const Stack   = createNativeStackNavigator();
+const Tab     = createBottomTabNavigator();
+const AuthStack = createNativeStackNavigator();
+const MainStack = createNativeStackNavigator();
+
+// Cores e estilo global
+export const COLORS = {
+  brand:     '#534AB7',
+  brandLight:'#EEF0FF',
+  bg:        '#0F0F1A',
+  surface:   '#1A1A2E',
+  surface2:  '#22223A',
+  border:    '#2E2E4E',
+  text:      '#F0F0F8',
+  textSub:   '#8888AA',
+  green:     '#00D68F',
+  red:       '#FF4757',
+  yellow:    '#FFB800',
+};
+
+
+// ── Auth Stack ────────────────────────────────────────────────────────────────
+
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+
+// ── Bottom Tabs ───────────────────────────────────────────────────────────────
+
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown:    false,
+        tabBarStyle:    {
+          backgroundColor: COLORS.surface,
+          borderTopColor:  COLORS.border,
+          borderTopWidth:  1,
+          paddingBottom:   8,
+          paddingTop:      8,
+          height:          64,
+        },
+        tabBarActiveTintColor:   COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => (
+          <TabIcon name={route.name} color={color} size={size} />
+        ),
+      })}
+    >
+      <Tab.Screen name="Dashboard"   component={DashboardScreen}   options={{ tabBarLabel: 'Início' }} />
+      <Tab.Screen name="Faturas"     component={FaturasScreen}      options={{ tabBarLabel: 'Faturas' }} />
+      <Tab.Screen name="Chat"        component={ChatScreen}         options={{ tabBarLabel: 'Chat IA' }} />
+      <Tab.Screen name="Subscricoes" component={SubscricoesScreen}  options={{ tabBarLabel: 'Subs' }} />
+      <Tab.Screen name="Perfil"      component={PerfilScreen}       options={{ tabBarLabel: 'Perfil' }} />
+    </Tab.Navigator>
+  );
+}
+
+
+// ── Main Stack (tabs + ecrãs de detalhe) ─────────────────────────────────────
+
+function MainNavigator() {
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"           component={MainTabs} />
+      <MainStack.Screen name="FaturaDetalhe"  component={FaturaDetalheScreen} />
+      <MainStack.Screen name="Notificacoes"   component={NotificacoesScreen} />
+    </MainStack.Navigator>
+  );
+}
+
+
+// ── Root Navigator ────────────────────────────────────────────────────────────
+
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainNavigator} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+</file>
+
+<file path="verly-mobile/src/screens/auth/DashboardScreen.js">
+/**
+ * src/screens/DashboardScreen.js
+ * Ecrã principal — dashboard financeiro.
+ */
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, StyleSheet,
+  TouchableOpacity, RefreshControl, ActivityIndicator,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '../context/AuthContext';
+import { dashboardAPI } from '../services/api';
+import { COLORS } from '../navigation/AppNavigator';
+
+// ── Sub-componentes ───────────────────────────────────────────────────────────
+
+function MetricCard({ label, value, sub, subColor }) {
+  return (
+    <View style={styles.metricCard}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{value}</Text>
+      {sub && <Text style={[styles.metricSub, { color: subColor || COLORS.textSub }]}>{sub}</Text>}
+    </View>
+  );
+}
+
+function AlertaBanner({ alerta }) {
+  const isUrgente = alerta.urgencia === 'critico';
+  return (
+    <View style={[styles.alertaBanner, { borderLeftColor: isUrgente ? COLORS.red : COLORS.yellow }]}>
+      <Text style={styles.alertaIcon}>{alerta.tipo === 'devolucao' ? '↩️' : '🛡️'}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.alertaTitulo}>
+          {alerta.tipo === 'devolucao' ? 'Devolução expira' : 'Garantia expira'} em {alerta.dias} dia(s)
+        </Text>
+        <Text style={styles.alertaSub}>{alerta.loja} · até {alerta.data}</Text>
+      </View>
+    </View>
+  );
+}
+
+function MoodCard({ mood, streak, orcamento, totalGasto }) {
+  const pct = orcamento > 0 ? Math.min((totalGasto / orcamento) * 100, 100) : 0;
+  return (
+    <View style={[styles.card, styles.moodCard]}>
+      <View style={styles.moodRow}>
+        <Text style={styles.moodIcon}>{mood.icon}</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.moodNivel, { color: mood.cor }]}>{mood.nivel.toUpperCase()}</Text>
+          <Text style={styles.moodFrase}>"{mood.frase}"</Text>
+        </View>
+        <View style={styles.streakBadge}>
+          <Text style={styles.streakFire}>🔥</Text>
+          <Text style={styles.streakNum}>{streak}</Text>
+          <Text style={styles.streakLabel}>dias</Text>
+        </View>
+      </View>
+      {orcamento > 0 && (
+        <View style={styles.progressWrap}>
+          <View style={styles.progressBg}>
+            <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: mood.cor }]} />
+          </View>
+          <Text style={styles.progressLabel}>{Math.round(pct)}% do orçamento</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function FaturaMini({ fatura, onPress }) {
+  return (
+    <TouchableOpacity style={styles.faturaRow} onPress={onPress}>
+      <View style={styles.faturaCat}>
+        <Text style={styles.faturaCatText}>{fatura.categoria?.[0] || '📄'}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.faturaLoja} numberOfLines={1}>{fatura.loja}</Text>
+        <Text style={styles.faturaData}>{fatura.data_compra || fatura.data_upload?.slice(0, 10)}</Text>
+      </View>
+      <Text style={styles.faturaTotal}>{fatura.total.toFixed(2)}€</Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Ecrã principal ────────────────────────────────────────────────────────────
+
+export default function DashboardScreen({ navigation }) {
+  const { user } = useAuth();
+  const [data,       setData]       = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error,      setError]      = useState(null);
+
+  const fetchData = async (isRefresh = false) => {
+    try {
+      if (isRefresh) setRefreshing(true);
+      const result = await dashboardAPI.get();
+      setData(result);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Recarregar sempre que o ecrã ganha foco
+  useFocusEffect(useCallback(() => { fetchData(); }, []));
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorText}>Erro: {error}</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => fetchData()}>
+          <Text style={styles.retryText}>Tentar novamente</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => fetchData(true)} tintColor={COLORS.brand} />}
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>Dashboard</Text>
+          <Text style={styles.headerSub}>Olá, {user?.nome}! 👋</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.notifBtn}
+          onPress={() => navigation.navigate('Notificacoes')}
+        >
+          <Text style={styles.notifIcon}>🔔</Text>
+          {data?.notificacoes?.length > 0 && <View style={styles.notifDot} />}
+        </TouchableOpacity>
+      </View>
+
+      {/* Alertas urgentes */}
+      {data?.alertas?.slice(0, 2).map((a, i) => (
+        <AlertaBanner key={i} alerta={a} />
+      ))}
+
+      {/* Mood + Streak */}
+      {data?.mood && (
+        <MoodCard
+          mood={data.mood}
+          streak={data.streak}
+          orcamento={data.orcamento}
+          totalGasto={data.total_gasto}
+        />
+      )}
+
+      {/* Métricas */}
+      <View style={styles.metricsRow}>
+        <MetricCard
+          label="Total Gasto"
+          value={`${(data?.total_gasto || 0).toFixed(2)}€`}
+          sub={data?.comparacao?.variacao_pct != null
+            ? `${data.comparacao.variacao_pct > 0 ? '+' : ''}${data.comparacao.variacao_pct}% vs mês anterior`
+            : 'primeiro mês'}
+          subColor={data?.comparacao?.subiu ? COLORS.red : COLORS.green}
+        />
+        <MetricCard
+          label="Faturas"
+          value={data?.num_faturas || 0}
+          sub="registadas"
+        />
+        <MetricCard
+          label="Desperdício"
+          value={`${(data?.desperdicado_mes || 0).toFixed(0)}€`}
+          sub="este mês"
+          subColor={(data?.desperdicado_mes || 0) > 100 ? COLORS.red : COLORS.textSub}
+        />
+      </View>
+
+      {/* Subscrições leak */}
+      {data?.subscricoes?.total_mensal > 0 && (
+        <View style={[styles.card, styles.subsCard]}>
+          <Text style={styles.subsLabel}>💸 Leak de subscrições</Text>
+          <Text style={styles.subsValue}>{data.subscricoes.total_mensal.toFixed(2)}€/mês</Text>
+          <Text style={styles.subsSub}>≈ {Math.round(data.subscricoes.total_mensal * 12)}€/ano</Text>
+        </View>
+      )}
+
+      {/* Últimas faturas */}
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardTitle}>Últimas faturas</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Faturas')}>
+            <Text style={styles.cardLink}>Ver tudo →</Text>
+          </TouchableOpacity>
+        </View>
+        {data?.ultimas_faturas?.length > 0
+          ? data.ultimas_faturas.map((f) => (
+              <FaturaMini
+                key={f.id}
+                fatura={f}
+                onPress={() => navigation.navigate('FaturaDetalhe', { id: f.id })}
+              />
+            ))
+          : <Text style={styles.empty}>Ainda sem faturas. Carrega a primeira!</Text>
+        }
+      </View>
+
+      {/* Feed Verly */}
+      {data?.feed?.length > 0 && (
+        <View style={[styles.card, { marginBottom: 32 }]}>
+          <Text style={styles.cardTitle}>O que a Verly pensa</Text>
+          {data.feed.map((item, i) => (
+            <View key={i} style={styles.feedItem}>
+              <Text style={styles.feedIcon}>{item.icone}</Text>
+              <Text style={styles.feedText}>{item.texto}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+// ── Estilos ───────────────────────────────────────────────────────────────────
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  content: { padding: 20 },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+
+  // Header
+  header:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
+  headerTitle:{ fontSize: 28, fontWeight: '800', color: COLORS.text },
+  headerSub:  { fontSize: 14, color: COLORS.textSub, marginTop: 4 },
+  notifBtn:   { padding: 8, position: 'relative' },
+  notifIcon:  { fontSize: 22 },
+  notifDot:   { position: 'absolute', top: 8, right: 8, width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.red },
+
+  // Alertas
+  alertaBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: COLORS.surface, borderRadius: 12,
+    borderLeftWidth: 4, padding: 14, marginBottom: 10,
+  },
+  alertaIcon:   { fontSize: 20 },
+  alertaTitulo: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  alertaSub:    { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+
+  // Mood
+  card:      { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: COLORS.border },
+  moodCard:  {},
+  moodRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  moodIcon:  { fontSize: 32 },
+  moodNivel: { fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+  moodFrase: { fontSize: 13, color: COLORS.textSub, marginTop: 4, fontStyle: 'italic' },
+  streakBadge: { alignItems: 'center', backgroundColor: COLORS.surface2, borderRadius: 12, padding: 10 },
+  streakFire: { fontSize: 18 },
+  streakNum:  { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  streakLabel:{ fontSize: 10, color: COLORS.textSub },
+  progressWrap: { marginTop: 14 },
+  progressBg:   { height: 6, backgroundColor: COLORS.surface2, borderRadius: 4, overflow: 'hidden' },
+  progressFill: { height: 6, borderRadius: 4 },
+  progressLabel:{ fontSize: 11, color: COLORS.textSub, marginTop: 6 },
+
+  // Métricas
+  metricsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+  metricCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: COLORS.border },
+  metricLabel:{ fontSize: 11, color: COLORS.textSub, marginBottom: 6 },
+  metricValue:{ fontSize: 18, fontWeight: '800', color: COLORS.text },
+  metricSub:  { fontSize: 11, marginTop: 4 },
+
+  // Subs
+  subsCard:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  subsLabel: { fontSize: 13, color: COLORS.text, fontWeight: '600' },
+  subsValue: { fontSize: 18, fontWeight: '800', color: COLORS.red },
+  subsSub:   { fontSize: 11, color: COLORS.textSub },
+
+  // Card genérico
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  cardTitle:  { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  cardLink:   { fontSize: 13, color: COLORS.brand, fontWeight: '600' },
+
+  // Fatura mini
+  faturaRow:     { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLORS.border },
+  faturaCat:     { width: 38, height: 38, borderRadius: 10, backgroundColor: COLORS.surface2, justifyContent: 'center', alignItems: 'center' },
+  faturaCatText: { fontSize: 18 },
+  faturaLoja:    { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  faturaData:    { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  faturaTotal:   { fontSize: 15, fontWeight: '800', color: COLORS.text },
+
+  // Feed
+  feedItem: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginTop: 10 },
+  feedIcon: { fontSize: 16 },
+  feedText: { flex: 1, fontSize: 13, color: COLORS.textSub, lineHeight: 20 },
+
+  // Estados
+  empty:     { fontSize: 13, color: COLORS.textSub, textAlign: 'center', padding: 20 },
+  errorText: { color: COLORS.red, fontSize: 14, marginBottom: 16 },
+  retryBtn:  { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 12 },
+  retryText: { color: '#fff', fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/auth/LoginScreen.js">
+/**
+ * src/screens/auth/LoginScreen.js
+ */
+
+import React, { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity,
+  StyleSheet, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Alert, ScrollView,
+} from 'react-native';
+import { useAuth } from '../../context/AuthContext';
+import { COLORS } from '../../navigation/AppNavigator';
+
+export default function LoginScreen({ navigation }) {
+  const { login } = useAuth();
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [loading,  setLoading]  = useState(false);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      Alert.alert('Erro', 'Preenche o email e a password.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await login(email.trim().toLowerCase(), password);
+      // Navegação automática pelo AuthContext → AppNavigator
+    } catch (err) {
+      Alert.alert('Erro', err.message || 'Credenciais inválidas.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+
+        {/* Logo */}
+        <View style={styles.logoWrap}>
+          <Text style={styles.logo}>💰 Verly</Text>
+          <Text style={styles.logoSub}>O teu assistente financeiro pessoal</Text>
+        </View>
+
+        {/* Form */}
+        <View style={styles.card}>
+          <Text style={styles.title}>Entrar</Text>
+
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            placeholder="o.teu@email.com"
+            placeholderTextColor={COLORS.textSub}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            value={password}
+            onChangeText={setPassword}
+            placeholder="••••••••"
+            placeholderTextColor={COLORS.textSub}
+            secureTextEntry
+          />
+
+          <TouchableOpacity
+            style={[styles.btn, loading && styles.btnDisabled]}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            {loading
+              ? <ActivityIndicator color="#fff" />
+              : <Text style={styles.btnText}>Entrar →</Text>
+            }
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.linkWrap}
+            onPress={() => navigation.navigate('Register')}
+          >
+            <Text style={styles.link}>Não tens conta? <Text style={styles.linkBold}>Regista-te</Text></Text>
+          </TouchableOpacity>
+        </View>
+
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  scroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 24,
+  },
+  logoWrap: {
+    alignItems: 'center',
+    marginBottom: 36,
+  },
+  logo: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: COLORS.text,
+    letterSpacing: -0.5,
+  },
+  logoSub: {
+    fontSize: 14,
+    color: COLORS.textSub,
+    marginTop: 6,
+  },
+  card: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginBottom: 6,
+    marginTop: 12,
+  },
+  input: {
+    backgroundColor: COLORS.surface2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    color: COLORS.text,
+    fontSize: 15,
+    padding: 12,
+  },
+  btn: {
+    backgroundColor: COLORS.brand,
+    borderRadius: 12,
+    padding: 15,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  btnText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  linkWrap: {
+    alignItems: 'center',
+    marginTop: 16,
+  },
+  link: {
+    color: COLORS.textSub,
+    fontSize: 14,
+  },
+  linkBold: {
+    color: COLORS.brand,
+    fontWeight: '700',
+  },
+});
+</file>
+
+<file path="verly-mobile/src/services/api.js">
+/**
+ * src/services/api.js
+ * Serviço central de comunicação com o backend Flask.
+ * Todas as chamadas à API passam por aqui.
+ */
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Muda para o IP da tua máquina quando testares em dispositivo físico
+// Em emulador Android: http://10.0.2.2:5000/api/v1
+// Em emulador iOS:     http://localhost:5000/api/v1
+const BASE_URL = 'http://192.168.1.214:5000/api/v1';
+
+const TOKEN_KEY = '@verly_token';
+
+// ── Token ─────────────────────────────────────────────────────────────────────
+
+export const saveToken = async (token) => {
+  await AsyncStorage.setItem(TOKEN_KEY, token);
+};
+
+export const getToken = async () => {
+  return await AsyncStorage.getItem(TOKEN_KEY);
+};
+
+export const removeToken = async () => {
+  await AsyncStorage.removeItem(TOKEN_KEY);
+};
+
+// ── Fetch base ────────────────────────────────────────────────────────────────
+
+async function apiFetch(path, options = {}) {
+  const token = await getToken();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {}),
+  };
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  // Token expirado → logout automático
+  if (response.status === 401) {
+    await removeToken();
+    throw new Error('UNAUTHORIZED');
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || `Erro ${response.status}`);
+  }
+
+  return data;
+}
+
+// ── Upload (multipart) ────────────────────────────────────────────────────────
+
+async function apiUpload(path, formData) {
+  const token = await getToken();
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // NÃO definir Content-Type aqui — o fetch define automaticamente com boundary
+    },
+    body: formData,
+  });
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export const authAPI = {
+  login: (email, password) =>
+    apiFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+
+  register: (nome, email, password) =>
+    apiFetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ nome, email, password }),
+    }),
+
+  me: () => apiFetch('/auth/me'),
+
+  updateMe: (updates) =>
+    apiFetch('/auth/me', {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    }),
+};
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+export const dashboardAPI = {
+  get: () => apiFetch('/dashboard'),
+};
+
+// ── Faturas ───────────────────────────────────────────────────────────────────
+
+export const faturasAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/faturas${query ? `?${query}` : ''}`);
+  },
+
+  detalhe: (id) => apiFetch(`/faturas/${id}`),
+
+  apagar: (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
+
+  upload: (fileUri, fileName, fileType) => {
+    const formData = new FormData();
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: fileType,
+    });
+    return apiUpload('/faturas/upload', formData);
+  },
+};
+
+// ── Notificações ──────────────────────────────────────────────────────────────
+
+export const notificacoesAPI = {
+  listar: () => apiFetch('/notificacoes'),
+};
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+export const chatAPI = {
+  enviar: (mensagem) =>
+    apiFetch('/chat/mensagem', {
+      method: 'POST',
+      body: JSON.stringify({ mensagem }),
+    }),
+
+  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
+
+  limpar: () => apiFetch('/chat/limpar', { method: 'POST' }),
+};
+
+// ── Subscrições ───────────────────────────────────────────────────────────────
+
+export const subscricoesAPI = {
+  listar: () => apiFetch('/subscricoes'),
+};
+
+// ── Metas ─────────────────────────────────────────────────────────────────────
+
+export const metasAPI = {
+  listar: () => apiFetch('/metas'),
+
+  criar: (nome, limite, categoria) =>
+    apiFetch('/metas', {
+      method: 'POST',
+      body: JSON.stringify({ nome, limite, categoria }),
+    }),
+
+  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+};
 </file>
 
 <file path="app/exportar.py">
@@ -4270,13 +5416,434 @@ RESUMO DE VALORES
 ================================================================================
 </file>
 
-<file path="NOTAS.md">
-# Notas do Projeto
+<file path="templates/configuracoes.html">
+{% extends 'base.html' %}
+{% block title %}Configurações · Verly{% endblock %}
 
-## Como instalar noutro PC
-1. python -m venv venv
-2. venv\Scripts\activate
-3. pip install -r requirements.txt
+{% block extra_head %}
+<style>
+.config-layout {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 24px;
+    max-width: 860px;
+}
+.config-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.config-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    text-align: left;
+    transition: all 0.15s;
+    width: 100%;
+}
+.config-tab:hover { background: var(--surface2); color: var(--text); }
+.config-tab.active { background: var(--brand-light); color: var(--brand); font-weight: 600; }
+.config-tab svg { flex-shrink: 0; }
+
+.config-panel { display: none; }
+.config-panel.active { display: block; }
+
+.config-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+.config-section h3 {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    margin: 0 0 18px;
+}
+.config-field {
+    margin-bottom: 16px;
+}
+.config-field label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+}
+.config-field input,
+.config-field select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 9px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+.config-field input:focus,
+.config-field select:focus { border-color: var(--brand); }
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.toggle-row:last-child { border-bottom: none; }
+.toggle-info { flex: 1; }
+.toggle-info .toggle-title { font-size: 14px; font-weight: 500; color: var(--text); }
+.toggle-info .toggle-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.toggle-switch {
+    position: relative;
+    width: 40px; height: 22px;
+    flex-shrink: 0;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute; inset: 0;
+    background: var(--surface3);
+    border-radius: 11px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 16px; height: 16px;
+    left: 3px; top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--brand); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* Personalidade cards */
+.pers-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.pers-card {
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+.pers-card:hover { border-color: var(--brand); }
+.pers-card.ativo { border-color: var(--brand); background: var(--brand-light); }
+.pers-card .badge {
+    display: none;
+    position: absolute; top: 10px; right: 10px;
+    background: var(--brand); color: white;
+    font-size: 9px; font-weight: 700; padding: 2px 7px;
+    border-radius: 4px; letter-spacing: .5px;
+}
+.pers-card.ativo .badge { display: block; }
+.pers-nome { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.pers-desc { font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+
+/* Língua */
+.lingua-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+.lingua-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--surface2);
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.lingua-card:hover { border-color: var(--brand); }
+.lingua-card.ativo { border-color: var(--brand); background: var(--brand-light); }
+.lingua-flag { font-size: 20px; }
+.lingua-nome { font-size: 13px; font-weight: 600; color: var(--text); }
+
+.btn-guardar {
+    background: var(--brand);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s;
+    margin-top: 4px;
+}
+.btn-guardar:hover { opacity: 0.88; }
+
+/* Botão de teste de email */
+.btn-teste-email {
+    background: transparent;
+    color: var(--brand);
+    border: 1px solid var(--brand);
+    border-radius: 8px;
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+    margin-top: 10px;
+}
+.btn-teste-email:hover { background: var(--brand-light); }
+.btn-teste-email:disabled { opacity: 0.5; cursor: not-allowed; }
+.email-teste-msg {
+    display: block;
+    font-size: 12px;
+    margin-top: 8px;
+    min-height: 18px;
+}
+
+#confirmMsg {
+    display: none;
+    margin-top: 12px;
+    background: rgba(0,214,143,0.08);
+    border: 1px solid rgba(0,214,143,0.2);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+    color: #00D68F;
+    font-weight: 600;
+}
+
+@media (max-width: 600px) {
+    .config-layout { grid-template-columns: 1fr; }
+    .config-tabs { flex-direction: row; overflow-x: auto; }
+    .pers-grid, .lingua-grid { grid-template-columns: 1fr; }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Configurações</h1>
+        <p class="page-sub">Personaliza a tua experiência com a Verly.</p>
+    </div>
+</div>
+
+<div class="config-layout">
+
+    <!-- Tabs -->
+    <div class="config-tabs">
+        <button class="config-tab active" onclick="showTab('personalidade', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Personalidade
+        </button>
+        <button class="config-tab" onclick="showTab('lingua', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Língua
+        </button>
+        <button class="config-tab" onclick="showTab('preferencias', this)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M5.34 18.66l-1.41 1.41M20 12h2M2 12h2M19.07 19.07l-1.41-1.41M5.34 5.34 3.93 3.93M12 20v2M12 2v2"/></svg>
+            Preferências
+        </button>
+    </div>
+
+    <!-- Painéis -->
+    <div>
+
+        <!-- Personalidade -->
+        <div class="config-panel active" id="panel-personalidade">
+            <div class="config-section">
+                <h3>Como a Verly te fala</h3>
+                <div class="pers-grid">
+                    {% for key, p in personalidades.items() %}
+                    <div class="pers-card {% if key == atual_personalidade %}ativo{% endif %}"
+                         data-key="{{ key }}" data-cor="{{ p.cor }}"
+                         onclick="selecionarPersonalidade('{{ key }}', this)">
+                        <div class="badge">ATIVO</div>
+                        <div class="pers-nome">{{ p.nome }}</div>
+                        <div class="pers-desc">{{ p.descricao }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="confirmMsg"></div>
+                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
+                    Afeta o Chat, Score de Compras, Relatório Mensal e Impulse Control.
+                </p>
+            </div>
+        </div>
+
+        <!-- Língua -->
+        <div class="config-panel" id="panel-lingua">
+            <div class="config-section">
+                <h3>Idioma da interface</h3>
+                <div class="lingua-grid">
+                    {% for key, l in linguas.items() %}
+                    <div class="lingua-card {% if key == lingua_atual %}ativo{% endif %}"
+                         data-key="{{ key }}" onclick="selecionarLingua('{{ key }}', this)">
+                        <span class="lingua-flag">{{ l.flag }}</span>
+                        <span class="lingua-nome">{{ l.nome }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="confirmLingua" style="display:none;margin-top:12px;background:rgba(0,214,143,0.08);border:1px solid rgba(0,214,143,0.2);border-radius:8px;padding:10px 16px;font-size:13px;color:#00D68F;font-weight:600;"></div>
+                <p style="font-size:11px;color:var(--text-sub);margin-top:16px;">
+                    A tradução completa da interface está em desenvolvimento. Por agora guarda a tua preferência.
+                </p>
+            </div>
+        </div>
+
+        <!-- Preferências -->
+        <div class="config-panel" id="panel-preferencias">
+            <div class="config-section">
+                <h3>Conta</h3>
+                <form method="POST" action="{{ url_for('configuracoes.set_preferencias') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="config-field">
+                        <label>Nome</label>
+                        <input type="text" name="nome" value="{{ current_user.nome }}" placeholder="O teu nome">
+                    </div>
+                    <div class="config-field">
+                        <label>Orçamento Mensal (€)</label>
+                        <input type="number" name="orcamento_mensal" step="0.01" min="0"
+                               value="{{ current_user.orcamento_mensal or '' }}" placeholder="ex: 500">
+                    </div>
+                    <button type="submit" class="btn-guardar">Guardar alterações</button>
+                </form>
+            </div>
+
+            <div class="config-section">
+                <h3>Notificações</h3>
+                <div class="toggle-row">
+                    <div class="toggle-info">
+                        <div class="toggle-title">Notificações por email</div>
+                        <div class="toggle-desc">Recebe alertas de garantias, orçamento e subscrições</div>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleNotif"
+                               {% if current_user.notificacoes_email %}checked{% endif %}
+                               onchange="guardarNotif(this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+
+                <!-- Botão de teste — só visível quando o toggle está activo -->
+                <div id="email-teste-wrapper" style="padding-top: 14px; {% if not current_user.notificacoes_email %}display:none;{% endif %}">
+                    <button type="button" class="btn-teste-email" id="btn-teste-email"
+                            onclick="testarEmail()">
+                        Enviar email de teste
+                    </button>
+                    <span class="email-teste-msg" id="email-teste-msg"></span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+function showTab(id, btn) {
+    document.querySelectorAll('.config-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.config-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('panel-' + id).classList.add('active');
+    btn.classList.add('active');
+}
+
+async function selecionarPersonalidade(key, card) {
+    try {
+        const res = await fetch('/configuracoes/personalidade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ personalidade: key })
+        });
+        const data = await res.json();
+        if (!data.success) return;
+        document.querySelectorAll('.pers-card').forEach(c => c.classList.remove('ativo'));
+        card.classList.add('ativo');
+        const msg = document.getElementById('confirmMsg');
+        msg.textContent = `Personalidade "${data.info.nome}" ativada.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+    } catch(e) { console.error(e); }
+}
+
+async function selecionarLingua(key, card) {
+    try {
+        const res = await fetch('/configuracoes/lingua', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lingua: key })
+        });
+        const data = await res.json();
+        if (!data.success) return;
+        document.querySelectorAll('.lingua-card').forEach(c => c.classList.remove('ativo'));
+        card.classList.add('ativo');
+        const msg = document.getElementById('confirmLingua');
+        msg.textContent = `Língua "${data.nome}" guardada.`;
+        msg.style.display = 'block';
+        setTimeout(() => msg.style.display = 'none', 3000);
+    } catch(e) { console.error(e); }
+}
+
+async function guardarNotif(val) {
+    await fetch('/perfil/atualizar', {
+        method: 'POST',
+        body: new URLSearchParams({ notificacoes_email: val ? 'on' : '' })
+    });
+    // Mostrar/esconder botão de teste
+    document.getElementById('email-teste-wrapper').style.display = val ? 'block' : 'none';
+    document.getElementById('email-teste-msg').textContent = '';
+}
+
+async function testarEmail() {
+    const btn = document.getElementById('btn-teste-email');
+    const msg = document.getElementById('email-teste-msg');
+    btn.disabled = true;
+    msg.textContent = 'A enviar…';
+    msg.style.color = 'var(--text-muted)';
+
+    try {
+        const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const res = await fetch('/alertas/teste', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': token,
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        });
+        const data = await res.json();
+        msg.textContent = data.message;
+        msg.style.color = data.success ? '#00D68F' : '#E24B4A';
+    } catch (e) {
+        msg.textContent = 'Erro de rede. Tenta novamente.';
+        msg.style.color = '#E24B4A';
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}
 </file>
 
 <file path="templates/impulse.html">
@@ -5325,6 +6892,17 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
+<file path=".gitignore">
+venv/
+storage/
+__pycache__/
+finetune/
+dados_reduzidos/
+*.pyc
+verly-mobile/node_modules/
+verly-mobile/.expo/
+</file>
+
 <file path="app/perfil.py">
 import os
 import uuid
@@ -6022,6 +7600,44 @@ def score_fatura(fatura_id):
     )
     resultado['item'] = item
     return jsonify({'success': True, 'resultado': resultado})
+</file>
+
+<file path="NOTAS.md">
+# 🚀 Guia de Sobrevivência do Projeto (Verly)
+
+## 💡 O Conceito (Para não esquecer)
+O projeto está dividido em duas partes que têm de trabalhar juntas:
+1.  **O Backend (Flask):** É a "Cozinha". É aqui que estão os dados, o login e a IA.
+2.  **O Mobile (App):** É o "Empregado de Mesa". É o que tu vês e onde clicas.
+*Sem a cozinha aberta (Flask ligado), o empregado (App) não consegue servir nada!*
+
+---
+
+## 🛠️ Ritual de Trabalho (Como ligar tudo)
+
+Deves ter sempre **DOIS TERMINAIS** abertos ao mesmo tempo no VS Code:
+
+### 1. Terminal do Backend (O Cérebro)
+Este terminal tem de estar sempre ligado para o login e a base de dados funcionarem.
+1. `venv\Scripts\activate` (Ativar o ambiente)
+2. `pip install -r requirements.txt` (Garantir que as bibliotecas estão lá)
+3. `python run.py` (Ligar o servidor)
+*Nota: Deixa-o a correr, não o feches enquanto usares a app.*
+
+### 2. Terminal do Mobile (Os Visuais)
+Este terminal envia a app para o teu iPhone.
+1. `cd verly-mobile` (Entrar na pasta da app)
+2. `npm install` (Só é preciso se mudares de PC ou apagares a pasta node_modules)
+3. **Configuração de IP:** Garantir que o IP em `src/services/api.js` é o IP atual do teu PC.
+4. `npx expo start -c` (Gerar o QR Code para o iPhone)
+
+---
+
+## 📂 Configuração de Instalação (PC Novo)
+Se um dia fores instalar isto noutro computador, os passos são:
+1. Criar venv: `python -m venv venv`
+2. Instalar Python libs: `pip install -r requirements.txt`
+3. Instalar Mobile libs: `cd verly-mobile` -> `npm install`
 </file>
 
 <file path="README.md">
@@ -7625,38 +9241,6 @@ def _unique_path(directory: str, filename: str) -> str:
         if not os.path.exists(path):
             return path
         counter += 1
-</file>
-
-<file path="requirements.txt">
-# ── Web framework ─────────────────────────────────────────────────────────────
-flask
-flask-sqlalchemy
-flask-login
-flask-wtf          # CSRF protection (novo)
-
-# ── Segurança ─────────────────────────────────────────────────────────────────
-python-dotenv
-werkzeug
-
-# ── Base de dados ─────────────────────────────────────────────────────────────
-# PostgreSQL (para produção — não é necessário em development com SQLite)
-psycopg2-binary
-
-# ── IA e processamento ────────────────────────────────────────────────────────
-llama-index-core
-llama-index-llms-groq
-llama-index-embeddings-huggingface
-sentence-transformers
-
-# ── Exportação ────────────────────────────────────────────────────────────────
-reportlab
-
-# ── Autenticação / tokens ─────────────────────────────────────────────────────
-PyJWT
-cryptography
-
-# ── Envio de emails ───────────────────────────────────────────────────────
-resend
 </file>
 
 <file path="static/css/style.css">
@@ -9344,6 +10928,40 @@ Responde APENAS com JSON válido:
             'data_garantia': None,
             'data_devolucao': None,
         }
+</file>
+
+<file path="requirements.txt">
+# ── Web framework ─────────────────────────────────────────────────────────────
+flask
+flask-sqlalchemy
+flask-login
+flask-wtf  
+flask-jwt-extended
+        # CSRF protection (novo)
+
+# ── Segurança ─────────────────────────────────────────────────────────────────
+python-dotenv
+werkzeug
+
+# ── Base de dados ─────────────────────────────────────────────────────────────
+# PostgreSQL (para produção — não é necessário em development com SQLite)
+psycopg2-binary
+
+# ── IA e processamento ────────────────────────────────────────────────────────
+llama-index-core
+llama-index-llms-groq
+llama-index-embeddings-huggingface
+sentence-transformers
+
+# ── Exportação ────────────────────────────────────────────────────────────────
+reportlab
+
+# ── Autenticação / tokens ─────────────────────────────────────────────────────
+PyJWT
+cryptography
+
+# ── Envio de emails ───────────────────────────────────────────────────────
+resend
 </file>
 
 <file path="storage_utilizadores/1/default__vector_store.json">
@@ -11267,6 +12885,8 @@ from flask import Flask, redirect, url_for, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_jwt_extended import JWTManager
+from datetime import timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11292,6 +12912,12 @@ def create_app(config_override=None):
     login_manager.init_app(app)
     csrf.init_app(app)
 
+    # ✅ JWT (Configurado dentro da função)
+    jwt = JWTManager(app)
+
+    app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
+
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Precisas de fazer login primeiro.'
     login_manager.login_message_category = 'warning'
@@ -11307,7 +12933,7 @@ def create_app(config_override=None):
             response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
         return response
 
-    # ── Tratar erros de CSRF graciosamente ────────────────────────────────────
+    # ── CSRF error handler ────────────────────────────────────────────────────
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
         app.logger.warning(f'CSRF error: {e.description} — IP: {request.remote_addr}')
@@ -11317,19 +12943,22 @@ def create_app(config_override=None):
                 'message': 'Sessão expirada. Recarrega a página e tenta novamente.',
                 'csrf_error': True
             }), 403
+
         from flask import flash
         flash('A tua sessão expirou. Faz login novamente.', 'error')
         return redirect(url_for('auth.login'))
 
-    # ── Tratar uploads demasiado grandes ─────────────────────────────────────
+    # ── Upload too large ──────────────────────────────────────────────────────
     @app.errorhandler(413)
     def handle_too_large(e):
         max_mb = app.config.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024) // (1024 * 1024)
+
         if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
             return jsonify({
                 'success': False,
                 'message': f'Ficheiro demasiado grande. Máximo permitido: {max_mb} MB.'
             }), 413
+
         from flask import flash
         flash(f'Ficheiro demasiado grande. Máximo: {max_mb} MB.', 'error')
         return redirect(url_for('faturas.faturas'))
@@ -11341,26 +12970,29 @@ def create_app(config_override=None):
     def load_user(user_id):
         return User.query.get(int(user_id))
 
-    # ── Registar blueprints ───────────────────────────────────────────────────
-    from app.auth          import auth_bp
-    from app.dashboard     import dashboard_bp
-    from app.faturas       import faturas_bp
-    from app.chat          import chat_bp
-    from app.perfil        import perfil_bp
-    from app.exportar      import exportar_bp
-    from app.scoring       import scoring_bp
-    from app.subscriptions import subscriptions_bp
-    from app.impulse       import impulse_bp
-    from app.reports       import reports_bp
-    from app.personality   import personality_bp
-    from app.onboarding    import onboarding_bp
-    from app.metas         import metas_bp
+    # ── Blueprints ────────────────────────────────────────────────────────────
+    from app.auth           import auth_bp
+    from app.dashboard      import dashboard_bp
+    from app.faturas        import faturas_bp
+    from app.chat           import chat_bp
+    from app.perfil         import perfil_bp
+    from app.exportar       import exportar_bp
+    from app.scoring        import scoring_bp
+    from app.subscriptions  import subscriptions_bp
+    from app.impulse        import impulse_bp
+    from app.reports        import reports_bp
+    from app.personality    import personality_bp
+    from app.onboarding     import onboarding_bp
+    from app.metas          import metas_bp
     from app.fatura_detalhe import fatura_detalhe_bp
-    from app.estatisticas  import estatisticas_bp
-    from app.historico     import historico_bp
-    from app.configuracoes import configuracoes_bp
-    from app.notificacoes  import notificacoes_bp
-    from app.email_routes  import email_bp          # ← NOVO
+    from app.estatisticas   import estatisticas_bp
+    from app.historico      import historico_bp
+    from app.configuracoes  import configuracoes_bp
+    from app.notificacoes   import notificacoes_bp
+    from app.email_routes   import email_bp
+    
+    # ✅ NOVO: Importar Blueprint da API
+    from app.api            import api_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -11380,7 +13012,10 @@ def create_app(config_override=None):
     app.register_blueprint(historico_bp)
     app.register_blueprint(configuracoes_bp)
     app.register_blueprint(notificacoes_bp)
-    app.register_blueprint(email_bp)               # ← NOVO
+    app.register_blueprint(email_bp)
+    
+    # ✅ NOVO: Registar Blueprint da API com o prefixo v1
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
 
     with app.app_context():
         db.create_all()
@@ -11391,7 +13026,6 @@ def create_app(config_override=None):
 
 
 def _setup_logging(app: Flask):
-    """Configura logging estruturado."""
     level = logging.DEBUG if app.config.get('DEBUG') else logging.INFO
 
     handler = logging.StreamHandler()
@@ -11409,7 +13043,6 @@ def _setup_logging(app: Flask):
 
 
 def _migrate_db():
-    """Migrações manuais de schema — compatível com SQLite e PostgreSQL."""
     from sqlalchemy import text, inspect
 
     inspector = inspect(db.engine)
@@ -11419,19 +13052,19 @@ def _migrate_db():
         return column in cols
 
     migrations = [
-        ('faturas', 'categoria',                "VARCHAR(50) DEFAULT 'Outros'"),
-        ('faturas', 'data_garantia',             'VARCHAR(50)'),
-        ('faturas', 'data_devolucao',            'VARCHAR(50)'),
-        ('faturas', 'notas',                     'TEXT'),
-        ('users',   'notificacoes_email',        'BOOLEAN DEFAULT 0'),
-        ('users',   'email_notificacoes',        'VARCHAR(150)'),
-        ('users',   'personalidade',             "VARCHAR(20) DEFAULT 'calm'"),
-        ('users',   'orcamento_mensal',          'FLOAT DEFAULT 0'),
-        ('users',   'onboarding_completo',       'BOOLEAN DEFAULT 0'),
-        ('users',   'avatar',                    'VARCHAR(255)'),
-        ('users',   'streak_dias',               'INTEGER DEFAULT 0'),
-        ('users',   'streak_ultima_atualizacao', 'DATETIME'),
-        ('users',   'lingua',                    "VARCHAR(10) DEFAULT 'pt'"),
+        ('faturas', 'categoria', "VARCHAR(50) DEFAULT 'Outros'"),
+        ('faturas', 'data_garantia', 'VARCHAR(50)'),
+        ('faturas', 'data_devolucao', 'VARCHAR(50)'),
+        ('faturas', 'notas', 'TEXT'),
+        ('users', 'notificacoes_email', 'BOOLEAN DEFAULT 0'),
+        ('users', 'email_notificacoes', 'VARCHAR(150)'),
+        ('users', 'personalidade', "VARCHAR(20) DEFAULT 'calm'"),
+        ('users', 'orcamento_mensal', 'FLOAT DEFAULT 0'),
+        ('users', 'onboarding_completo', 'BOOLEAN DEFAULT 0'),
+        ('users', 'avatar', 'VARCHAR(255)'),
+        ('users', 'streak_dias', 'INTEGER DEFAULT 0'),
+        ('users', 'streak_ultima_atualizacao', 'DATETIME'),
+        ('users', 'lingua', "VARCHAR(10) DEFAULT 'pt'"),
     ]
 
     for table, column, col_type in migrations:
@@ -11439,7 +13072,7 @@ def _migrate_db():
             try:
                 db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
                 db.session.commit()
-            except Exception as e:
+            except Exception:
                 db.session.rollback()
 </file>
 
