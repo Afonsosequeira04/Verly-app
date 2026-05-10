@@ -1,31 +1,22 @@
 /**
  * src/services/api.js
  * Serviço central de comunicação com o backend Flask.
- * Todas as chamadas à API passam por aqui.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Muda para o IP da tua máquina quando testares em dispositivo físico
 // Em emulador Android: http://10.0.2.2:5000/api/v1
-// Em emulador iOS:     http://localhost:5000/api/v1
+// Em dispositivo físico: http://<SEU_IP_LOCAL>:5000/api/v1
 const BASE_URL = 'http://127.0.0.1:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
 // ── Token ─────────────────────────────────────────────────────────────────────
 
-export const saveToken = async (token) => {
-  await AsyncStorage.setItem(TOKEN_KEY, token);
-};
-
-export const getToken = async () => {
-  return await AsyncStorage.getItem(TOKEN_KEY);
-};
-
-export const removeToken = async () => {
-  await AsyncStorage.removeItem(TOKEN_KEY);
-};
+export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
+export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
+export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
 
 // ── Fetch base ────────────────────────────────────────────────────────────────
 
@@ -38,23 +29,15 @@ async function apiFetch(path, options = {}) {
     ...(options.headers || {}),
   };
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
-  // Token expirado → logout automático
   if (response.status === 401) {
     await removeToken();
     throw new Error('UNAUTHORIZED');
   }
 
   const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || `Erro ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
   return data;
 }
 
@@ -62,16 +45,11 @@ async function apiFetch(path, options = {}) {
 
 async function apiUpload(path, formData) {
   const token = await getToken();
-
   const response = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // NÃO definir Content-Type aqui — o fetch define automaticamente com boundary
-    },
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: formData,
   });
-
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
   return data;
@@ -80,25 +58,13 @@ async function apiUpload(path, formData) {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export const authAPI = {
-  login: (email, password) =>
-    apiFetch('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
-
+  login:    (email, password) =>
+    apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   register: (nome, email, password) =>
-    apiFetch('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ nome, email, password }),
-    }),
-
-  me: () => apiFetch('/auth/me'),
-
+    apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
+  me:       () => apiFetch('/auth/me'),
   updateMe: (updates) =>
-    apiFetch('/auth/me', {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    }),
+    apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
 };
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -114,18 +80,11 @@ export const faturasAPI = {
     const query = new URLSearchParams(params).toString();
     return apiFetch(`/faturas${query ? `?${query}` : ''}`);
   },
-
   detalhe: (id) => apiFetch(`/faturas/${id}`),
-
-  apagar: (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
-
-  upload: (fileUri, fileName, fileType) => {
+  apagar:  (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
+  upload:  (fileUri, fileName, fileType) => {
     const formData = new FormData();
-    formData.append('file', {
-      uri: fileUri,
-      name: fileName,
-      type: fileType,
-    });
+    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
     return apiUpload('/faturas/upload', formData);
   },
 };
@@ -139,15 +98,10 @@ export const notificacoesAPI = {
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
 export const chatAPI = {
-  enviar: (mensagem) =>
-    apiFetch('/chat/mensagem', {
-      method: 'POST',
-      body: JSON.stringify({ mensagem }),
-    }),
-
+  enviar:    (mensagem) =>
+    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
   historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
-
-  limpar: () => apiFetch('/chat/limpar', { method: 'POST' }),
+  limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
 };
 
 // ── Subscrições ───────────────────────────────────────────────────────────────
@@ -160,12 +114,62 @@ export const subscricoesAPI = {
 
 export const metasAPI = {
   listar: () => apiFetch('/metas'),
+  criar:  (nome, limite, categoria) =>
+    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
+  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+};
 
-  criar: (nome, limite, categoria) =>
-    apiFetch('/metas', {
+// ── Estatísticas ──────────────────────────────────────────────────────────────
+
+export const estatisticasAPI = {
+  get: () => apiFetch('/estatisticas'),
+};
+
+// ── Score de Compras ──────────────────────────────────────────────────────────
+
+export const scoreAPI = {
+  analisar: ({ item, preco, categoria, uso }) =>
+    apiFetch('/scoring/analisar', {
       method: 'POST',
-      body: JSON.stringify({ nome, limite, categoria }),
+      body: JSON.stringify({ item, preco, categoria, uso }),
     }),
 
-  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+  scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
+
+  lojasProximas: ({ item, categoria, lat, lng }) =>
+    apiFetch('/scoring/lojas-proximas', {
+      method: 'POST',
+      body: JSON.stringify({ item, categoria, lat, lng }),
+    }),
+};
+
+// ── Impulse Control ───────────────────────────────────────────────────────────
+
+export const impulseAPI = {
+  analisar: ({ produto, personalidade }) =>
+    apiFetch('/impulse/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ produto, personalidade }),
+    }),
+};
+
+// ── Relatório Mensal ──────────────────────────────────────────────────────────
+
+export const relatorioAPI = {
+  get: (mes = null, ano = null) => {
+    const params = new URLSearchParams();
+    if (mes) params.set('mes', mes);
+    if (ano) params.set('ano', ano);
+    const query = params.toString();
+    return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
+  },
+};
+
+// ── Histórico ─────────────────────────────────────────────────────────────────
+
+export const historicoAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/historico/api${query ? `?${query}` : ''}`);
+  },
 };

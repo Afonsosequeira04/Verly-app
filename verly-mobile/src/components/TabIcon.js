@@ -1,5 +1,5 @@
 /**
- * src/components/TabIcon.js
+ * src/components/TabIcon.js — atualizado com ícone de Metas e Estatísticas
  */
 import React from 'react';
 import Svg, { Path, Line, Polyline, Circle, Rect } from 'react-native-svg';
@@ -25,6 +25,24 @@ export default function TabIcon({ name, color, size = 22 }) {
       return (
         <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <Path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </Svg>
+      );
+    case 'Metas':
+      // Ícone de alvo / target
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Circle cx="12" cy="12" r="10" />
+          <Circle cx="12" cy="12" r="6" />
+          <Circle cx="12" cy="12" r="2" />
+        </Svg>
+      );
+    case 'Estatisticas':
+      // Ícone de barras de gráfico
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Line x1="18" y1="20" x2="18" y2="10" />
+          <Line x1="12" y1="20" x2="12" y2="4" />
+          <Line x1="6" y1="20" x2="6" y2="14" />
         </Svg>
       );
     case 'Subscricoes':

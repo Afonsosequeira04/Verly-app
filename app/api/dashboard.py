@@ -28,10 +28,6 @@ logger = logging.getLogger(__name__)
 @api_bp.route('/dashboard', methods=['GET'])
 @jwt_required()
 def dashboard():
-    """
-    Retorna todos os dados do dashboard em JSON.
-    O React Native usa este endpoint para montar o ecrã principal.
-    """
     from app.models import User
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
@@ -44,18 +40,15 @@ def dashboard():
     orcamento   = getattr(user, 'orcamento_mensal', 0) or 0
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
-    # Categorias
     categorias = defaultdict(float)
     for f in faturas:
         categorias[f.categoria or 'Outros'] += f.total or 0
 
-    # Lojas
     lojas = defaultdict(float)
     for f in faturas:
         lojas[f.loja or 'Desconhecida'] += f.total or 0
     top_loja = max(lojas, key=lojas.get) if lojas else None
 
-    # Alertas de garantia/devolução
     hoje = datetime.now()
     alertas = []
     for f in faturas:
@@ -94,7 +87,6 @@ def dashboard():
         (f.total or 0) * _regret_factor(f.categoria or 'Outros') for f in faturas
     )
 
-    # Últimas faturas (para lista no dashboard)
     def fatura_mini(f):
         return {
             'id':          f.id,
@@ -127,4 +119,72 @@ def dashboard():
             'top3': subs_data['subscriptions'][:3],
         },
         'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
+    })
+
+
+# ── Estatísticas ──────────────────────────────────────────────────────────────
+
+def _parse_date_str(s):
+    if not s:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(s.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@api_bp.route('/estatisticas', methods=['GET'])
+@jwt_required()
+def estatisticas():
+    user_id = int(get_jwt_identity())
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    if not faturas:
+        return jsonify({
+            'por_categoria': [],
+            'por_mes': [],
+            'total_geral': 0,
+            'media_mensal': 0,
+            'categoria_top': None,
+            'num_faturas': 0,
+        })
+
+    cat_totais = defaultdict(float)
+    cat_counts = defaultdict(int)
+    mes_totais = defaultdict(float)
+
+    for f in faturas:
+        cat = f.categoria or 'Outros'
+        total = f.total or 0
+        cat_totais[cat] += total
+        cat_counts[cat] += 1
+
+        data = _parse_date_str(f.data_compra) or f.data_upload
+        if data:
+            chave_mes = data.strftime('%Y-%m') if hasattr(data, 'strftime') else str(data)[:7]
+            mes_totais[chave_mes] += total
+
+    por_categoria = sorted(
+        [{'categoria': k, 'total': round(v, 2), 'count': cat_counts[k]}
+         for k, v in cat_totais.items()],
+        key=lambda x: x['total'], reverse=True
+    )
+
+    por_mes = sorted(
+        [{'mes': k, 'total': round(v, 2)} for k, v in mes_totais.items()],
+        key=lambda x: x['mes']
+    )
+
+    total_geral  = sum(f.total or 0 for f in faturas)
+    media_mensal = total_geral / len(mes_totais) if mes_totais else 0
+
+    return jsonify({
+        'por_categoria': por_categoria,
+        'por_mes':       por_mes,
+        'total_geral':   round(total_geral, 2),
+        'media_mensal':  round(media_mensal, 2),
+        'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
+        'num_faturas':   len(faturas),
     })

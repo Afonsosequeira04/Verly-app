@@ -48,6 +48,7 @@ app/api/auth.py
 app/api/chat.py
 app/api/dashboard.py
 app/api/faturas.py
+app/api/mobile_extras.py
 app/auth.py
 app/chat.py
 app/configuracoes.py
@@ -135,16 +136,2221 @@ verly-mobile/src/screens/auth/LoginScreen.js
 verly-mobile/src/screens/auth/RegisterScreen.js
 verly-mobile/src/screens/ChatScreen.js
 verly-mobile/src/screens/DashboardScreen.js
+verly-mobile/src/screens/EstatisticasScreen.js
 verly-mobile/src/screens/FaturaDetalheScreen.js
 verly-mobile/src/screens/FaturasScreen.js
+verly-mobile/src/screens/HistoricoScreen.js
+verly-mobile/src/screens/ImpulseScreen.js
+verly-mobile/src/screens/MetasScreen.js
 verly-mobile/src/screens/NotificacoesScreen.js
 verly-mobile/src/screens/PerfilScreen.js
+verly-mobile/src/screens/RelatorioScreen.js
+verly-mobile/src/screens/ScoreScreen.js
 verly-mobile/src/screens/SubscricoesScreen.js
 verly-mobile/src/services/api.js
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/mobile_extras.py">
+"""
+app/api/mobile_extras.py — Endpoints mobile para Score, Impulse, Relatório, Histórico e Lojas
+
+Registar em app/api/__init__.py:
+    from app.api import mobile_extras  # noqa — registo automático via decoradores
+"""
+
+from collections import defaultdict
+from datetime import datetime
+from flask import jsonify, request
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, User
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(str(date_str).strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _get_data_obj(f):
+    d = _parse_date(f.data_compra)
+    if d:
+        return d
+    if f.data_upload:
+        return f.data_upload.date() if hasattr(f.data_upload, 'date') else f.data_upload
+    return None
+
+
+# ── Score de Compras (/api/v1/scoring/analisar) ────────────────────────────────
+
+@api_bp.route('/scoring/analisar', methods=['POST'])
+@jwt_required()
+def scoring_analisar():
+    """Replica /scoring/analisar para mobile. Reutiliza a lógica do scoring.py."""
+    from app.scoring import calcular_score
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    data = request.json or {}
+    item      = (data.get('item') or 'Item').strip() or 'Item'
+    preco     = float(data.get('preco') or 0)
+    categoria = data.get('categoria', 'Outros')
+    uso       = data.get('uso', 'monthly')
+
+    resultado = calcular_score(categoria, preco, uso, personalidade, item=item)
+    resultado['item'] = item
+    return jsonify({'success': True, 'resultado': resultado})
+
+
+@api_bp.route('/scoring/fatura/<int:fatura_id>', methods=['GET'])
+@jwt_required()
+def scoring_fatura_mobile(fatura_id):
+    """Score de uma fatura específica."""
+    from app.scoring import calcular_score
+    user_id = int(get_jwt_identity())
+    fatura = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first()
+    if not fatura:
+        return jsonify({'success': False, 'message': 'Fatura não encontrada.'}), 404
+
+    user = User.query.get(user_id)
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+    item = fatura.loja or fatura.nome_ficheiro
+
+    resultado = calcular_score(
+        categoria=fatura.categoria or 'Outros',
+        preco=fatura.total or 0,
+        uso='monthly',
+        personalidade=personalidade,
+        item=item,
+    )
+    resultado['item'] = item
+    return jsonify({'success': True, 'resultado': resultado})
+
+
+# ── Lojas Próximas (/api/v1/scoring/lojas-proximas) ──────────────────────────
+# Reutiliza exatamente a mesma lógica que a web (app/scoring.py)
+
+@api_bp.route('/scoring/lojas-proximas', methods=['POST'])
+@jwt_required()
+def lojas_proximas_mobile():
+    """
+    Procura lojas próximas via Google Places (ou Overpass como fallback).
+    Body JSON: { item, categoria, lat, lng }
+    """
+    from app.scoring import buscar_lojas_osm
+    data = request.json or {}
+    lat       = data.get('lat')
+    lng       = data.get('lng')
+    categoria = data.get('categoria', 'Outros')
+    item      = data.get('item', '')
+
+    if lat is None or lng is None:
+        return jsonify({'success': False, 'message': 'Localização não fornecida.', 'lojas': []})
+
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'Coordenadas inválidas.', 'lojas': []})
+
+    lojas = buscar_lojas_osm(lat, lng, categoria, item=item)
+    return jsonify({'success': True, 'lojas': lojas, 'item': item})
+
+
+# ── Impulse Control (/api/v1/impulse/analisar) ────────────────────────────────
+
+@api_bp.route('/impulse/analisar', methods=['POST'])
+@jwt_required()
+def impulse_analisar():
+    """Impulse control para mobile."""
+    from app.impulse import SYSTEM_PROMPTS, _call_llm
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+
+    data = request.json or {}
+    produto       = (data.get('produto') or '').strip()
+    personalidade = data.get('personalidade', getattr(user, 'personalidade', 'calm') or 'calm')
+
+    if not produto:
+        return jsonify({'success': False, 'message': 'Descreve o que queres comprar.'}), 400
+
+    if personalidade not in SYSTEM_PROMPTS:
+        personalidade = 'calm'
+
+    system    = SYSTEM_PROMPTS[personalidade]
+    resultado = _call_llm(system, produto)
+
+    return jsonify({
+        'success':       True,
+        'personalidade': personalidade,
+        'produto':       produto,
+        'resultado':     resultado,
+    })
+
+
+# ── Relatório Mensal (/api/v1/relatorio/api) ─────────────────────────────────
+
+@api_bp.route('/relatorio/api', methods=['GET'])
+@jwt_required()
+def relatorio_api_mobile():
+    """Relatório mensal para mobile. Reutiliza gerar_relatorio e _roast_phrase."""
+    from app.reports import gerar_relatorio, _roast_phrase
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+
+    mes = request.args.get('mes', type=int)
+    ano = request.args.get('ano', type=int)
+
+    data = gerar_relatorio(user_id, mes, ano)
+
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+    data['roast_phrase'] = (
+        _roast_phrase(data['total_gasto'], data['desperdicado'], data['top_cat'], personalidade)
+        if data['total_gasto'] > 0
+        else 'Sem dados este mês. Carrega as tuas faturas!'
+    )
+
+    return jsonify({'success': True, **data})
+
+
+# ── Histórico (/api/v1/historico/api) ─────────────────────────────────────────
+
+NOMES_MES = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+             'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+
+
+@api_bp.route('/historico/api', methods=['GET'])
+@jwt_required()
+def historico_api_mobile():
+    """
+    Histórico filtrado para mobile.
+    Query params: q (pesquisa), categoria, mes (YYYY-MM)
+    """
+    user_id = int(get_jwt_identity())
+
+    categoria_filter = request.args.get('categoria', '')
+    mes_filter       = request.args.get('mes', '')
+    search           = request.args.get('q', '').strip().lower()
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    resultado = []
+    for f in faturas:
+        data_obj = _get_data_obj(f)
+
+        if categoria_filter and f.categoria != categoria_filter:
+            continue
+        if mes_filter and data_obj:
+            if f'{data_obj.year}-{data_obj.month:02d}' != mes_filter:
+                continue
+        if search:
+            campos = f'{f.loja or ""} {f.categoria or ""} {f.nome_ficheiro or ""}'.lower()
+            if search not in campos:
+                continue
+
+        resultado.append({
+            'id':          f.id,
+            'loja':        f.loja or 'Desconhecida',
+            'categoria':   f.categoria or 'Outros',
+            'total':       f.total or 0,
+            'data_str':    data_obj.strftime('%d/%m/%Y') if data_obj else '—',
+            'data_upload': f.data_upload.isoformat() if f.data_upload else None,
+        })
+
+    resultado.sort(key=lambda x: x['data_str'], reverse=True)
+
+    # Agrupar por mês
+    grupos_dict = {}
+    for item in resultado:
+        d = _parse_date(item['data_str']) if item['data_str'] != '—' else None
+        if d:
+            key  = f'{d.year}-{d.month:02d}'
+            nome = f'{NOMES_MES[d.month]} {d.year}'
+        else:
+            key  = 'sem-data'
+            nome = 'Sem data'
+
+        if key not in grupos_dict:
+            grupos_dict[key] = {'nome': nome, 'items': [], 'total': 0}
+        grupos_dict[key]['items'].append(item)
+        grupos_dict[key]['total'] = round(grupos_dict[key]['total'] + item['total'], 2)
+
+    grupos = [grupos_dict[k] for k in sorted(grupos_dict.keys(), reverse=True)]
+
+    return jsonify({
+        'success':         True,
+        'grupos':          grupos,
+        'total_resultado': round(sum(i['total'] for i in resultado), 2),
+        'num_resultado':   len(resultado),
+    })
+</file>
+
+<file path="verly-mobile/src/screens/EstatisticasScreen.js">
+/**
+ * src/screens/EstatisticasScreen.js
+ * Gráficos e estatísticas de gastos — equivalente a /estatisticas da web.
+ *
+ * Requer o endpoint /api/v1/estatisticas no backend (ver api_estatisticas_endpoint.py).
+ * Instalar: npx expo install react-native-chart-kit react-native-svg
+ */
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, StyleSheet,
+  ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { estatisticasAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const SCREEN_W = Dimensions.get('window').width;
+
+const CAT_ICONS = {
+  'Tecnologia': '💻', 'Alimentação': '🍽️', 'Vestuário': '👕',
+  'Casa & Decoração': '🏠', 'Saúde & Beleza': '💊', 'Desporto': '🏋️',
+  'Entretenimento': '🎬', 'Transportes': '🚗', 'Educação': '📚', 'Outros': '📦',
+};
+
+const BAR_COLORS = ['#534AB7', '#7B68EE', '#9580FF', '#00D68F', '#FFB800', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FF8B94'];
+
+function BarChart({ data, maxVal }) {
+  if (!data?.length) return null;
+  const barMaxW = SCREEN_W - 120;
+
+  return (
+    <View style={styles.barChart}>
+      {data.map((item, i) => {
+        const pct = maxVal > 0 ? (item.total / maxVal) : 0;
+        return (
+          <View key={item.categoria} style={styles.barRow}>
+            <Text style={styles.barLabel} numberOfLines={1}>
+              {CAT_ICONS[item.categoria] || '📦'} {item.categoria}
+            </Text>
+            <View style={styles.barTrack}>
+              <View
+                style={[
+                  styles.barFill,
+                  { width: Math.max(pct * barMaxW, 4), backgroundColor: BAR_COLORS[i % BAR_COLORS.length] },
+                ]}
+              />
+            </View>
+            <Text style={styles.barVal}>{item.total.toFixed(0)}€</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function MesChart({ data }) {
+  if (!data?.length) return null;
+  const maxVal = Math.max(...data.map(d => d.total), 1);
+  const chartH = 120;
+  const barW   = Math.max((SCREEN_W - 80) / data.length - 8, 16);
+
+  const formatMes = (mes) => {
+    const [, m] = mes.split('-');
+    const nomes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    return nomes[parseInt(m, 10) - 1] || mes;
+  };
+
+  return (
+    <View style={styles.mesChart}>
+      <View style={styles.mesBars}>
+        {data.map((item, i) => {
+          const h = Math.max((item.total / maxVal) * chartH, 4);
+          return (
+            <View key={item.mes} style={styles.mesBarCol}>
+              <Text style={styles.mesBarVal}>{item.total >= 1000 ? `${(item.total/1000).toFixed(1)}k` : item.total.toFixed(0)}€</Text>
+              <View style={[styles.mesBar, { height: h, backgroundColor: COLORS.brand }]} />
+              <Text style={styles.mesBarLabel}>{formatMes(item.mes)}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+export default function EstatisticasScreen() {
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
+  const [refreshing, setRefresh]= useState(false);
+
+  const fetchData = async () => {
+    try {
+      const result = await estatisticasAPI.get();
+      setData(result);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  };
+
+  useFocusEffect(useCallback(() => { fetchData(); }, []));
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+
+  const maxCat = data?.por_categoria?.[0]?.total || 1;
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchData(); }} tintColor={COLORS.brand} />
+      }
+    >
+      <Text style={styles.title}>Estatísticas</Text>
+
+      {/* Resumo */}
+      <View style={styles.resumoRow}>
+        <View style={styles.resumoCard}>
+          <Text style={styles.resumoVal}>{(data?.total_geral || 0).toFixed(2)}€</Text>
+          <Text style={styles.resumoLabel}>Total gasto</Text>
+        </View>
+        <View style={styles.resumoCard}>
+          <Text style={styles.resumoVal}>{(data?.media_mensal || 0).toFixed(0)}€</Text>
+          <Text style={styles.resumoLabel}>Média/mês</Text>
+        </View>
+        <View style={styles.resumoCard}>
+          <Text style={styles.resumoVal}>{data?.num_faturas || 0}</Text>
+          <Text style={styles.resumoLabel}>Faturas</Text>
+        </View>
+      </View>
+
+      {/* Categoria top */}
+      {data?.categoria_top && (
+        <View style={styles.topCard}>
+          <Text style={styles.topIcon}>{CAT_ICONS[data.categoria_top] || '📦'}</Text>
+          <View>
+            <Text style={styles.topLabel}>Categoria com mais gastos</Text>
+            <Text style={styles.topVal}>{data.categoria_top}</Text>
+          </View>
+        </View>
+      )}
+
+      {/* Gastos por mês */}
+      {data?.por_mes?.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Gastos por mês</Text>
+          <View style={styles.card}>
+            <MesChart data={data.por_mes.slice(-6)} />
+          </View>
+        </View>
+      )}
+
+      {/* Gastos por categoria */}
+      {data?.por_categoria?.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Por categoria</Text>
+          <View style={styles.card}>
+            <BarChart data={data.por_categoria} maxVal={maxCat} />
+          </View>
+        </View>
+      )}
+
+      {/* Lista detalhada */}
+      {data?.por_categoria?.length > 0 && (
+        <View style={[styles.section, { marginBottom: 32 }]}>
+          <Text style={styles.sectionTitle}>Detalhe</Text>
+          {data.por_categoria.map((item, i) => (
+            <View key={item.categoria} style={styles.detalheRow}>
+              <View style={[styles.detalheDot, { backgroundColor: BAR_COLORS[i % BAR_COLORS.length] }]} />
+              <Text style={styles.detalheCat}>{CAT_ICONS[item.categoria] || '📦'} {item.categoria}</Text>
+              <Text style={styles.detalheCount}>{item.count}x</Text>
+              <Text style={styles.detalheTotal}>{item.total.toFixed(2)}€</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {(!data || data.num_faturas === 0) && (
+        <View style={styles.empty}>
+          <Text style={styles.emptyIcon}>📊</Text>
+          <Text style={styles.emptyTitle}>Sem dados ainda</Text>
+          <Text style={styles.emptySub}>Carrega faturas para ver as tuas estatísticas.</Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  content: { padding: 20 },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  title:   { fontSize: 28, fontWeight: '800', color: COLORS.text, marginBottom: 20 },
+
+  resumoRow:  { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  resumoCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  resumoVal:  { fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  resumoLabel:{ fontSize: 11, color: COLORS.textSub, textAlign: 'center' },
+
+  topCard:  { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: 'rgba(83,74,183,0.12)', borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(83,74,183,0.25)' },
+  topIcon:  { fontSize: 28 },
+  topLabel: { fontSize: 11, color: COLORS.textSub, marginBottom: 2 },
+  topVal:   { fontSize: 16, fontWeight: '700', color: COLORS.brand },
+
+  section:      { marginBottom: 20 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
+  card:         { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: COLORS.border },
+
+  // Bar chart horizontal (por categoria)
+  barChart: { gap: 12 },
+  barRow:   { gap: 6 },
+  barLabel: { fontSize: 12, color: COLORS.textSub, marginBottom: 3 },
+  barTrack: { height: 8, backgroundColor: COLORS.surface2, borderRadius: 4, overflow: 'hidden' },
+  barFill:  { height: 8, borderRadius: 4 },
+  barVal:   { fontSize: 11, color: COLORS.text, fontWeight: '600', textAlign: 'right' },
+
+  // Mes chart (barras verticais)
+  mesChart:   { alignItems: 'center' },
+  mesBars:    { flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 160, paddingTop: 20 },
+  mesBarCol:  { alignItems: 'center', gap: 4 },
+  mesBarVal:  { fontSize: 9, color: COLORS.textSub },
+  mesBar:     { borderRadius: 4, minHeight: 4 },
+  mesBarLabel:{ fontSize: 10, color: COLORS.textSub },
+
+  // Detalhe lista
+  detalheRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.border, gap: 8 },
+  detalheDot:   { width: 8, height: 8, borderRadius: 4 },
+  detalheCat:   { flex: 1, fontSize: 13, color: COLORS.text },
+  detalheCount: { fontSize: 12, color: COLORS.textSub, minWidth: 24 },
+  detalheTotal: { fontSize: 14, fontWeight: '700', color: COLORS.text, minWidth: 70, textAlign: 'right' },
+
+  empty:      { alignItems: 'center', paddingTop: 60 },
+  emptyIcon:  { fontSize: 48, marginBottom: 12, opacity: 0.3 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/HistoricoScreen.js">
+/**
+ * src/screens/HistoricoScreen.js
+ * Histórico de faturas com pesquisa e filtros
+ * Design polished: sem emojis, Lucide icons, layout refinado
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, TextInput,
+  TouchableOpacity, ActivityIndicator, Alert, ScrollView,
+} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import {
+  Search, X, SlidersHorizontal, Cpu, Utensils, Shirt,
+  Heart, Film, Home, Dumbbell, GraduationCap, Car, Package,
+  ChevronRight,
+} from 'lucide-react-native';
+import { historicoAPI } from '../services/api';
+
+const C = {
+  brand:   '#6C5CE7',
+  bg:      '#0C0C14',
+  surface: '#13131F',
+  surface2:'#1C1C2E',
+  border:  '#252540',
+  text:    '#EEEEF8',
+  textSub: '#7070A0',
+  green:   '#00C896',
+  red:     '#FF5370',
+  yellow:  '#FFB300',
+};
+
+const CATEGORIAS = [
+  { key: 'Todas',          Icon: SlidersHorizontal },
+  { key: 'Tecnologia',     Icon: Cpu },
+  { key: 'Alimentação',    Icon: Utensils },
+  { key: 'Vestuário',      Icon: Shirt },
+  { key: 'Saúde & Beleza', Icon: Heart },
+  { key: 'Entretenimento', Icon: Film },
+  { key: 'Casa & Decoração', Icon: Home },
+  { key: 'Desporto',       Icon: Dumbbell },
+  { key: 'Educação',       Icon: GraduationCap },
+  { key: 'Transportes',    Icon: Car },
+  { key: 'Outros',         Icon: Package },
+];
+
+const CAT_ICON_MAP = Object.fromEntries(CATEGORIAS.map(c => [c.key, c.Icon]));
+
+// ── Fatura Card ───────────────────────────────────────────────────────────────
+
+function FaturaCard({ item, onPress }) {
+  const Icon = CAT_ICON_MAP[item.categoria] || Package;
+  return (
+    <TouchableOpacity style={styles.faturaCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.faturaIconWrap}>
+        <Icon size={16} color={C.brand} />
+      </View>
+      <View style={styles.faturaInfo}>
+        <Text style={styles.faturaLoja} numberOfLines={1}>{item.loja}</Text>
+        <Text style={styles.faturaMeta}>{item.data_str} · {item.categoria}</Text>
+      </View>
+      <View style={styles.faturaRight}>
+        <Text style={styles.faturaTotal}>{item.total.toFixed(2)}€</Text>
+        <ChevronRight size={14} color={C.textSub} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// ── Group Header ──────────────────────────────────────────────────────────────
+
+function GrupoHeader({ nome, total }) {
+  return (
+    <View style={styles.grupoHeader}>
+      <Text style={styles.grupoNome}>{nome}</Text>
+      <Text style={styles.grupoTotal}>{total.toFixed(2)}€</Text>
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
+export default function HistoricoScreen() {
+  const navigation = useNavigation();
+  const [search,       setSearch]       = useState('');
+  const [categoria,    setCategoria]    = useState('Todas');
+  const [grupos,       setGrupos]       = useState([]);
+  const [totalResult,  setTotalResult]  = useState(0);
+  const [numResult,    setNumResult]    = useState(0);
+  const [loading,      setLoading]      = useState(false);
+
+  const carregar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (search.trim()) params.q = search.trim();
+      if (categoria !== 'Todas') params.categoria = categoria;
+      const data = await historicoAPI.listar(params);
+      setGrupos(data.grupos || []);
+      setTotalResult(data.total_resultado || 0);
+      setNumResult(data.num_resultado || 0);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [search, categoria]);
+
+  useEffect(() => {
+    const t = setTimeout(carregar, 350);
+    return () => clearTimeout(t);
+  }, [carregar]);
+
+  // Flatten para FlatList
+  const flatItems = grupos.flatMap(g => [
+    { type: 'group', nome: g.nome, total: g.total },
+    ...g.items.map(i => ({ type: 'item', ...i })),
+  ]);
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Histórico</Text>
+        {numResult > 0 && (
+          <Text style={styles.subtitle}>
+            {numResult} fatura{numResult !== 1 ? 's' : ''} · {totalResult.toFixed(2)}€
+          </Text>
+        )}
+      </View>
+
+      {/* Search */}
+      <View style={styles.searchBar}>
+        <Search size={15} color={C.textSub} style={{ marginRight: 10 }} />
+        <TextInput
+          style={styles.searchInput}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Pesquisar loja ou categoria..."
+          placeholderTextColor={C.textSub}
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <X size={15} color={C.textSub} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Filtros categoria */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.catScroll}
+        contentContainerStyle={styles.catScrollContent}
+      >
+        {CATEGORIAS.slice(0, 6).map(cat => {
+          const active = categoria === cat.key;
+          const { Icon } = cat;
+          return (
+            <TouchableOpacity
+              key={cat.key}
+              style={[styles.catChip, active && styles.catChipActive]}
+              onPress={() => setCategoria(cat.key === categoria ? 'Todas' : cat.key)}
+            >
+              <Icon size={12} color={active ? '#fff' : C.textSub} />
+              <Text style={[styles.catChipText, active && { color: '#fff' }]}>
+                {cat.key.split(' ')[0]}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* Lista */}
+      {loading ? (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator color={C.brand} size="large" />
+        </View>
+      ) : (
+        <FlatList
+          data={flatItems}
+          keyExtractor={(item, i) => `${item.type}-${item.id || item.nome}-${i}`}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => {
+            if (item.type === 'group') {
+              return <GrupoHeader nome={item.nome} total={item.total} />;
+            }
+            return (
+              <FaturaCard
+                item={item}
+                onPress={() => navigation.navigate('FaturaDetalhe', { id: item.id })}
+              />
+            );
+          }}
+          ListEmptyComponent={
+            <View style={styles.emptyBox}>
+              <Package size={44} color={C.border} />
+              <Text style={styles.emptyTitle}>Nenhuma fatura encontrada</Text>
+              <Text style={styles.emptySub}>Tenta outro filtro ou pesquisa diferente.</Text>
+            </View>
+          }
+        />
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:  { flex: 1, backgroundColor: C.bg },
+
+  header:   { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 14 },
+  title:    { fontSize: 30, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
+  subtitle: { fontSize: 13, color: C.textSub, marginTop: 4 },
+
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center',
+    marginHorizontal: 16, marginBottom: 12,
+    backgroundColor: C.surface, borderRadius: 14,
+    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  searchInput: { flex: 1, color: C.text, fontSize: 15 },
+
+  catScroll:        { marginBottom: 12 },
+  catScrollContent: { paddingHorizontal: 16, gap: 8 },
+  catChip:     {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
+  },
+  catChipActive: { backgroundColor: C.brand, borderColor: C.brand },
+  catChipText:   { fontSize: 12, fontWeight: '700', color: C.textSub },
+
+  listContent: { paddingBottom: 24 },
+
+  grupoHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 10, marginTop: 8,
+    backgroundColor: C.surface2,
+  },
+  grupoNome:  { fontSize: 12, fontWeight: '700', color: C.textSub, letterSpacing: 0.4, textTransform: 'uppercase' },
+  grupoTotal: { fontSize: 13, fontWeight: '800', color: C.brand },
+
+  faturaCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.surface,
+    marginHorizontal: 16, marginVertical: 3,
+    borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: C.border,
+    gap: 12,
+  },
+  faturaIconWrap: {
+    width: 42, height: 42, borderRadius: 12,
+    backgroundColor: 'rgba(108,92,231,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: 0,
+  },
+  faturaInfo:  { flex: 1, minWidth: 0 },
+  faturaLoja:  { fontSize: 14, fontWeight: '700', color: C.text, marginBottom: 3 },
+  faturaMeta:  { fontSize: 12, color: C.textSub },
+  faturaRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  faturaTotal: { fontSize: 14, fontWeight: '800', color: C.brand },
+
+  loadingBox:  { padding: 60, alignItems: 'center' },
+
+  emptyBox:   { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
+  emptyTitle: { fontSize: 17, fontWeight: '800', color: C.textSub, marginTop: 16, marginBottom: 8 },
+  emptySub:   { fontSize: 13, color: C.textSub, textAlign: 'center', lineHeight: 20 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/ImpulseScreen.js">
+/**
+ * src/screens/ImpulseScreen.js
+ * Impulse Control Mode — analisa antes de comprar
+ * Design polished: sem emojis, Lucide icons, layout limpo
+ */
+
+import React, { useState } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, ActivityIndicator, Alert,
+} from 'react-native';
+import {
+  Brain, ShieldCheck, ShieldX, Lightbulb, AlignLeft,
+  RotateCcw, Flame, Smile, Wind, BarChart2,
+} from 'lucide-react-native';
+import { impulseAPI } from '../services/api';
+
+const C = {
+  brand:   '#6C5CE7',
+  bg:      '#0C0C14',
+  surface: '#13131F',
+  surface2:'#1C1C2E',
+  border:  '#252540',
+  text:    '#EEEEF8',
+  textSub: '#7070A0',
+  green:   '#00C896',
+  red:     '#FF5370',
+  yellow:  '#FFB300',
+};
+
+const PERSONALIDADES = [
+  {
+    key:   'calm',
+    label: 'Calmo',
+    desc:  'Empático e construtivo',
+    color: C.green,
+    Icon:  Wind,
+  },
+  {
+    key:   'pro',
+    label: 'Profissional',
+    desc:  'Análise financeira fria',
+    color: C.brand,
+    Icon:  BarChart2,
+  },
+  {
+    key:   'sarcastic',
+    label: 'Sarcástico',
+    desc:  'Irónico mas útil',
+    color: C.yellow,
+    Icon:  Smile,
+  },
+  {
+    key:   'savage',
+    label: 'Direto',
+    desc:  'Brutal e sem filtros',
+    color: C.red,
+    Icon:  Flame,
+  },
+];
+
+export default function ImpulseScreen() {
+  const [produto,       setProduto]       = useState('');
+  const [personalidade, setPersonalidade] = useState('calm');
+  const [loading,       setLoading]       = useState(false);
+  const [resultado,     setResultado]     = useState(null);
+
+  const pInfo = PERSONALIDADES.find(p => p.key === personalidade) || PERSONALIDADES[0];
+
+  const analisar = async () => {
+    if (!produto.trim()) {
+      Alert.alert('Atenção', 'Descreve o que queres comprar.');
+      return;
+    }
+    setLoading(true);
+    setResultado(null);
+    try {
+      const data = await impulseAPI.analisar({ produto: produto.trim(), personalidade });
+      if (data.success) setResultado(data.resultado);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reset = () => { setResultado(null); setProduto(''); };
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerIcon}>
+          <Brain size={22} color={C.brand} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Impulse Control</Text>
+          <Text style={styles.headerSub}>Pensa duas vezes antes de gastar</Text>
+        </View>
+      </View>
+
+      {/* Form */}
+      <View style={styles.card}>
+        <Text style={styles.label}>O que queres comprar?</Text>
+        <TextInput
+          style={styles.textarea}
+          value={produto}
+          onChangeText={setProduto}
+          placeholder="Descreve o produto e porque queres comprar..."
+          placeholderTextColor={C.textSub}
+          multiline
+          numberOfLines={3}
+          textAlignVertical="top"
+        />
+
+        <Text style={styles.label}>Tom da análise</Text>
+        <View style={styles.persGrid}>
+          {PERSONALIDADES.map(p => {
+            const active = personalidade === p.key;
+            const { Icon } = p;
+            return (
+              <TouchableOpacity
+                key={p.key}
+                style={[styles.persBtn, active && { borderColor: p.color, backgroundColor: `${p.color}15` }]}
+                onPress={() => setPersonalidade(p.key)}
+              >
+                <View style={[styles.persIconWrap, active && { backgroundColor: `${p.color}22` }]}>
+                  <Icon size={16} color={active ? p.color : C.textSub} />
+                </View>
+                <Text style={[styles.persBtnLabel, active && { color: p.color }]}>{p.label}</Text>
+                <Text style={styles.persBtnDesc}>{p.desc}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <TouchableOpacity
+          style={[styles.btn, { backgroundColor: pInfo.color }, loading && { opacity: 0.6 }]}
+          onPress={analisar}
+          disabled={loading}
+        >
+          {loading
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.btnText}>Analisar com Verly</Text>
+          }
+        </TouchableOpacity>
+      </View>
+
+      {/* Resultado */}
+      {resultado && (
+        <View style={styles.card}>
+          {/* Veredicto */}
+          <View style={[
+            styles.veredictoBox,
+            { borderColor: resultado.aguardar ? C.red : C.green,
+              backgroundColor: resultado.aguardar ? 'rgba(255,83,112,0.08)' : 'rgba(0,200,150,0.08)' }
+          ]}>
+            {resultado.aguardar
+              ? <ShieldX  size={20} color={C.red}   style={{ marginRight: 10 }} />
+              : <ShieldCheck size={20} color={C.green} style={{ marginRight: 10 }} />
+            }
+            <Text style={[styles.veredictoText, { color: resultado.aguardar ? C.red : C.green }]}>
+              {resultado.aguardar ? 'Espera antes de comprar' : 'Podes avançar'}
+            </Text>
+          </View>
+
+          {/* Frase principal */}
+          <View style={styles.quoteBox}>
+            <Text style={styles.quoteText}>"{resultado.veredicto}"</Text>
+          </View>
+
+          {/* Análise */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <AlignLeft size={13} color={C.textSub} />
+              <Text style={styles.sectionTitle}>Análise</Text>
+            </View>
+            <Text style={styles.sectionText}>{resultado.analise}</Text>
+          </View>
+
+          <View style={styles.divider} />
+
+          {/* Alternativa */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Lightbulb size={13} color={C.yellow} />
+              <Text style={[styles.sectionTitle, { color: C.yellow }]}>Alternativa</Text>
+            </View>
+            <Text style={styles.sectionText}>{resultado.alternativa}</Text>
+          </View>
+
+          {/* Reset */}
+          <TouchableOpacity style={styles.resetBtn} onPress={reset}>
+            <RotateCcw size={14} color={C.textSub} />
+            <Text style={styles.resetText}>Analisar outro produto</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: C.bg },
+  content: { paddingBottom: 48 },
+
+  header:     { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24 },
+  headerIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(108,92,231,0.15)', alignItems: 'center', justifyContent: 'center' },
+  headerTitle:{ fontSize: 24, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
+  headerSub:  { fontSize: 13, color: C.textSub, marginTop: 2 },
+
+  card: {
+    marginHorizontal: 16, marginBottom: 14,
+    backgroundColor: C.surface, borderRadius: 18, padding: 20,
+    borderWidth: 1, borderColor: C.border,
+  },
+
+  label: { fontSize: 12, fontWeight: '700', color: C.textSub, marginBottom: 8, marginTop: 18, letterSpacing: 0.5, textTransform: 'uppercase' },
+
+  textarea: {
+    backgroundColor: C.surface2, borderRadius: 12,
+    padding: 14, color: C.text, fontSize: 15,
+    borderWidth: 1, borderColor: C.border,
+    minHeight: 90, lineHeight: 22,
+  },
+
+  persGrid:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  persBtn:      { width: '47.5%', backgroundColor: C.surface2, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border },
+  persIconWrap: { width: 32, height: 32, borderRadius: 9, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  persBtnLabel: { fontSize: 13, fontWeight: '800', color: C.text, marginBottom: 2 },
+  persBtnDesc:  { fontSize: 11, color: C.textSub, lineHeight: 15 },
+
+  btn:     { borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 22 },
+  btnText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 0.2 },
+
+  veredictoBox: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 16 },
+  veredictoText:{ fontSize: 15, fontWeight: '800', flex: 1 },
+
+  quoteBox: {
+    backgroundColor: C.surface2, borderRadius: 10, padding: 14, marginBottom: 16,
+    borderLeftWidth: 3, borderLeftColor: C.brand,
+  },
+  quoteText: { fontSize: 14, color: C.text, fontStyle: 'italic', lineHeight: 22 },
+
+  section:       { marginBottom: 14 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  sectionTitle:  { fontSize: 12, fontWeight: '700', color: C.textSub, letterSpacing: 0.5, textTransform: 'uppercase' },
+  sectionText:   { fontSize: 14, color: C.text, lineHeight: 22 },
+
+  divider: { height: 1, backgroundColor: C.border, marginVertical: 14 },
+
+  resetBtn:  { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center', paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, marginTop: 8 },
+  resetText: { fontSize: 13, color: C.textSub, fontWeight: '600' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/MetasScreen.js">
+/**
+ * src/screens/MetasScreen.js
+ * Gestão de orçamentos por categoria — equivalente à página /metas da web.
+ */
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, FlatList, StyleSheet, TouchableOpacity,
+  TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
+  KeyboardAvoidingView, Platform, ScrollView,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { metasAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const CATEGORIAS = [
+  'Alimentação', 'Vestuário', 'Tecnologia', 'Casa & Decoração',
+  'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
+  'Educação', 'Outros',
+];
+
+const CAT_ICONS = {
+  'Tecnologia': '💻', 'Alimentação': '🍽️', 'Vestuário': '👕',
+  'Casa & Decoração': '🏠', 'Saúde & Beleza': '💊', 'Desporto': '🏋️',
+  'Entretenimento': '🎬', 'Transportes': '🚗', 'Educação': '📚', 'Outros': '📦',
+};
+
+function MetaCard({ meta, onDelete }) {
+  const pct = meta.limite > 0 ? Math.min((meta.gasto / meta.limite) * 100, 100) : 0;
+  const cor = pct >= 100 ? COLORS.red : pct >= 80 ? COLORS.yellow : COLORS.green;
+  const restante = meta.limite - meta.gasto;
+
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardLeft}>
+          <Text style={styles.cardIcon}>{CAT_ICONS[meta.categoria] || '📦'}</Text>
+          <View>
+            <Text style={styles.cardNome}>{meta.nome || meta.categoria}</Text>
+            <Text style={styles.cardCat}>{meta.categoria}</Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(meta.id)}>
+          <Text style={styles.deleteBtnText}>✕</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Barra de progresso */}
+      <View style={styles.progressWrap}>
+        <View style={styles.progressBg}>
+          <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: cor }]} />
+        </View>
+        <View style={styles.progressLabels}>
+          <Text style={[styles.progressPct, { color: cor }]}>{Math.round(pct)}%</Text>
+          <Text style={styles.progressNum}>
+            {meta.gasto.toFixed(0)}€ / {meta.limite.toFixed(0)}€
+          </Text>
+        </View>
+      </View>
+
+      {/* Restante */}
+      <View style={[styles.restanteBox, { backgroundColor: `${cor}15` }]}>
+        <Text style={[styles.restanteLabel, { color: cor }]}>
+          {restante >= 0
+            ? `${restante.toFixed(2)}€ disponível`
+            : `${Math.abs(restante).toFixed(2)}€ acima do limite`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+export default function MetasScreen() {
+  const [metas, setMetas]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefresh]  = useState(false);
+  const [modalVisible, setModal]  = useState(false);
+
+  // Formulário nova meta
+  const [nome, setNome]           = useState('');
+  const [limite, setLimite]       = useState('');
+  const [categoria, setCategoria] = useState('Alimentação');
+  const [saving, setSaving]       = useState(false);
+
+  const fetchMetas = async () => {
+    try {
+      const data = await metasAPI.listar();
+      setMetas(data.metas || []);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  };
+
+  useFocusEffect(useCallback(() => { fetchMetas(); }, []));
+
+  const handleCriar = async () => {
+    if (!nome.trim() || !limite || isNaN(Number(limite))) {
+      Alert.alert('Erro', 'Preenche o nome e um limite válido.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await metasAPI.criar(nome.trim(), parseFloat(limite), categoria);
+      setNome('');
+      setLimite('');
+      setCategoria('Alimentação');
+      setModal(false);
+      fetchMetas();
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = (id) => {
+    Alert.alert('Eliminar meta', 'Tens a certeza?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar', style: 'destructive',
+        onPress: async () => {
+          try {
+            await metasAPI.apagar(id);
+            setMetas(prev => prev.filter(m => m.id !== id));
+          } catch (e) {
+            Alert.alert('Erro', e.message);
+          }
+        },
+      },
+    ]);
+  };
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
+  }
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.title}>Metas</Text>
+          <Text style={styles.sub}>Orçamentos por categoria</Text>
+        </View>
+        <TouchableOpacity style={styles.addBtn} onPress={() => setModal(true)}>
+          <Text style={styles.addBtnText}>+ Nova</Text>
+        </TouchableOpacity>
+      </View>
+
+      <FlatList
+        data={metas}
+        keyExtractor={item => String(item.id)}
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { setRefresh(true); fetchMetas(); }}
+            tintColor={COLORS.brand}
+          />
+        }
+        renderItem={({ item }) => <MetaCard meta={item} onDelete={handleDelete} />}
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>🎯</Text>
+            <Text style={styles.emptyTitle}>Sem metas definidas</Text>
+            <Text style={styles.emptySub}>
+              Cria orçamentos por categoria para controlar os teus gastos.
+            </Text>
+            <TouchableOpacity style={styles.emptyBtn} onPress={() => setModal(true)}>
+              <Text style={styles.emptyBtnText}>Criar primeira meta</Text>
+            </TouchableOpacity>
+          </View>
+        }
+      />
+
+      {/* Modal nova meta */}
+      <Modal visible={modalVisible} animationType="slide" transparent>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Nova Meta</Text>
+              <TouchableOpacity onPress={() => setModal(false)}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView>
+              <Text style={styles.formLabel}>Nome</Text>
+              <TextInput
+                style={styles.formInput}
+                value={nome}
+                onChangeText={setNome}
+                placeholder="ex: Alimentação mensal"
+                placeholderTextColor={COLORS.textSub}
+              />
+
+              <Text style={styles.formLabel}>Limite (€)</Text>
+              <TextInput
+                style={styles.formInput}
+                value={limite}
+                onChangeText={setLimite}
+                placeholder="ex: 300"
+                placeholderTextColor={COLORS.textSub}
+                keyboardType="decimal-pad"
+              />
+
+              <Text style={styles.formLabel}>Categoria</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.catScroll}
+                contentContainerStyle={styles.catScrollContent}
+              >
+                {CATEGORIAS.map(cat => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[styles.catChip, categoria === cat && styles.catChipActive]}
+                    onPress={() => setCategoria(cat)}
+                  >
+                    <Text style={styles.catChipIcon}>{CAT_ICONS[cat]}</Text>
+                    <Text style={[styles.catChipText, categoria === cat && styles.catChipTextActive]}>
+                      {cat}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              <TouchableOpacity
+                style={[styles.formBtn, saving && styles.formBtnDisabled]}
+                onPress={handleCriar}
+                disabled={saving}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={styles.formBtnText}>Criar Meta →</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: COLORS.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 12 },
+  title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
+  sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
+  addBtn: { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, marginTop: 4 },
+  addBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  list: { paddingHorizontal: 20, paddingBottom: 32 },
+
+  // Card
+  card:        { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.border },
+  cardHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
+  cardLeft:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  cardIcon:    { fontSize: 26 },
+  cardNome:    { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  cardCat:     { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  deleteBtn:   { padding: 4 },
+  deleteBtnText: { fontSize: 14, color: COLORS.textSub },
+
+  progressWrap:   { marginBottom: 10 },
+  progressBg:     { height: 8, backgroundColor: COLORS.surface2, borderRadius: 4, overflow: 'hidden' },
+  progressFill:   { height: 8, borderRadius: 4 },
+  progressLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
+  progressPct:    { fontSize: 12, fontWeight: '700' },
+  progressNum:    { fontSize: 12, color: COLORS.textSub },
+  restanteBox:    { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' },
+  restanteLabel:  { fontSize: 12, fontWeight: '700' },
+
+  // Empty
+  empty:      { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
+  emptyIcon:  { fontSize: 48, marginBottom: 12, opacity: 0.4 },
+  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
+  emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  emptyBtn:   { backgroundColor: COLORS.brand, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 },
+  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  modalCard:    { backgroundColor: COLORS.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '80%' },
+  modalHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalTitle:   { fontSize: 20, fontWeight: '800', color: COLORS.text },
+  modalClose:   { fontSize: 18, color: COLORS.textSub, padding: 4 },
+
+  formLabel:  { fontSize: 13, fontWeight: '600', color: COLORS.textSub, marginBottom: 6, marginTop: 14 },
+  formInput:  { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
+  catScroll:  { marginTop: 8 },
+  catScrollContent: { paddingBottom: 4, gap: 8, flexDirection: 'row' },
+  catChip:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.surface2, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: COLORS.border },
+  catChipActive: { borderColor: COLORS.brand, backgroundColor: 'rgba(83,74,183,0.15)' },
+  catChipIcon: { fontSize: 14 },
+  catChipText: { fontSize: 12, color: COLORS.textSub, fontWeight: '600' },
+  catChipTextActive: { color: COLORS.brand },
+  formBtn:     { backgroundColor: COLORS.brand, borderRadius: 12, padding: 15, alignItems: 'center', marginTop: 24, marginBottom: 8 },
+  formBtnDisabled: { opacity: 0.6 },
+  formBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/RelatorioScreen.js">
+/**
+ * src/screens/RelatorioScreen.js
+ * Relatório Mensal — equivalente ao /relatorio web
+ * Design polished: sem emojis, Lucide icons, barras SVG, layout refinado
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView,
+  TouchableOpacity, ActivityIndicator, Alert, Dimensions,
+} from 'react-native';
+import Svg, { Rect, Text as SvgText } from 'react-native-svg';
+import {
+  TrendingUp, TrendingDown, Minus, ShoppingCart,
+  Award, Trash2, ThumbsUp, Store, ChevronRight,
+} from 'lucide-react-native';
+import { relatorioAPI } from '../services/api';
+
+const { width: SCREEN_W } = Dimensions.get('window');
+
+const C = {
+  brand:   '#6C5CE7',
+  bg:      '#0C0C14',
+  surface: '#13131F',
+  surface2:'#1C1C2E',
+  border:  '#252540',
+  text:    '#EEEEF8',
+  textSub: '#7070A0',
+  green:   '#00C896',
+  red:     '#FF5370',
+  yellow:  '#FFB300',
+};
+
+const MESES_ABREV = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const MESES_FULL  = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+                     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+// ── Stat Card ─────────────────────────────────────────────────────────────────
+
+function StatCard({ value, label, sub, color, Icon }) {
+  return (
+    <View style={styles.statCard}>
+      {Icon && (
+        <View style={[styles.statIconWrap, { backgroundColor: `${color || C.brand}18` }]}>
+          <Icon size={14} color={color || C.brand} />
+        </View>
+      )}
+      <Text style={[styles.statValue, { color: color || C.text }]}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+      {sub && <Text style={styles.statSub}>{sub}</Text>}
+    </View>
+  );
+}
+
+// ── Bar Chart SVG ─────────────────────────────────────────────────────────────
+
+function BarChart({ barras }) {
+  if (!barras || barras.length === 0) return null;
+
+  const CHART_W = SCREEN_W - 32 - 40; // marginHorizontal 16 × 2 + padding 20 × 2
+  const ROW_H   = 36;
+  const BAR_MAX = CHART_W - 120; // deixa espaço para label e valor
+  const max     = Math.max(...barras.map(b => b.valor), 1);
+
+  return (
+    <View>
+      {barras.map((b, i) => {
+        const barW = Math.max(4, (b.valor / max) * BAR_MAX);
+        return (
+          <View key={i} style={styles.barRow}>
+            <Text style={styles.barLabel} numberOfLines={1}>{b.categoria}</Text>
+            <View style={styles.barTrack}>
+              <View style={[styles.barFill, { width: barW }]} />
+            </View>
+            <Text style={styles.barVal}>{b.valor.toFixed(0)}€</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
+export default function RelatorioScreen() {
+  const hoje = new Date();
+  const [mes,     setMes]     = useState(hoje.getMonth() + 1);
+  const [ano,     setAno]     = useState(hoje.getFullYear());
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // Últimos 6 meses para navegação
+  const mesesNav = [];
+  for (let i = 0; i < 6; i++) {
+    let m = hoje.getMonth() + 1 - i;
+    let a = hoje.getFullYear();
+    if (m <= 0) { m += 12; a -= 1; }
+    mesesNav.push({ mes: m, ano: a });
+  }
+
+  const carregar = useCallback(async (m, a) => {
+    setLoading(true);
+    try {
+      const resp = await relatorioAPI.get(m, a);
+      if (resp.success) setData(resp);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { carregar(mes, ano); }, [mes, ano]);
+
+  const varIcon = !data ? null
+    : data.variacao > 0 ? TrendingUp
+    : data.variacao < 0 ? TrendingDown
+    : Minus;
+  const varColor = !data ? C.textSub
+    : data.variacao > 0 ? C.red
+    : data.variacao < 0 ? C.green
+    : C.textSub;
+
+  return (
+    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Relatório Mensal</Text>
+      </View>
+
+      {/* Navegação meses */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.mesScroll}
+        contentContainerStyle={styles.mesScrollContent}
+      >
+        {mesesNav.map(item => {
+          const active = item.mes === mes && item.ano === ano;
+          return (
+            <TouchableOpacity
+              key={`${item.mes}-${item.ano}`}
+              style={[styles.mesBtn, active && styles.mesBtnActive]}
+              onPress={() => { setMes(item.mes); setAno(item.ano); }}
+            >
+              <Text style={[styles.mesBtnLabel, active && { color: '#fff' }]}>
+                {MESES_ABREV[item.mes]}
+              </Text>
+              <Text style={[styles.mesBtnAno, active && { color: 'rgba(255,255,255,0.6)' }]}>
+                {item.ano}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {loading && (
+        <View style={styles.loadingBox}>
+          <ActivityIndicator color={C.brand} size="large" />
+        </View>
+      )}
+
+      {!loading && data && data.num_faturas > 0 && (
+        <>
+          {/* Roast phrase */}
+          {data.roast_phrase && (
+            <View style={styles.roastCard}>
+              <Text style={styles.roastText}>"{data.roast_phrase}"</Text>
+            </View>
+          )}
+
+          {/* Stats grid */}
+          <View style={styles.statsGrid}>
+            <StatCard
+              Icon={ShoppingCart}
+              value={`${data.total_gasto?.toFixed(2)}€`}
+              label="Total Gasto"
+              sub={`${data.num_faturas} fatura${data.num_faturas !== 1 ? 's' : ''}`}
+              color={C.text}
+            />
+            <StatCard
+              Icon={varIcon}
+              value={`${data.variacao > 0 ? '+' : ''}${data.variacao?.toFixed(1)}%`}
+              label="Vs mês anterior"
+              sub={`vs ${data.total_ant?.toFixed(2)}€`}
+              color={varColor}
+            />
+          </View>
+          <View style={styles.statsGrid}>
+            <StatCard
+              Icon={Trash2}
+              value={`${data.desperdicado?.toFixed(2)}€`}
+              label="Desperdiçado"
+              sub="alto arrependimento"
+              color={C.red}
+            />
+            <StatCard
+              Icon={ThumbsUp}
+              value={`${data.boas_decisoes?.toFixed(2)}€`}
+              label="Boas Decisões"
+              color={C.green}
+            />
+          </View>
+
+          {/* Categoria dominante */}
+          {data.top_cat && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Award size={14} color={C.brand} />
+                <Text style={styles.cardTitle}>Categoria Dominante</Text>
+              </View>
+              <Text style={styles.topCatText}>{data.top_cat}</Text>
+            </View>
+          )}
+
+          {/* Barras por categoria */}
+          {data.barras?.length > 0 && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Minus size={14} color={C.brand} />
+                <Text style={styles.cardTitle}>Gastos por Categoria</Text>
+              </View>
+              <BarChart barras={data.barras} />
+            </View>
+          )}
+
+          {/* Top lojas */}
+          {data.top_lojas?.length > 0 && (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Store size={14} color={C.brand} />
+                <Text style={styles.cardTitle}>Top Lojas</Text>
+              </View>
+              {data.top_lojas.map((loja, i) => (
+                <View key={i} style={[styles.lojaRow, i === data.top_lojas.length - 1 && { borderBottomWidth: 0 }]}>
+                  <Text style={styles.lojaPos}>#{i + 1}</Text>
+                  <Text style={styles.lojaNome}>{loja.loja}</Text>
+                  <Text style={styles.lojaVal}>{loja.valor.toFixed(2)}€</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </>
+      )}
+
+      {!loading && data && data.num_faturas === 0 && (
+        <View style={styles.emptyBox}>
+          <ShoppingCart size={40} color={C.border} />
+          <Text style={styles.emptyTitle}>Sem faturas</Text>
+          <Text style={styles.emptySub}>{MESES_FULL[mes]} {ano} não tem registos ainda.</Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: C.bg },
+  content: { paddingBottom: 48 },
+
+  header:  { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20 },
+  title:   { fontSize: 30, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
+
+  mesScroll:        { marginBottom: 20 },
+  mesScrollContent: { paddingHorizontal: 16, gap: 8 },
+  mesBtn:       { paddingHorizontal: 18, paddingVertical: 10, borderRadius: 20, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, alignItems: 'center' },
+  mesBtnActive: { backgroundColor: C.brand, borderColor: C.brand },
+  mesBtnLabel:  { fontSize: 14, fontWeight: '800', color: C.textSub },
+  mesBtnAno:    { fontSize: 10, color: C.textSub, marginTop: 1 },
+
+  loadingBox: { padding: 60, alignItems: 'center' },
+
+  roastCard: {
+    marginHorizontal: 16, marginBottom: 14,
+    backgroundColor: 'rgba(108,92,231,0.08)', borderRadius: 14,
+    padding: 16, borderWidth: 1, borderColor: 'rgba(108,92,231,0.25)',
+    borderLeftWidth: 3, borderLeftColor: C.brand,
+  },
+  roastText: { fontSize: 14, color: C.text, fontStyle: 'italic', lineHeight: 22 },
+
+  statsGrid: { flexDirection: 'row', marginHorizontal: 16, gap: 10, marginBottom: 10 },
+  statCard: {
+    flex: 1, backgroundColor: C.surface, borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: C.border,
+  },
+  statIconWrap: { width: 30, height: 30, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  statValue:    { fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginBottom: 4 },
+  statLabel:    { fontSize: 12, fontWeight: '600', color: C.textSub },
+  statSub:      { fontSize: 11, color: C.textSub, marginTop: 2 },
+
+  card: {
+    marginHorizontal: 16, marginBottom: 12,
+    backgroundColor: C.surface, borderRadius: 18, padding: 18,
+    borderWidth: 1, borderColor: C.border,
+  },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 14 },
+  cardTitle:  { fontSize: 13, fontWeight: '700', color: C.textSub, letterSpacing: 0.3, textTransform: 'uppercase' },
+  topCatText: { fontSize: 26, fontWeight: '800', color: C.brand, letterSpacing: -0.5 },
+
+  barRow:  { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  barLabel:{ width: 88, fontSize: 12, color: C.textSub, fontWeight: '500' },
+  barTrack:{ flex: 1, height: 8, backgroundColor: C.surface2, borderRadius: 4, overflow: 'hidden', marginRight: 8 },
+  barFill: { height: '100%', backgroundColor: C.brand, borderRadius: 4 },
+  barVal:  { width: 44, fontSize: 12, color: C.text, fontWeight: '700', textAlign: 'right' },
+
+  lojaRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: C.border },
+  lojaPos: { width: 32, fontSize: 13, color: C.textSub, fontWeight: '700' },
+  lojaNome:{ flex: 1, fontSize: 14, color: C.text, fontWeight: '600' },
+  lojaVal: { fontSize: 14, color: C.brand, fontWeight: '800' },
+
+  emptyBox:  { alignItems: 'center', paddingTop: 64, paddingHorizontal: 40 },
+  emptyTitle:{ fontSize: 18, fontWeight: '800', color: C.textSub, marginTop: 16, marginBottom: 8 },
+  emptySub:  { fontSize: 13, color: C.textSub, textAlign: 'center', lineHeight: 20 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/ScoreScreen.js">
+/**
+ * src/screens/ScoreScreen.js
+ * "Valeu a Pena?" — Score de Compras
+ * Design polished: SVG circle, Lucide icons, mapa de lojas via WebView+Leaflet
+ */
+
+import React, { useState, useRef } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, ActivityIndicator, Alert, Platform,
+  Dimensions,
+} from 'react-native';
+import { WebView } from 'react-native-webview';
+import Svg, { Circle } from 'react-native-svg';
+import {
+  ShoppingBag, Tag, Zap, Calendar, TrendingDown,
+  ChevronDown, ChevronUp, MapPin, Star, AlertTriangle,
+  CheckCircle, Clock, X,
+} from 'lucide-react-native';
+import * as Location from 'expo-location';
+import { scoreAPI } from '../services/api';
+
+const { width: SCREEN_W } = Dimensions.get('window');
+
+const C = {
+  brand:    '#6C5CE7',
+  brandDim: 'rgba(108,92,231,0.15)',
+  bg:       '#0C0C14',
+  surface:  '#13131F',
+  surface2: '#1C1C2E',
+  border:   '#252540',
+  text:     '#EEEEF8',
+  textSub:  '#7070A0',
+  green:    '#00C896',
+  red:      '#FF5370',
+  yellow:   '#FFB300',
+  orange:   '#FF7043',
+};
+
+const CATEGORIAS = [
+  'Alimentação','Vestuário','Tecnologia','Saúde & Beleza',
+  'Entretenimento','Casa & Decoração','Desporto','Educação',
+  'Transportes','Outros',
+];
+
+const USO_OPTIONS = [
+  { key: 'daily',   label: 'Diário',    Icon: Zap },
+  { key: 'weekly',  label: 'Semanal',   Icon: Calendar },
+  { key: 'monthly', label: 'Mensal',    Icon: Clock },
+  { key: 'rarely',  label: 'Raramente', Icon: TrendingDown },
+  { key: 'never',   label: 'Nunca',     Icon: X },
+];
+
+// ── SVG Score Circle ──────────────────────────────────────────────────────────
+
+function ScoreCircle({ score, color }) {
+  const SIZE = 120;
+  const R    = 50;
+  const STROKE = 8;
+  const circ = 2 * Math.PI * R;
+  const dash = (score / 100) * circ;
+
+  return (
+    <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
+        {/* Track */}
+        <Circle
+          cx={SIZE / 2} cy={SIZE / 2} r={R}
+          fill="none"
+          stroke={C.surface2}
+          strokeWidth={STROKE}
+        />
+        {/* Progress */}
+        <Circle
+          cx={SIZE / 2} cy={SIZE / 2} r={R}
+          fill="none"
+          stroke={color}
+          strokeWidth={STROKE}
+          strokeDasharray={`${dash} ${circ}`}
+          strokeLinecap="round"
+          rotation="-90"
+          originX={SIZE / 2}
+          originY={SIZE / 2}
+        />
+      </Svg>
+      <View style={{ position: 'absolute', alignItems: 'center' }}>
+        <Text style={{ fontSize: 28, fontWeight: '900', color, letterSpacing: -1 }}>{score}</Text>
+        <Text style={{ fontSize: 10, color: C.textSub, fontWeight: '600' }}>/100</Text>
+      </View>
+    </View>
+  );
+}
+
+// ── Lojas Map WebView ─────────────────────────────────────────────────────────
+
+function MapaLojas({ lojas, userLat, userLng, item }) {
+  if (!lojas || lojas.length === 0 || userLat == null) return null;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0C0C14; font-family: -apple-system, sans-serif; }
+  #map { width:100%; height:220px; }
+  .leaflet-container { background:#0C0C14 !important; }
+  #list { max-height:160px; overflow-y:auto; padding:0 12px; }
+  .loja { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #252540; }
+  .loja:last-child { border-bottom:none; }
+  .num { width:24px; height:24px; background:linear-gradient(135deg,#6C5CE7,#9B8FFF);
+         border-radius:6px; display:flex; align-items:center; justify-content:center;
+         font-size:11px; font-weight:800; color:white; flex-shrink:0; }
+  .info { flex:1; min-width:0; }
+  .nome { font-size:13px; font-weight:600; color:#EEEEF8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .end  { font-size:11px; color:#7070A0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dist { font-size:11px; color:#6C5CE7; font-weight:700; flex-shrink:0; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="list">
+  ${lojas.map((l, i) => `
+    <div class="loja">
+      <div class="num">${i + 1}</div>
+      <div class="info">
+        <div class="nome">${l.nome}</div>
+        ${l.endereco ? `<div class="end">${l.endereco}</div>` : ''}
+      </div>
+      ${l.distancia ? `<div class="dist">${l.distancia}</div>` : ''}
+    </div>
+  `).join('')}
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl:false, attributionControl:false })
+             .setView([${userLat},${userLng}], 14);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 })
+ .addTo(map);
+
+// Utilizador
+L.marker([${userLat},${userLng}], {
+  icon: L.divIcon({
+    html:'<div style="width:12px;height:12px;background:#6C5CE7;border:3px solid white;border-radius:50%;box-shadow:0 0 8px rgba(108,92,231,0.8);"></div>',
+    className:'', iconAnchor:[6,6]
+  })
+}).addTo(map).bindPopup('A tua localização');
+
+const lojas = ${JSON.stringify(lojas)};
+lojas.forEach((l, i) => {
+  L.marker([l.lat, l.lng], {
+    icon: L.divIcon({
+      html:\`<div style="width:26px;height:26px;background:linear-gradient(135deg,#6C5CE7,#9B8FFF);border:2px solid white;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:white;box-shadow:0 2px 8px rgba(0,0,0,0.5);">\${i+1}</div>\`,
+      className:'', iconAnchor:[13,13]
+    })
+  }).addTo(map).bindPopup(\`<b>\${l.nome}</b>\${l.endereco ? '<br>'+l.endereco : ''}\`);
+});
+</script>
+</body>
+</html>
+`;
+
+  return (
+    <View style={styles.mapaCard}>
+      <View style={styles.mapaHeader}>
+        <MapPin size={14} color={C.brand} />
+        <Text style={styles.mapaTitle}>{lojas.length} loja{lojas.length !== 1 ? 's' : ''} próximas para "{item}"</Text>
+      </View>
+      <WebView
+        source={{ html }}
+        style={{ width: '100%', height: 380, backgroundColor: C.bg }}
+        scrollEnabled={false}
+        javaScriptEnabled
+      />
+    </View>
+  );
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
+
+export default function ScoreScreen() {
+  const [item,      setItem]      = useState('');
+  const [preco,     setPreco]     = useState('');
+  const [categoria, setCategoria] = useState('Tecnologia');
+  const [uso,       setUso]       = useState('monthly');
+  const [showCats,  setShowCats]  = useState(false);
+  const [loading,   setLoading]   = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [lojas,     setLojas]     = useState([]);
+  const [userLat,   setUserLat]   = useState(null);
+  const [userLng,   setUserLng]   = useState(null);
+  const [loadingMap, setLoadingMap] = useState(false);
+
+  const scoreColor = (s) => {
+    if (s >= 75) return C.green;
+    if (s >= 50) return C.yellow;
+    if (s >= 30) return C.orange;
+    return C.red;
+  };
+
+  const chipStyle = (type) => {
+    const map = {
+      good: { bg: 'rgba(0,200,150,0.12)', border: C.green,  text: C.green  },
+      bad:  { bg: 'rgba(255,83,112,0.12)', border: C.red,   text: C.red    },
+      mid:  { bg: 'rgba(255,179,0,0.12)',  border: C.yellow,text: C.yellow  },
+    };
+    return map[type] || map.mid;
+  };
+
+  const buscarLojas = async (itemNome, cat) => {
+    setLoadingMap(true);
+    setLojas([]);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLoadingMap(false);
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const lat = loc.coords.latitude;
+      const lng = loc.coords.longitude;
+      setUserLat(lat);
+      setUserLng(lng);
+
+      const resp = await fetch('http://127.0.0.1:5000/api/v1/scoring/lojas-proximas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+                   ...(await import('../services/api').then(m => m.getToken()).then(t => t ? { Authorization: `Bearer ${t}` } : {})) },
+        body: JSON.stringify({ item: itemNome, categoria: cat, lat, lng }),
+      });
+      const data = await resp.json();
+      if (data.success && data.lojas?.length > 0) {
+        setLojas(data.lojas);
+      }
+    } catch (e) {
+      // silently fail — mapa não é crítico
+    } finally {
+      setLoadingMap(false);
+    }
+  };
+
+  const analisar = async () => {
+    if (!preco || isNaN(parseFloat(preco))) {
+      Alert.alert('Atenção', 'Insere um preço válido.');
+      return;
+    }
+    setLoading(true);
+    setResultado(null);
+    setLojas([]);
+    try {
+      const data = await scoreAPI.analisar({
+        item: item || 'Item',
+        preco: parseFloat(preco),
+        categoria,
+        uso,
+      });
+      if (data.success) {
+        setResultado(data.resultado);
+        // buscar lojas em paralelo (não bloqueia)
+        buscarLojas(item || categoria, categoria);
+      }
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selUso = USO_OPTIONS.find(o => o.key === uso) || USO_OPTIONS[2];
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      keyboardShouldPersistTaps="handled"
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Valeu a Pena?</Text>
+        <Text style={styles.headerSub}>Analisa qualquer compra antes ou depois de a fazer</Text>
+      </View>
+
+      {/* Form Card */}
+      <View style={styles.card}>
+
+        {/* Item */}
+        <Text style={styles.label}>Produto ou serviço</Text>
+        <View style={styles.inputWrap}>
+          <ShoppingBag size={16} color={C.textSub} style={{ marginRight: 10 }} />
+          <TextInput
+            style={styles.inputText}
+            value={item}
+            onChangeText={setItem}
+            placeholder="ex: iPhone 15, Sapatilhas Nike..."
+            placeholderTextColor={C.textSub}
+          />
+        </View>
+
+        {/* Preço */}
+        <Text style={styles.label}>Preço (€)</Text>
+        <View style={styles.inputWrap}>
+          <Tag size={16} color={C.textSub} style={{ marginRight: 10 }} />
+          <TextInput
+            style={styles.inputText}
+            value={preco}
+            onChangeText={setPreco}
+            placeholder="0.00"
+            placeholderTextColor={C.textSub}
+            keyboardType="decimal-pad"
+          />
+        </View>
+
+        {/* Categoria */}
+        <Text style={styles.label}>Categoria</Text>
+        <TouchableOpacity style={styles.selectWrap} onPress={() => setShowCats(!showCats)}>
+          <Text style={styles.selectText}>{categoria}</Text>
+          {showCats
+            ? <ChevronUp size={16} color={C.textSub} />
+            : <ChevronDown size={16} color={C.textSub} />
+          }
+        </TouchableOpacity>
+        {showCats && (
+          <View style={styles.dropdown}>
+            {CATEGORIAS.map(cat => (
+              <TouchableOpacity
+                key={cat}
+                style={[styles.dropItem, cat === categoria && styles.dropItemActive]}
+                onPress={() => { setCategoria(cat); setShowCats(false); }}
+              >
+                <Text style={[styles.dropItemText, cat === categoria && { color: C.brand }]}>
+                  {cat}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
+        {/* Frequência de uso */}
+        <Text style={styles.label}>Com que frequência usas?</Text>
+        <View style={styles.usoGrid}>
+          {USO_OPTIONS.map(op => {
+            const active = uso === op.key;
+            const { Icon } = op;
+            return (
+              <TouchableOpacity
+                key={op.key}
+                style={[styles.usoBtn, active && styles.usoBtnActive]}
+                onPress={() => setUso(op.key)}
+              >
+                <Icon size={15} color={active ? C.brand : C.textSub} />
+                <Text style={[styles.usoLabel, active && { color: C.brand }]}>{op.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* CTA */}
+        <TouchableOpacity
+          style={[styles.btn, loading && { opacity: 0.6 }]}
+          onPress={analisar}
+          disabled={loading}
+        >
+          {loading
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={styles.btnText}>Analisar Compra</Text>
+          }
+        </TouchableOpacity>
+      </View>
+
+      {/* Resultado */}
+      {resultado && (() => {
+        const sc = scoreColor(resultado.score);
+        return (
+          <>
+            <View style={styles.card}>
+              {/* Score row */}
+              <View style={styles.resultRow}>
+                <ScoreCircle score={resultado.score} color={sc} />
+                <View style={{ flex: 1, marginLeft: 20 }}>
+                  <Text style={[styles.resultLabel, { color: sc }]}>{resultado.label}</Text>
+                  <Text style={styles.resultMsg}>{resultado.message}</Text>
+                </View>
+              </View>
+
+              {/* Chips */}
+              {resultado.chips?.length > 0 && (
+                <View style={styles.chips}>
+                  {resultado.chips.map((chip, i) => {
+                    const cs = chipStyle(chip.type);
+                    return (
+                      <View key={i} style={[styles.chip, { backgroundColor: cs.bg, borderColor: cs.border }]}>
+                        <Text style={[styles.chipText, { color: cs.text }]}>{chip.text}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {/* Preço mercado */}
+              {resultado.preco_medio_mercado && (
+                <View style={styles.mercadoBox}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                    <Star size={13} color={C.brand} />
+                    <Text style={styles.mercadoTitle}>Comparação de Mercado</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={styles.mercadoSub}>Preço médio em Portugal</Text>
+                    <Text style={[styles.mercadoVal, { color: C.brand }]}>
+                      {resultado.preco_medio_mercado.toFixed(2)}€
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                    <Text style={styles.mercadoSub}>Avaliação</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      {resultado.avaliacao_mercado === 'barato' && <CheckCircle size={13} color={C.green} />}
+                      {resultado.avaliacao_mercado === 'caro' && <AlertTriangle size={13} color={C.orange} />}
+                      {resultado.avaliacao_mercado === 'muito_caro' && <AlertTriangle size={13} color={C.red} />}
+                      <Text style={[styles.mercadoVal, {
+                        color: resultado.avaliacao_mercado === 'barato' ? C.green
+                             : resultado.avaliacao_mercado === 'caro' ? C.orange
+                             : resultado.avaliacao_mercado === 'muito_caro' ? C.red
+                             : C.textSub,
+                      }]}>
+                        {resultado.avaliacao_mercado === 'barato' ? 'Bom negócio'
+                        : resultado.avaliacao_mercado === 'caro' ? 'Acima do mercado'
+                        : resultado.avaliacao_mercado === 'muito_caro' ? 'Muito caro'
+                        : 'Preço justo'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {/* Mapa de lojas */}
+            {loadingMap && (
+              <View style={styles.mapaLoading}>
+                <ActivityIndicator color={C.brand} size="small" />
+                <Text style={styles.mapaLoadingText}>A procurar lojas próximas...</Text>
+              </View>
+            )}
+
+            {!loadingMap && lojas.length > 0 && (
+              <MapaLojas
+                lojas={lojas}
+                userLat={userLat}
+                userLng={userLng}
+                item={item || categoria}
+              />
+            )}
+          </>
+        );
+      })()}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: C.bg },
+  content: { paddingBottom: 48 },
+
+  header:      { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24 },
+  headerTitle: { fontSize: 30, fontWeight: '800', color: C.text, letterSpacing: -0.5, marginBottom: 6 },
+  headerSub:   { fontSize: 14, color: C.textSub, lineHeight: 20 },
+
+  card: {
+    marginHorizontal: 16, marginBottom: 14,
+    backgroundColor: C.surface,
+    borderRadius: 18, padding: 20,
+    borderWidth: 1, borderColor: C.border,
+  },
+
+  label: { fontSize: 12, fontWeight: '700', color: C.textSub, marginBottom: 8, marginTop: 18, letterSpacing: 0.5, textTransform: 'uppercase' },
+
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.surface2,
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
+    borderWidth: 1, borderColor: C.border,
+  },
+  inputText: { flex: 1, color: C.text, fontSize: 15 },
+
+  selectWrap: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: C.surface2, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
+    borderWidth: 1, borderColor: C.border,
+  },
+  selectText:    { color: C.text, fontSize: 15 },
+  dropdown:      { backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border, marginTop: 4, overflow: 'hidden' },
+  dropItem:      { paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: C.border },
+  dropItemActive: { backgroundColor: C.brandDim },
+  dropItemText:  { color: C.text, fontSize: 14 },
+
+  usoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  usoBtn:  {
+    flex: 1, minWidth: 58, flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: C.surface2, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 10,
+    borderWidth: 1, borderColor: C.border, justifyContent: 'center',
+  },
+  usoBtnActive: { borderColor: C.brand, backgroundColor: C.brandDim },
+  usoLabel: { fontSize: 11, fontWeight: '700', color: C.textSub },
+
+  btn: {
+    backgroundColor: C.brand, borderRadius: 14, padding: 16,
+    alignItems: 'center', marginTop: 22,
+  },
+  btnText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 0.2 },
+
+  resultRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
+  resultLabel: { fontSize: 20, fontWeight: '800', marginBottom: 6, letterSpacing: -0.3 },
+  resultMsg:   { fontSize: 13, color: C.textSub, lineHeight: 19 },
+
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  chip:  { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1 },
+  chipText: { fontSize: 12, fontWeight: '700' },
+
+  mercadoBox: {
+    backgroundColor: C.surface2, borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: C.border, marginTop: 4,
+  },
+  mercadoTitle: { fontSize: 13, fontWeight: '700', color: C.text },
+  mercadoSub:   { fontSize: 12, color: C.textSub },
+  mercadoVal:   { fontSize: 13, fontWeight: '800' },
+
+  mapaLoading: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 16, marginBottom: 14,
+    backgroundColor: C.surface, borderRadius: 14, padding: 16,
+    borderWidth: 1, borderColor: C.border,
+  },
+  mapaLoadingText: { color: C.textSub, fontSize: 13 },
+
+  mapaCard: {
+    marginHorizontal: 16, marginBottom: 14,
+    backgroundColor: C.surface, borderRadius: 18,
+    borderWidth: 1, borderColor: C.border,
+    overflow: 'hidden',
+  },
+  mapaHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    padding: 14, borderBottomWidth: 1, borderBottomColor: C.border,
+  },
+  mapaTitle: { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
+});
+</file>
 
 <file path="app/api/auth.py">
 """
@@ -479,10 +2685,6 @@ logger = logging.getLogger(__name__)
 @api_bp.route('/dashboard', methods=['GET'])
 @jwt_required()
 def dashboard():
-    """
-    Retorna todos os dados do dashboard em JSON.
-    O React Native usa este endpoint para montar o ecrã principal.
-    """
     from app.models import User
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
@@ -495,18 +2697,15 @@ def dashboard():
     orcamento   = getattr(user, 'orcamento_mensal', 0) or 0
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
-    # Categorias
     categorias = defaultdict(float)
     for f in faturas:
         categorias[f.categoria or 'Outros'] += f.total or 0
 
-    # Lojas
     lojas = defaultdict(float)
     for f in faturas:
         lojas[f.loja or 'Desconhecida'] += f.total or 0
     top_loja = max(lojas, key=lojas.get) if lojas else None
 
-    # Alertas de garantia/devolução
     hoje = datetime.now()
     alertas = []
     for f in faturas:
@@ -545,7 +2744,6 @@ def dashboard():
         (f.total or 0) * _regret_factor(f.categoria or 'Outros') for f in faturas
     )
 
-    # Últimas faturas (para lista no dashboard)
     def fatura_mini(f):
         return {
             'id':          f.id,
@@ -578,6 +2776,74 @@ def dashboard():
             'top3': subs_data['subscriptions'][:3],
         },
         'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
+    })
+
+
+# ── Estatísticas ──────────────────────────────────────────────────────────────
+
+def _parse_date_str(s):
+    if not s:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(s.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@api_bp.route('/estatisticas', methods=['GET'])
+@jwt_required()
+def estatisticas():
+    user_id = int(get_jwt_identity())
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    if not faturas:
+        return jsonify({
+            'por_categoria': [],
+            'por_mes': [],
+            'total_geral': 0,
+            'media_mensal': 0,
+            'categoria_top': None,
+            'num_faturas': 0,
+        })
+
+    cat_totais = defaultdict(float)
+    cat_counts = defaultdict(int)
+    mes_totais = defaultdict(float)
+
+    for f in faturas:
+        cat = f.categoria or 'Outros'
+        total = f.total or 0
+        cat_totais[cat] += total
+        cat_counts[cat] += 1
+
+        data = _parse_date_str(f.data_compra) or f.data_upload
+        if data:
+            chave_mes = data.strftime('%Y-%m') if hasattr(data, 'strftime') else str(data)[:7]
+            mes_totais[chave_mes] += total
+
+    por_categoria = sorted(
+        [{'categoria': k, 'total': round(v, 2), 'count': cat_counts[k]}
+         for k, v in cat_totais.items()],
+        key=lambda x: x['total'], reverse=True
+    )
+
+    por_mes = sorted(
+        [{'mes': k, 'total': round(v, 2)} for k, v in mes_totais.items()],
+        key=lambda x: x['mes']
+    )
+
+    total_geral  = sum(f.total or 0 for f in faturas)
+    media_mensal = total_geral / len(mes_totais) if mes_totais else 0
+
+    return jsonify({
+        'por_categoria': por_categoria,
+        'por_mes':       por_mes,
+        'total_geral':   round(total_geral, 2),
+        'media_mensal':  round(media_mensal, 2),
+        'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
+        'num_faturas':   len(faturas),
     })
 </file>
 
@@ -3909,7 +6175,7 @@ export default function App() {
 
 <file path="verly-mobile/src/components/TabIcon.js">
 /**
- * src/components/TabIcon.js
+ * src/components/TabIcon.js — atualizado com ícone de Metas e Estatísticas
  */
 import React from 'react';
 import Svg, { Path, Line, Polyline, Circle, Rect } from 'react-native-svg';
@@ -3935,6 +6201,24 @@ export default function TabIcon({ name, color, size = 22 }) {
       return (
         <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <Path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </Svg>
+      );
+    case 'Metas':
+      // Ícone de alvo / target
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Circle cx="12" cy="12" r="10" />
+          <Circle cx="12" cy="12" r="6" />
+          <Circle cx="12" cy="12" r="2" />
+        </Svg>
+      );
+    case 'Estatisticas':
+      // Ícone de barras de gráfico
+      return (
+        <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <Line x1="18" y1="20" x2="18" y2="10" />
+          <Line x1="12" y1="20" x2="12" y2="4" />
+          <Line x1="6" y1="20" x2="6" y2="14" />
         </Svg>
       );
     case 'Subscricoes':
@@ -4321,7 +6605,7 @@ const styles = StyleSheet.create({
 <file path="verly-mobile/src/screens/DashboardScreen.js">
 /**
  * src/screens/DashboardScreen.js
- * Ecrã principal — dashboard financeiro.
+ * Ecrã principal — dashboard financeiro com acesso rápido a todas as funcionalidades.
  */
 
 import React, { useState, useCallback } from 'react';
@@ -4404,6 +6688,16 @@ function FaturaMini({ fatura, onPress }) {
   );
 }
 
+// Quick Actions — acesso rápido às funcionalidades
+const QUICK_ACTIONS = [
+  { key: 'Historico',    icon: '🗂️',  label: 'Histórico',  color: '#534AB7' },
+  { key: 'Relatorio',   icon: '📊',  label: 'Relatório',  color: '#00D68F' },
+  { key: 'Score',       icon: '⭐',  label: 'Score',      color: '#FFB800' },
+  { key: 'Impulse',     icon: '🧠',  label: 'Impulse',    color: '#FF4757' },
+  { key: 'Estatisticas',icon: '📈',  label: 'Estatísticas', color: '#FF6B35' },
+  { key: 'Subscricoes', icon: '💸',  label: 'Subscrições', color: '#B547B5' },
+];
+
 // ── Ecrã principal ────────────────────────────────────────────────────────────
 
 export default function DashboardScreen({ navigation }) {
@@ -4427,7 +6721,6 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // Recarregar sempre que o ecrã ganha foco
   useFocusEffect(useCallback(() => { fetchData(); }, []));
 
   if (loading) {
@@ -4508,21 +6801,47 @@ export default function DashboardScreen({ navigation }) {
         />
       </View>
 
+      {/* Quick Actions */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Ferramentas</Text>
+        <View style={styles.quickGrid}>
+          {QUICK_ACTIONS.map((action) => (
+            <TouchableOpacity
+              key={action.key}
+              style={styles.quickBtn}
+              onPress={() => navigation.navigate(action.key)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.quickIconBox, { backgroundColor: action.color + '22', borderColor: action.color + '44' }]}>
+                <Text style={styles.quickIcon}>{action.icon}</Text>
+              </View>
+              <Text style={styles.quickLabel}>{action.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
       {/* Subscrições leak */}
       {data?.subscricoes?.total_mensal > 0 && (
-        <View style={[styles.card, styles.subsCard]}>
+        <TouchableOpacity
+          style={[styles.card, styles.subsCard]}
+          onPress={() => navigation.navigate('Subscricoes')}
+          activeOpacity={0.8}
+        >
           <Text style={styles.subsLabel}>💸 Leak de subscrições</Text>
-          <Text style={styles.subsValue}>{data.subscricoes.total_mensal.toFixed(2)}€/mês</Text>
-          <Text style={styles.subsSub}>≈ {Math.round(data.subscricoes.total_mensal * 12)}€/ano</Text>
-        </View>
+          <View>
+            <Text style={styles.subsValue}>{data.subscricoes.total_mensal.toFixed(2)}€/mês</Text>
+            <Text style={styles.subsSub}>≈ {Math.round(data.subscricoes.total_mensal * 12)}€/ano</Text>
+          </View>
+        </TouchableOpacity>
       )}
 
       {/* Últimas faturas */}
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>Últimas faturas</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Faturas')}>
-            <Text style={styles.cardLink}>Ver tudo →</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Historico')}>
+            <Text style={styles.cardLink}>Ver histórico →</Text>
           </TouchableOpacity>
         </View>
         {data?.ultimas_faturas?.length > 0
@@ -4601,11 +6920,18 @@ const styles = StyleSheet.create({
   metricValue:{ fontSize: 18, fontWeight: '800', color: COLORS.text },
   metricSub:  { fontSize: 11, marginTop: 4 },
 
+  // Quick Actions
+  quickGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
+  quickBtn:     { width: '30%', alignItems: 'center', gap: 6 },
+  quickIconBox: { width: 52, height: 52, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  quickIcon:    { fontSize: 24 },
+  quickLabel:   { fontSize: 11, fontWeight: '600', color: COLORS.textSub, textAlign: 'center' },
+
   // Subs
   subsCard:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   subsLabel: { fontSize: 13, color: COLORS.text, fontWeight: '600' },
-  subsValue: { fontSize: 18, fontWeight: '800', color: COLORS.red },
-  subsSub:   { fontSize: 11, color: COLORS.textSub },
+  subsValue: { fontSize: 18, fontWeight: '800', color: COLORS.red, textAlign: 'right' },
+  subsSub:   { fontSize: 11, color: COLORS.textSub, textAlign: 'right' },
 
   // Card genérico
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
@@ -4788,14 +7114,125 @@ const styles = StyleSheet.create({
 
 <file path="verly-mobile/src/screens/FaturasScreen.js">
 /**
- * src/screens/FaturasScreen.js
+ * PATCH para FaturasScreen.js
+ * Adiciona botão de upload de fatura (câmara ou biblioteca de imagens).
+ *
+ * Instala primeiro:
+ *   npx expo install expo-image-picker expo-document-picker
+ *
+ * Substituir o bloco do header existente por este, e adicionar os imports no topo.
  */
+
+// ── NOVOS IMPORTS (adicionar no topo do ficheiro) ────────────────────────────
+// import * as ImagePicker from 'expo-image-picker';
+// import * as DocumentPicker from 'expo-document-picker';
+
+// ── NOVA FUNÇÃO (adicionar dentro do componente FaturasScreen) ────────────────
+/*
+  const handleUpload = () => {
+    Alert.alert(
+      'Carregar fatura',
+      'Escolhe a origem:',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: '📷 Câmara',
+          onPress: async () => {
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status !== 'granted') {
+              Alert.alert('Permissão negada', 'Precisa de acesso à câmara.');
+              return;
+            }
+            const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              quality: 0.85,
+            });
+            if (!result.canceled) {
+              const asset = result.assets[0];
+              await _uploadFile(asset.uri, asset.fileName || 'fatura.jpg', 'image/jpeg');
+            }
+          },
+        },
+        {
+          text: '🖼️ Galeria',
+          onPress: async () => {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              quality: 0.85,
+            });
+            if (!result.canceled) {
+              const asset = result.assets[0];
+              await _uploadFile(asset.uri, asset.fileName || 'fatura.jpg', 'image/jpeg');
+            }
+          },
+        },
+        {
+          text: '📄 PDF',
+          onPress: async () => {
+            const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
+            if (!result.canceled) {
+              const file = result.assets[0];
+              await _uploadFile(file.uri, file.name, 'application/pdf');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const [uploading, setUploading] = useState(false);
+
+  const _uploadFile = async (uri, name, type) => {
+    setUploading(true);
+    try {
+      await faturasAPI.upload(uri, name, type);
+      Alert.alert('✅ Sucesso', 'Fatura enviada! Pode demorar alguns segundos a processar.');
+      fetchFaturas();
+    } catch (e) {
+      Alert.alert('Erro no upload', e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+*/
+
+// ── SUBSTITUIR o bloco <View style={styles.header}> existente por: ────────────
+/*
+  <View style={styles.header}>
+    <View>
+      <Text style={styles.title}>Faturas</Text>
+      <Text style={styles.sub}>{faturas.length} faturas · {total.toFixed(2)}€</Text>
+    </View>
+    <TouchableOpacity
+      style={[styles.uploadBtn, uploading && { opacity: 0.6 }]}
+      onPress={handleUpload}
+      disabled={uploading}
+    >
+      {uploading
+        ? <ActivityIndicator color="#fff" size="small" />
+        : <Text style={styles.uploadBtnText}>+ Upload</Text>
+      }
+    </TouchableOpacity>
+  </View>
+*/
+
+// ── ADICIONAR ao StyleSheet ───────────────────────────────────────────────────
+/*
+  uploadBtn:     { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, marginTop: 4 },
+  uploadBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+*/
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHEIRO COMPLETO (FaturasScreen.js com upload integrado)
+// ─────────────────────────────────────────────────────────────────────────────
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   TextInput, RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { faturasAPI } from '../services/api';
 import { COLORS } from '../constants/theme';
 
@@ -4839,6 +7276,7 @@ export default function FaturasScreen({ navigation }) {
   const [refreshing, setRefresh]  = useState(false);
   const [search, setSearch]       = useState('');
   const [total, setTotal]         = useState(0);
+  const [uploading, setUploading] = useState(false);
 
   const fetchFaturas = async (q = '') => {
     try {
@@ -4875,6 +7313,60 @@ export default function FaturasScreen({ navigation }) {
     ]);
   };
 
+  const _uploadFile = async (uri, name, type) => {
+    setUploading(true);
+    try {
+      await faturasAPI.upload(uri, name, type);
+      Alert.alert('✅ Sucesso', 'Fatura enviada! Pode demorar alguns segundos a processar.');
+      fetchFaturas(search);
+    } catch (e) {
+      Alert.alert('Erro no upload', e.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleUpload = () => {
+    Alert.alert('Carregar fatura', 'Escolhe a origem:', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: '📷 Câmara',
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== 'granted') {
+            Alert.alert('Permissão negada', 'Precisa de acesso à câmara.');
+            return;
+          }
+          const result = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+          if (!result.canceled) {
+            const asset = result.assets[0];
+            await _uploadFile(asset.uri, asset.fileName || 'fatura.jpg', 'image/jpeg');
+          }
+        },
+      },
+      {
+        text: '🖼️ Galeria',
+        onPress: async () => {
+          const result = await ImagePicker.launchImageLibraryAsync({ quality: 0.85 });
+          if (!result.canceled) {
+            const asset = result.assets[0];
+            await _uploadFile(asset.uri, asset.fileName || 'fatura.jpg', 'image/jpeg');
+          }
+        },
+      },
+      {
+        text: '📄 PDF',
+        onPress: async () => {
+          const result = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
+          if (!result.canceled) {
+            const file = result.assets[0];
+            await _uploadFile(file.uri, file.name, 'application/pdf');
+          }
+        },
+      },
+    ]);
+  };
+
   if (loading) {
     return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
   }
@@ -4887,6 +7379,16 @@ export default function FaturasScreen({ navigation }) {
           <Text style={styles.title}>Faturas</Text>
           <Text style={styles.sub}>{faturas.length} faturas · {total.toFixed(2)}€</Text>
         </View>
+        <TouchableOpacity
+          style={[styles.uploadBtn, uploading && { opacity: 0.6 }]}
+          onPress={handleUpload}
+          disabled={uploading}
+        >
+          {uploading
+            ? <ActivityIndicator color="#fff" size="small" />
+            : <Text style={styles.uploadBtnText}>+ Upload</Text>
+          }
+        </TouchableOpacity>
       </View>
 
       {/* Search */}
@@ -4906,7 +7408,13 @@ export default function FaturasScreen({ navigation }) {
         data={faturas}
         keyExtractor={item => String(item.id)}
         contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchFaturas(search); }} tintColor={COLORS.brand} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { setRefresh(true); fetchFaturas(search); }}
+            tintColor={COLORS.brand}
+          />
+        }
         renderItem={({ item }) => (
           <FaturaCard
             fatura={item}
@@ -4918,7 +7426,10 @@ export default function FaturasScreen({ navigation }) {
           <View style={styles.empty}>
             <Text style={styles.emptyIcon}>🧾</Text>
             <Text style={styles.emptyTitle}>Sem faturas</Text>
-            <Text style={styles.emptySub}>Carrega a tua primeira fatura através da app web.</Text>
+            <Text style={styles.emptySub}>Carrega a tua primeira fatura clicando em "+ Upload".</Text>
+            <TouchableOpacity style={styles.emptyUploadBtn} onPress={handleUpload}>
+              <Text style={styles.emptyUploadBtnText}>Carregar primeira fatura</Text>
+            </TouchableOpacity>
           </View>
         }
       />
@@ -4932,6 +7443,8 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 12 },
   title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
   sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
+  uploadBtn:     { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, marginTop: 4 },
+  uploadBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   searchWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 12, marginHorizontal: 20, marginBottom: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: COLORS.border },
   searchIcon: { fontSize: 16, marginRight: 8 },
   searchInput: { flex: 1, color: COLORS.text, fontSize: 14, paddingVertical: 12 },
@@ -4953,7 +7466,9 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyIcon: { fontSize: 48, marginBottom: 12, opacity: 0.3 },
   emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
-  emptySub: { fontSize: 13, color: COLORS.textSub, textAlign: 'center', maxWidth: 260, lineHeight: 20 },
+  emptySub: { fontSize: 13, color: COLORS.textSub, textAlign: 'center', maxWidth: 260, lineHeight: 20, marginBottom: 24 },
+  emptyUploadBtn: { backgroundColor: COLORS.brand, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 },
+  emptyUploadBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });
 </file>
 
@@ -5051,168 +7566,6 @@ const styles = StyleSheet.create({
   emptyIcon:  { fontSize: 48, marginBottom: 12 },
   emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
   emptySub:   { fontSize: 13, color: COLORS.textSub },
-});
-</file>
-
-<file path="verly-mobile/src/screens/PerfilScreen.js">
-/**
- * src/screens/PerfilScreen.js
- */
-import React, { useState } from 'react';
-import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  Alert, Switch,
-} from 'react-native';
-import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
-
-const PERSONALIDADES = [
-  { key: 'calm',      nome: 'Calmo',          desc: 'Coach gentil e construtivo.', cor: COLORS.green },
-  { key: 'pro',       nome: 'Profissional',   desc: 'CFO pessoal. Números e factos.', cor: COLORS.brand },
-  { key: 'savage',    nome: 'Savage',         desc: 'Sem filtros. Verdade brutal.', cor: COLORS.red },
-  { key: 'sarcastic', nome: 'Sarcástico',     desc: 'Ironia refinada. Construtivo.', cor: COLORS.yellow },
-];
-
-export default function PerfilScreen() {
-  const { user, logout, updateUser } = useAuth();
-  const [saving, setSaving] = useState(false);
-
-  const handlePersonalidade = async (key) => {
-    try {
-      setSaving(true);
-      await authAPI.updateMe({ personalidade: key });
-      updateUser({ personalidade: key });
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleNotifToggle = async (val) => {
-    try {
-      await authAPI.updateMe({ notificacoes_email: val });
-      updateUser({ notificacoes_email: val });
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    }
-  };
-
-  const handleLogout = () => {
-    Alert.alert('Terminar sessão', 'Tens a certeza?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sair', style: 'destructive', onPress: logout },
-    ]);
-  };
-
-  const initial = user?.nome?.[0]?.toUpperCase() || '?';
-  const personalidade = user?.personalidade || 'calm';
-
-  return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-      {/* Hero */}
-      <View style={styles.hero}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initial}</Text>
-        </View>
-        <Text style={styles.heroNome}>{user?.nome}</Text>
-        <Text style={styles.heroEmail}>{user?.email}</Text>
-        {user?.streak_dias > 0 && (
-          <View style={styles.streakBadge}>
-            <Text style={styles.streakText}>🔥 {user.streak_dias} dias de streak</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Stats */}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{user?.orcamento_mensal ? `${user.orcamento_mensal}€` : '—'}</Text>
-          <Text style={styles.statLabel}>Orçamento</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{user?.streak_dias || 0}</Text>
-          <Text style={styles.statLabel}>Streak dias</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{personalidade[0].toUpperCase() + personalidade.slice(1)}</Text>
-          <Text style={styles.statLabel}>Modo</Text>
-        </View>
-      </View>
-
-      {/* Personalidade */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Personalidade da Verly</Text>
-        <View style={styles.persGrid}>
-          {PERSONALIDADES.map(p => (
-            <TouchableOpacity
-              key={p.key}
-              style={[styles.persCard, personalidade === p.key && { borderColor: p.cor, backgroundColor: `${p.cor}15` }]}
-              onPress={() => handlePersonalidade(p.key)}
-              disabled={saving}
-            >
-              {personalidade === p.key && (
-                <View style={[styles.persDot, { backgroundColor: p.cor }]} />
-              )}
-              <Text style={[styles.persNome, personalidade === p.key && { color: p.cor }]}>{p.nome}</Text>
-              <Text style={styles.persDesc}>{p.desc}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* Notificações */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Preferências</Text>
-        <View style={styles.settingRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.settingLabel}>Notificações por email</Text>
-            <Text style={styles.settingDesc}>Alertas de garantias e orçamento</Text>
-          </View>
-          <Switch
-            value={user?.notificacoes_email || false}
-            onValueChange={handleNotifToggle}
-            trackColor={{ false: COLORS.surface2, true: COLORS.brand }}
-            thumbColor="#fff"
-          />
-        </View>
-      </View>
-
-      {/* Logout */}
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Terminar sessão</Text>
-      </TouchableOpacity>
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: COLORS.bg },
-  content: { padding: 20, paddingBottom: 40 },
-  hero:    { alignItems: 'center', paddingVertical: 24 },
-  avatar:  { width: 80, height: 80, borderRadius: 24, background: 'linear-gradient(135deg, #534AB7, #7B61FF)', backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
-  avatarText: { fontSize: 32, fontWeight: '800', color: '#fff' },
-  heroNome:  { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
-  heroEmail: { fontSize: 14, color: COLORS.textSub },
-  streakBadge: { marginTop: 10, backgroundColor: 'rgba(255,107,53,0.12)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)' },
-  streakText: { color: '#FF6B35', fontSize: 13, fontWeight: '700' },
-  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
-  statCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
-  statVal:   { fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
-  statLabel: { fontSize: 11, color: COLORS.textSub, textAlign: 'center' },
-  section:   { marginBottom: 24 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
-  persGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  persCard: { width: '47%', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: COLORS.border, position: 'relative' },
-  persDot:  { position: 'absolute', top: 10, right: 10, width: 8, height: 8, borderRadius: 4 },
-  persNome: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
-  persDesc: { fontSize: 11, color: COLORS.textSub, lineHeight: 15 },
-  settingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: COLORS.border },
-  settingLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 3 },
-  settingDesc:  { fontSize: 12, color: COLORS.textSub },
-  logoutBtn: { backgroundColor: 'rgba(255,71,87,0.08)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
-  logoutText: { color: COLORS.red, fontSize: 15, fontWeight: '700' },
 });
 </file>
 
@@ -5354,25 +7707,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
   emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center', lineHeight: 20 },
 });
-</file>
-
-<file path="app/api/__init__.py">
-"""
-app/api/__init__.py — Blueprint da API REST para o React Native
-
-Todos os endpoints aqui retornam JSON.
-Autenticação via JWT (flask-jwt-extended).
-
-Regista no __init__.py principal:
-    from app.api import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api/v1')
-"""
-
-from flask import Blueprint
-
-api_bp = Blueprint('api', __name__)
-
-from app.api import auth, dashboard, faturas, chat  # noqa
 </file>
 
 <file path="app/exportar.py">
@@ -7436,148 +9770,6 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
-<file path="verly-mobile/src/navigation/AppNavigator.js">
-/**
- * src/navigation/AppNavigator.js
- * Navegação principal da app.
- *
- * Estrutura:
- *   - Stack raiz → AuthStack | MainStack
- *   - AuthStack  → Login, Register
- *   - MainStack  → Bottom Tabs + ecrãs de detalhe
- *   - Bottom Tabs → Dashboard, Faturas, Chat, Subscrições, Perfil
- */
-
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { ActivityIndicator, View } from 'react-native';
-
-import { useAuth } from '../context/AuthContext';
-
-// ── Ecrãs de autenticação ─────────────────────────────────────────────────────
-import LoginScreen    from '../screens/auth/LoginScreen';
-import RegisterScreen from '../screens/auth/RegisterScreen';
-
-// ── Ecrãs principais ──────────────────────────────────────────────────────────
-import DashboardScreen    from '../screens/DashboardScreen';
-import FaturasScreen      from '../screens/FaturasScreen';
-import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen         from '../screens/ChatScreen';
-import SubscricoesScreen  from '../screens/SubscricoesScreen';
-import PerfilScreen       from '../screens/PerfilScreen';
-import NotificacoesScreen from '../screens/NotificacoesScreen';
-
-// ── Ícones (usar react-native-vector-icons ou emojis por simplicidade) ─────────
-import TabIcon from '../components/TabIcon';
-
-const Stack   = createNativeStackNavigator();
-const Tab     = createBottomTabNavigator();
-const AuthStack = createNativeStackNavigator();
-const MainStack = createNativeStackNavigator();
-
-// Cores e estilo global
-export const COLORS = {
-  brand:     '#534AB7',
-  brandLight:'#EEF0FF',
-  bg:        '#0F0F1A',
-  surface:   '#1A1A2E',
-  surface2:  '#22223A',
-  border:    '#2E2E4E',
-  text:      '#F0F0F8',
-  textSub:   '#8888AA',
-  green:     '#00D68F',
-  red:       '#FF4757',
-  yellow:    '#FFB800',
-};
-
-
-// ── Auth Stack ────────────────────────────────────────────────────────────────
-
-function AuthNavigator() {
-  return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Login"    component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-    </AuthStack.Navigator>
-  );
-}
-
-
-// ── Bottom Tabs ───────────────────────────────────────────────────────────────
-
-function MainTabs() {
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown:    false,
-        tabBarStyle:    {
-          backgroundColor: COLORS.surface,
-          borderTopColor:  COLORS.border,
-          borderTopWidth:  1,
-          paddingBottom:   8,
-          paddingTop:      8,
-          height:          64,
-        },
-        tabBarActiveTintColor:   COLORS.brand,
-        tabBarInactiveTintColor: COLORS.textSub,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
-        tabBarIcon: ({ color, size }) => (
-          <TabIcon name={route.name} color={color} size={size} />
-        ),
-      })}
-    >
-      <Tab.Screen name="Dashboard"   component={DashboardScreen}   options={{ tabBarLabel: 'Início' }} />
-      <Tab.Screen name="Faturas"     component={FaturasScreen}      options={{ tabBarLabel: 'Faturas' }} />
-      <Tab.Screen name="Chat"        component={ChatScreen}         options={{ tabBarLabel: 'Chat IA' }} />
-      <Tab.Screen name="Subscricoes" component={SubscricoesScreen}  options={{ tabBarLabel: 'Subs' }} />
-      <Tab.Screen name="Perfil"      component={PerfilScreen}       options={{ tabBarLabel: 'Perfil' }} />
-    </Tab.Navigator>
-  );
-}
-
-
-// ── Main Stack (tabs + ecrãs de detalhe) ─────────────────────────────────────
-
-function MainNavigator() {
-  return (
-    <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs"           component={MainTabs} />
-      <MainStack.Screen name="FaturaDetalhe"  component={FaturaDetalheScreen} />
-      <MainStack.Screen name="Notificacoes"   component={NotificacoesScreen} />
-    </MainStack.Navigator>
-  );
-}
-
-
-// ── Root Navigator ────────────────────────────────────────────────────────────
-
-export default function AppNavigator() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
-        <ActivityIndicator size="large" color={COLORS.brand} />
-      </View>
-    );
-  }
-
-  return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainNavigator} />
-        ) : (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-}
-</file>
-
 <file path="verly-mobile/src/screens/auth/LoginScreen.js">
 /**
  * src/screens/auth/LoginScreen.js
@@ -7761,6 +9953,168 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/PerfilScreen.js">
+/**
+ * src/screens/PerfilScreen.js
+ */
+import React, { useState } from 'react';
+import {
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  Alert, Switch,
+} from 'react-native';
+import { useAuth } from '../context/AuthContext';
+import { authAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const PERSONALIDADES = [
+  { key: 'calm',      nome: 'Calmo',          desc: 'Coach gentil e construtivo.', cor: COLORS.green },
+  { key: 'pro',       nome: 'Profissional',   desc: 'CFO pessoal. Números e factos.', cor: COLORS.brand },
+  { key: 'savage',    nome: 'Savage',         desc: 'Sem filtros. Verdade brutal.', cor: COLORS.red },
+  { key: 'sarcastic', nome: 'Sarcástico',     desc: 'Ironia refinada. Construtivo.', cor: COLORS.yellow },
+];
+
+export default function PerfilScreen() {
+  const { user, logout, updateUser } = useAuth();
+  const [saving, setSaving] = useState(false);
+
+  const handlePersonalidade = async (key) => {
+    try {
+      setSaving(true);
+      await authAPI.updateMe({ personalidade: key });
+      updateUser({ personalidade: key });
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleNotifToggle = async (val) => {
+    try {
+      await authAPI.updateMe({ notificacoes_email: val });
+      updateUser({ notificacoes_email: val });
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    }
+  };
+
+  const handleLogout = () => {
+    Alert.alert('Terminar sessão', 'Tens a certeza?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Sair', style: 'destructive', onPress: logout },
+    ]);
+  };
+
+  const initial = user?.nome?.[0]?.toUpperCase() || '?';
+  const personalidade = user?.personalidade || 'calm';
+
+  return (
+    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
+      {/* Hero */}
+      <View style={styles.hero}>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{initial}</Text>
+        </View>
+        <Text style={styles.heroNome}>{user?.nome}</Text>
+        <Text style={styles.heroEmail}>{user?.email}</Text>
+        {user?.streak_dias > 0 && (
+          <View style={styles.streakBadge}>
+            <Text style={styles.streakText}>🔥 {user.streak_dias} dias de streak</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Stats */}
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{user?.orcamento_mensal ? `${user.orcamento_mensal}€` : '—'}</Text>
+          <Text style={styles.statLabel}>Orçamento</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{user?.streak_dias || 0}</Text>
+          <Text style={styles.statLabel}>Streak dias</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statVal}>{personalidade[0].toUpperCase() + personalidade.slice(1)}</Text>
+          <Text style={styles.statLabel}>Modo</Text>
+        </View>
+      </View>
+
+      {/* Personalidade */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Personalidade da Verly</Text>
+        <View style={styles.persGrid}>
+          {PERSONALIDADES.map(p => (
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.persCard, personalidade === p.key && { borderColor: p.cor, backgroundColor: `${p.cor}15` }]}
+              onPress={() => handlePersonalidade(p.key)}
+              disabled={saving}
+            >
+              {personalidade === p.key && (
+                <View style={[styles.persDot, { backgroundColor: p.cor }]} />
+              )}
+              <Text style={[styles.persNome, personalidade === p.key && { color: p.cor }]}>{p.nome}</Text>
+              <Text style={styles.persDesc}>{p.desc}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+
+      {/* Notificações */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Preferências</Text>
+        <View style={styles.settingRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingLabel}>Notificações por email</Text>
+            <Text style={styles.settingDesc}>Alertas de garantias e orçamento</Text>
+          </View>
+          <Switch
+            value={user?.notificacoes_email || false}
+            onValueChange={handleNotifToggle}
+            trackColor={{ false: COLORS.surface2, true: COLORS.brand }}
+            thumbColor="#fff"
+          />
+        </View>
+      </View>
+
+      {/* Logout */}
+      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+        <Text style={styles.logoutText}>Terminar sessão</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  content: { padding: 20, paddingBottom: 40 },
+  hero:    { alignItems: 'center', paddingVertical: 24 },
+  avatar:  { width: 80, height: 80, borderRadius: 24, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
+  avatarText: { fontSize: 32, fontWeight: '800', color: '#fff' },
+  heroNome:  { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  heroEmail: { fontSize: 14, color: COLORS.textSub },
+  streakBadge: { marginTop: 10, backgroundColor: 'rgba(255,107,53,0.12)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)' },
+  streakText: { color: '#FF6B35', fontSize: 13, fontWeight: '700' },
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
+  statCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  statVal:   { fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
+  statLabel: { fontSize: 11, color: COLORS.textSub, textAlign: 'center' },
+  section:   { marginBottom: 24 },
+  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
+  persGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  persCard: { width: '47%', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: COLORS.border, position: 'relative' },
+  persDot:  { position: 'absolute', top: 10, right: 10, width: 8, height: 8, borderRadius: 4 },
+  persNome: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
+  persDesc: { fontSize: 11, color: COLORS.textSub, lineHeight: 15 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: COLORS.border },
+  settingLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 3 },
+  settingDesc:  { fontSize: 12, color: COLORS.textSub },
+  logoutBtn: { backgroundColor: 'rgba(255,71,87,0.08)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
+  logoutText: { color: COLORS.red, fontSize: 15, fontWeight: '700' },
+});
+</file>
+
 <file path=".gitignore">
 venv/
 storage/
@@ -7770,6 +10124,29 @@ dados_reduzidos/
 *.pyc
 verly-mobile/node_modules/
 verly-mobile/.expo/
+</file>
+
+<file path="app/api/__init__.py">
+"""
+app/api/__init__.py — Blueprint da API REST para o React Native
+
+Todos os endpoints aqui retornam JSON.
+Autenticação via JWT (flask-jwt-extended).
+
+Registar no __init__.py principal:
+    from app.api import api_bp
+    app.register_blueprint(api_bp, url_prefix='/api/v1')
+"""
+
+from flask import Blueprint
+from app import csrf
+
+api_bp = Blueprint('api', __name__)
+
+# Excluir as rotas da API do CSRF protection (usam JWT em vez de CSRF)
+csrf.exempt(api_bp)
+
+from app.api import auth, dashboard, faturas, chat, mobile_extras  # noqa
 </file>
 
 <file path="app/perfil.py">
@@ -8583,213 +10960,135 @@ Run the Application:
 /user_data: Isolated storage for text data and vector indices per user (Privacy First).
 </file>
 
-<file path="verly-mobile/package.json">
-{
-  "name": "verly-mobile",
-  "version": "1.0.0",
-  "main": "node_modules/expo/AppEntry.js",
-  "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web"
-  },
-  "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-navigation/bottom-tabs": "^6.5.11",
-    "@react-navigation/native": "^6.1.9",
-    "@react-navigation/native-stack": "^7.14.14",
-    "@react-navigation/stack": "^6.3.20",
-    "axios": "^1.6.7",
-    "expo": "^54.0.34",
-    "expo-status-bar": "~3.0.9",
-    "lucide-react-native": "^0.322.0",
-    "react": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0",
-    "react-native-svg": "15.12.1"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.20.0"
-  },
-  "private": true
-}
-</file>
-
-<file path="verly-mobile/src/services/api.js">
+<file path="verly-mobile/src/navigation/AppNavigator.js">
 /**
- * src/services/api.js
- * Serviço central de comunicação com o backend Flask.
- * Todas as chamadas à API passam por aqui.
+ * src/navigation/AppNavigator.js
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { ActivityIndicator, View } from 'react-native';
 
-// Muda para o IP da tua máquina quando testares em dispositivo físico
-// Em emulador Android: http://10.0.2.2:5000/api/v1
-// Em emulador iOS:     http://localhost:5000/api/v1
-const BASE_URL = 'http://192.168.1.251:5000/api/v1';
+import { useAuth } from '../context/AuthContext';
 
-const TOKEN_KEY = '@verly_token';
+import LoginScreen    from '../screens/auth/LoginScreen';
+import RegisterScreen from '../screens/auth/RegisterScreen';
 
-// ── Token ─────────────────────────────────────────────────────────────────────
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
+import MetasScreen         from '../screens/MetasScreen';
+import EstatisticasScreen  from '../screens/EstatisticasScreen';
+import ScoreScreen         from '../screens/ScoreScreen';
+import ImpulseScreen       from '../screens/ImpulseScreen';
+import RelatorioScreen     from '../screens/RelatorioScreen';
+import HistoricoScreen     from '../screens/HistoricoScreen';
 
-export const saveToken = async (token) => {
-  await AsyncStorage.setItem(TOKEN_KEY, token);
+import TabIcon from '../components/TabIcon';
+
+const Stack     = createStackNavigator();
+const Tab       = createBottomTabNavigator();
+const AuthStack = createStackNavigator();
+const MainStack = createStackNavigator();
+
+export const COLORS = {
+  brand:      '#534AB7',
+  brandLight: '#EEF0FF',
+  bg:         '#0F0F1A',
+  surface:    '#1A1A2E',
+  surface2:   '#22223A',
+  border:     '#2E2E4E',
+  text:       '#F0F0F8',
+  textSub:    '#8888AA',
+  green:      '#00D68F',
+  red:        '#FF4757',
+  yellow:     '#FFB800',
 };
 
-export const getToken = async () => {
-  return await AsyncStorage.getItem(TOKEN_KEY);
-};
-
-export const removeToken = async () => {
-  await AsyncStorage.removeItem(TOKEN_KEY);
-};
-
-// ── Fetch base ────────────────────────────────────────────────────────────────
-
-async function apiFetch(path, options = {}) {
-  const token = await getToken();
-
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {}),
-  };
-
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
-
-  // Token expirado → logout automático
-  if (response.status === 401) {
-    await removeToken();
-    throw new Error('UNAUTHORIZED');
-  }
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || `Erro ${response.status}`);
-  }
-
-  return data;
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
 }
 
-// ── Upload (multipart) ────────────────────────────────────────────────────────
-
-async function apiUpload(path, formData) {
-  const token = await getToken();
-
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // NÃO definir Content-Type aqui — o fetch define automaticamente com boundary
-    },
-    body: formData,
-  });
-
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
-  return data;
+function MainTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarStyle: {
+          backgroundColor: COLORS.surface,
+          borderTopColor:  COLORS.border,
+          borderTopWidth:  1,
+          paddingBottom:   8,
+          paddingTop:      8,
+          height:          64,
+        },
+        tabBarActiveTintColor:   COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => (
+          <TabIcon name={route.name} color={color} size={size} />
+        ),
+      })}
+    >
+      <Tab.Screen name="Dashboard"  component={DashboardScreen}  options={{ tabBarLabel: 'Início' }} />
+      <Tab.Screen name="Faturas"    component={FaturasScreen}     options={{ tabBarLabel: 'Faturas' }} />
+      <Tab.Screen name="Chat"       component={ChatScreen}        options={{ tabBarLabel: 'Chat IA' }} />
+      <Tab.Screen name="Metas"      component={MetasScreen}       options={{ tabBarLabel: 'Metas' }} />
+      <Tab.Screen name="Perfil"     component={PerfilScreen}      options={{ tabBarLabel: 'Perfil' }} />
+    </Tab.Navigator>
+  );
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+function MainNavigator() {
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen} />
+      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen} />
+      <MainStack.Screen name="Score"         component={ScoreScreen} />
+      <MainStack.Screen name="Impulse"       component={ImpulseScreen} />
+      <MainStack.Screen name="Relatorio"     component={RelatorioScreen} />
+      <MainStack.Screen name="Historico"     component={HistoricoScreen} />
+    </MainStack.Navigator>
+  );
+}
 
-export const authAPI = {
-  login: (email, password) =>
-    apiFetch('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
 
-  register: (nome, email, password) =>
-    apiFetch('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ nome, email, password }),
-    }),
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
 
-  me: () => apiFetch('/auth/me'),
-
-  updateMe: (updates) =>
-    apiFetch('/auth/me', {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    }),
-};
-
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-
-export const dashboardAPI = {
-  get: () => apiFetch('/dashboard'),
-};
-
-// ── Faturas ───────────────────────────────────────────────────────────────────
-
-export const faturasAPI = {
-  listar: (params = {}) => {
-    const query = new URLSearchParams(params).toString();
-    return apiFetch(`/faturas${query ? `?${query}` : ''}`);
-  },
-
-  detalhe: (id) => apiFetch(`/faturas/${id}`),
-
-  apagar: (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
-
-  upload: (fileUri, fileName, fileType) => {
-    const formData = new FormData();
-    formData.append('file', {
-      uri: fileUri,
-      name: fileName,
-      type: fileType,
-    });
-    return apiUpload('/faturas/upload', formData);
-  },
-};
-
-// ── Notificações ──────────────────────────────────────────────────────────────
-
-export const notificacoesAPI = {
-  listar: () => apiFetch('/notificacoes'),
-};
-
-// ── Chat ──────────────────────────────────────────────────────────────────────
-
-export const chatAPI = {
-  enviar: (mensagem) =>
-    apiFetch('/chat/mensagem', {
-      method: 'POST',
-      body: JSON.stringify({ mensagem }),
-    }),
-
-  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
-
-  limpar: () => apiFetch('/chat/limpar', { method: 'POST' }),
-};
-
-// ── Subscrições ───────────────────────────────────────────────────────────────
-
-export const subscricoesAPI = {
-  listar: () => apiFetch('/subscricoes'),
-};
-
-// ── Metas ─────────────────────────────────────────────────────────────────────
-
-export const metasAPI = {
-  listar: () => apiFetch('/metas'),
-
-  criar: (nome, limite, categoria) =>
-    apiFetch('/metas', {
-      method: 'POST',
-      body: JSON.stringify({ nome, limite, categoria }),
-    }),
-
-  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
-};
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainNavigator} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
 </file>
 
 <file path="templates/perfil.html">
@@ -9395,6 +11694,225 @@ async function analisarExtrato(file) {
 </script>
 {% endblock %}
 {% endblock %}
+</file>
+
+<file path="verly-mobile/package.json">
+{
+  "name": "verly-mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/bottom-tabs": "^6.5.11",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/native-stack": "^7.14.14",
+    "@react-navigation/stack": "^6.3.20",
+    "axios": "^1.6.7",
+    "expo": "^54.0.34",
+    "expo-document-picker": "~14.0.8",
+    "expo-image-picker": "~17.0.11",
+    "expo-location": "~19.0.8",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^0.322.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-web": "^0.21.0",
+    "react-native-webview": "13.15.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
+</file>
+
+<file path="verly-mobile/src/services/api.js">
+/**
+ * src/services/api.js
+ * Serviço central de comunicação com o backend Flask.
+ */
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Muda para o IP da tua máquina quando testares em dispositivo físico
+// Em emulador Android: http://10.0.2.2:5000/api/v1
+// Em dispositivo físico: http://<SEU_IP_LOCAL>:5000/api/v1
+const BASE_URL = 'http://127.0.0.1:5000/api/v1';
+
+const TOKEN_KEY = '@verly_token';
+
+// ── Token ─────────────────────────────────────────────────────────────────────
+
+export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
+export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
+export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
+
+// ── Fetch base ────────────────────────────────────────────────────────────────
+
+async function apiFetch(path, options = {}) {
+  const token = await getToken();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {}),
+  };
+
+  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  if (response.status === 401) {
+    await removeToken();
+    throw new Error('UNAUTHORIZED');
+  }
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  return data;
+}
+
+// ── Upload (multipart) ────────────────────────────────────────────────────────
+
+async function apiUpload(path, formData) {
+  const token = await getToken();
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: formData,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export const authAPI = {
+  login:    (email, password) =>
+    apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  register: (nome, email, password) =>
+    apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
+  me:       () => apiFetch('/auth/me'),
+  updateMe: (updates) =>
+    apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
+};
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+export const dashboardAPI = {
+  get: () => apiFetch('/dashboard'),
+};
+
+// ── Faturas ───────────────────────────────────────────────────────────────────
+
+export const faturasAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/faturas${query ? `?${query}` : ''}`);
+  },
+  detalhe: (id) => apiFetch(`/faturas/${id}`),
+  apagar:  (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
+  upload:  (fileUri, fileName, fileType) => {
+    const formData = new FormData();
+    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
+    return apiUpload('/faturas/upload', formData);
+  },
+};
+
+// ── Notificações ──────────────────────────────────────────────────────────────
+
+export const notificacoesAPI = {
+  listar: () => apiFetch('/notificacoes'),
+};
+
+// ── Chat ──────────────────────────────────────────────────────────────────────
+
+export const chatAPI = {
+  enviar:    (mensagem) =>
+    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
+  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
+  limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
+};
+
+// ── Subscrições ───────────────────────────────────────────────────────────────
+
+export const subscricoesAPI = {
+  listar: () => apiFetch('/subscricoes'),
+};
+
+// ── Metas ─────────────────────────────────────────────────────────────────────
+
+export const metasAPI = {
+  listar: () => apiFetch('/metas'),
+  criar:  (nome, limite, categoria) =>
+    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
+  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+};
+
+// ── Estatísticas ──────────────────────────────────────────────────────────────
+
+export const estatisticasAPI = {
+  get: () => apiFetch('/estatisticas'),
+};
+
+// ── Score de Compras ──────────────────────────────────────────────────────────
+
+export const scoreAPI = {
+  analisar: ({ item, preco, categoria, uso }) =>
+    apiFetch('/scoring/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ item, preco, categoria, uso }),
+    }),
+
+  scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
+
+  lojasProximas: ({ item, categoria, lat, lng }) =>
+    apiFetch('/scoring/lojas-proximas', {
+      method: 'POST',
+      body: JSON.stringify({ item, categoria, lat, lng }),
+    }),
+};
+
+// ── Impulse Control ───────────────────────────────────────────────────────────
+
+export const impulseAPI = {
+  analisar: ({ produto, personalidade }) =>
+    apiFetch('/impulse/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ produto, personalidade }),
+    }),
+};
+
+// ── Relatório Mensal ──────────────────────────────────────────────────────────
+
+export const relatorioAPI = {
+  get: (mes = null, ano = null) => {
+    const params = new URLSearchParams();
+    if (mes) params.set('mes', mes);
+    if (ano) params.set('ano', ano);
+    const query = params.toString();
+    return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
+  },
+};
+
+// ── Histórico ─────────────────────────────────────────────────────────────────
+
+export const historicoAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/historico/api${query ? `?${query}` : ''}`);
+  },
+};
 </file>
 
 <file path="app/auth.py">
@@ -14017,6 +16535,7 @@ Werkzeug==3.1.8
 wrapt==2.1.2
 WTForms==3.2.2
 yarl==1.23.0
+flask-cors
 </file>
 
 <file path="app/__init__.py">
@@ -14037,6 +16556,7 @@ from flask import Flask, redirect, url_for, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
+from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from datetime import timedelta
 from dotenv import load_dotenv
@@ -14063,6 +16583,9 @@ def create_app(config_override=None):
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+
+    # ✅ CORS — permite pedidos da app mobile e do browser
+    CORS(app, resources={r"/api/*": {"origins": "*"}})
 
     # ✅ JWT (Configurado dentro da função)
     jwt = JWTManager(app)
@@ -14142,7 +16665,7 @@ def create_app(config_override=None):
     from app.configuracoes  import configuracoes_bp
     from app.notificacoes   import notificacoes_bp
     from app.email_routes   import email_bp
-    
+
     # ✅ NOVO: Importar Blueprint da API
     from app.api            import api_bp
 
@@ -14165,7 +16688,7 @@ def create_app(config_override=None):
     app.register_blueprint(configuracoes_bp)
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(email_bp)
-    
+
     # ✅ NOVO: Registar Blueprint da API com o prefixo v1
     app.register_blueprint(api_bp, url_prefix='/api/v1')
 
