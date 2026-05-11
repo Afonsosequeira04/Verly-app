@@ -81,6 +81,7 @@ dados_utilizadores/5/sephora_skincare.txt
 enviar_alertas.py
 migration_personalidade.py
 NOTAS.md
+package.json
 README.md
 requirements.txt
 run.py
@@ -127,6 +128,7 @@ templates/scoring.html
 templates/subscriptions.html
 verly-mobile/.npmrc
 verly-mobile/App.js
+verly-mobile/babel.config.js
 verly-mobile/package.json
 verly-mobile/src/components/DrawerContent.js
 verly-mobile/src/components/TabIcon.js
@@ -153,6 +155,24 @@ verly-mobile/src/services/api.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="package.json">
+{
+  "dependencies": {
+    "react-native-worklets": "^0.8.3"
+  }
+}
+</file>
+
+<file path="verly-mobile/babel.config.js">
+module.exports = function (api) {
+  api.cache(true);
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: ['react-native-reanimated/plugin'],
+  };
+};
+</file>
 
 <file path="app/api/auth.py">
 """
@@ -2794,7 +2814,7 @@ from app import create_app
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
 </file>
 
 <file path="security.py">
@@ -4006,10 +4026,7 @@ legacy-peer-deps=true
 </file>
 
 <file path="verly-mobile/App.js">
-/**
- * App.js — Ponto de entrada da app Verly Mobile
- */
-
+import 'react-native-gesture-handler';
 import React from 'react';
 import { StatusBar } from 'react-native';
 import { AuthProvider } from './src/context/AuthContext';
@@ -4026,233 +4043,222 @@ export default function App() {
 </file>
 
 <file path="verly-mobile/src/components/DrawerContent.js">
-/**
- * src/components/DrawerContent.js
- * Menu lateral deslizável — perfil do utilizador + todos os ecrãs + logout
- */
-
-import React from 'react';
+import 'react-native-gesture-handler';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity,
-  ScrollView, SafeAreaView,
+  ActivityIndicator, View, Text, StyleSheet,
+  TouchableOpacity, ScrollView, SafeAreaView,
 } from 'react-native';
-import { useAuth } from '../context/AuthContext';
-import {
-  LayoutDashboard, FileText, MessageSquare, Target,
-  User, Bell, CreditCard, BarChart2, Star, Brain,
-  FileBarChart, History, LogOut, ChevronRight, Shield,
-} from 'lucide-react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-const C = {
-  bg:       '#0C0C14',
-  surface:  '#13131F',
-  surface2: '#1C1C2E',
-  border:   '#252540',
-  brand:    '#6C5CE7',
-  brandDim: 'rgba(108,92,231,0.15)',
-  text:     '#EEEEF8',
-  textSub:  '#7070A0',
-  red:      '#FF5370',
-  green:    '#00C896',
+import { useAuth } from '../context/AuthContext';
+import { notificacoesAPI } from '../services/api';
+
+import LoginScreen         from '../screens/auth/LoginScreen';
+import RegisterScreen      from '../screens/auth/RegisterScreen';
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
+import MetasScreen         from '../screens/MetasScreen';
+import EstatisticasScreen  from '../screens/EstatisticasScreen';
+import ScoreScreen         from '../screens/ScoreScreen';
+import ImpulseScreen       from '../screens/ImpulseScreen';
+import RelatorioScreen     from '../screens/RelatorioScreen';
+import HistoricoScreen     from '../screens/HistoricoScreen';
+
+import TabIcon from '../components/TabIcon';
+
+const Stack     = createStackNavigator();
+const AuthStack = createStackNavigator();
+const MainStack = createStackNavigator();
+const Tab       = createBottomTabNavigator();
+
+export const COLORS = {
+  brand:   '#6C5CE7',
+  bg:      '#0C0C14',
+  surface: '#13131F',
+  surface2:'#1C1C2E',
+  border:  '#252540',
+  text:    '#EEEEF8',
+  textSub: '#7070A0',
+  red:     '#FF5370',
+  green:   '#00C896',
+  yellow:  '#FFB300',
+  brandDim:'rgba(108,92,231,0.15)',
 };
 
-const MAIN_ITEMS = [
-  { screen: 'Dashboard',   label: 'Início',       Icon: LayoutDashboard },
-  { screen: 'Faturas',     label: 'Faturas',       Icon: FileText        },
-  { screen: 'Chat',        label: 'Chat IA',       Icon: MessageSquare   },
-  { screen: 'Metas',       label: 'Metas',         Icon: Target          },
-  { screen: 'Perfil',      label: 'Perfil',        Icon: User            },
-];
-
-const TOOLS_ITEMS = [
-  { screen: 'Historico',    label: 'Histórico',    Icon: History         },
-  { screen: 'Relatorio',   label: 'Relatório',     Icon: FileBarChart    },
-  { screen: 'Score',       label: 'Score',          Icon: Star            },
-  { screen: 'Impulse',     label: 'Impulse Control',Icon: Brain           },
-  { screen: 'Estatisticas',label: 'Estatísticas',  Icon: BarChart2       },
-  { screen: 'Subscricoes', label: 'Subscrições',   Icon: Shield          },
-];
-
-const BOTTOM_ITEMS = [
-  { screen: 'Notificacoes', label: 'Notificações', Icon: Bell },
-];
-
-function DrawerItem({ item, onPress, active, badge }) {
-  const { Icon, label } = item;
-  return (
-    <TouchableOpacity
-      style={[styles.item, active && styles.itemActive]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <View style={[styles.itemIcon, active && styles.itemIconActive]}>
-        <Icon size={17} color={active ? C.brand : C.textSub} strokeWidth={active ? 2.2 : 1.8} />
-      </View>
-      <Text style={[styles.itemLabel, active && styles.itemLabelActive]}>{label}</Text>
-      {badge > 0 && (
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{badge > 9 ? '9+' : badge}</Text>
-        </View>
-      )}
-      {active && <ChevronRight size={14} color={C.brand} style={{ marginLeft: 'auto' }} />}
-    </TouchableOpacity>
-  );
-}
-
-function SectionLabel({ label }) {
-  return <Text style={styles.sectionLabel}>{label}</Text>;
-}
-
-export default function DrawerContent({ navigation, state, notifCount = 0 }) {
+// ── Menu Screen (replaces drawer) ─────────────────────────────────────────
+function MenuScreen({ navigation }) {
   const { user, logout } = useAuth();
 
-  // Nome da rota activa
-  const activeRoute = state?.routeNames?.[state?.index] ?? '';
-
-  const navigate = (screen) => {
-    navigation.closeDrawer();
-    // Tabs principais navegam dentro dos tabs; secundários via MainStack
-    const tabScreens = ['Dashboard', 'Faturas', 'Chat', 'Metas', 'Perfil'];
-    if (tabScreens.includes(screen)) {
-      navigation.navigate('Tabs', { screen });
-    } else {
-      navigation.navigate(screen);
-    }
-  };
-
-  const handleLogout = async () => {
-    navigation.closeDrawer();
-    await logout();
-  };
-
-  // Iniciais do nome
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : '?';
 
+  const items = [
+    { label: 'Histórico',       screen: 'Historico'    },
+    { label: 'Relatório',       screen: 'Relatorio'    },
+    { label: 'Score',           screen: 'Score'        },
+    { label: 'Impulse Control', screen: 'Impulse'      },
+    { label: 'Estatísticas',    screen: 'Estatisticas' },
+    { label: 'Subscrições',     screen: 'Subscricoes'  },
+    { label: 'Notificações',    screen: 'Notificacoes' },
+  ];
+
   return (
-    <SafeAreaView style={styles.root}>
-      {/* Cabeçalho — perfil */}
-      <View style={styles.profileWrap}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      <ScrollView contentContainerStyle={{ padding: 24 }}>
+        {/* Profile */}
+        <View style={mStyles.profileRow}>
+          <View style={mStyles.avatar}>
+            <Text style={mStyles.avatarText}>{initials}</Text>
+          </View>
+          <View>
+            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
+            <Text style={mStyles.email}>{user?.email || ''}</Text>
+          </View>
         </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.profileName} numberOfLines={1}>{user?.nome || 'Utilizador'}</Text>
-          <Text style={styles.profileEmail} numberOfLines={1}>{user?.email || ''}</Text>
-        </View>
-      </View>
 
-      <View style={styles.divider} />
+        <View style={mStyles.divider} />
 
-      <ScrollView
-        style={styles.scroll}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 24 }}
-      >
-        {/* Navegação principal */}
-        <SectionLabel label="PRINCIPAL" />
-        {MAIN_ITEMS.map(item => (
-          <DrawerItem
+        {items.map(item => (
+          <TouchableOpacity
             key={item.screen}
-            item={item}
-            active={activeRoute === item.screen}
-            onPress={() => navigate(item.screen)}
-          />
+            style={mStyles.item}
+            onPress={() => navigation.navigate(item.screen)}
+            activeOpacity={0.7}
+          >
+            <Text style={mStyles.itemText}>{item.label}</Text>
+            <Text style={{ color: COLORS.textSub }}>›</Text>
+          </TouchableOpacity>
         ))}
 
-        <View style={styles.divider} />
+        <View style={mStyles.divider} />
 
-        {/* Ferramentas */}
-        <SectionLabel label="FERRAMENTAS" />
-        {TOOLS_ITEMS.map(item => (
-          <DrawerItem
-            key={item.screen}
-            item={item}
-            active={activeRoute === item.screen}
-            onPress={() => navigate(item.screen)}
-          />
-        ))}
-
-        <View style={styles.divider} />
-
-        {/* Notificações */}
-        {BOTTOM_ITEMS.map(item => (
-          <DrawerItem
-            key={item.screen}
-            item={item}
-            active={activeRoute === item.screen}
-            badge={item.screen === 'Notificacoes' ? notifCount : 0}
-            onPress={() => navigate(item.screen)}
-          />
-        ))}
+        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
+          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
+        </TouchableOpacity>
       </ScrollView>
-
-      {/* Rodapé — logout */}
-      <View style={styles.divider} />
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.7}>
-        <LogOut size={17} color={C.red} strokeWidth={1.8} />
-        <Text style={styles.logoutText}>Terminar Sessão</Text>
-      </TouchableOpacity>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: C.bg },
-  scroll: { flex: 1 },
-
-  profileWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    paddingHorizontal: 20, paddingTop: 24, paddingBottom: 20,
-  },
+const mStyles = StyleSheet.create({
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
   avatar: {
     width: 46, height: 46, borderRadius: 14,
-    backgroundColor: C.brandDim,
-    borderWidth: 1.5, borderColor: C.brand,
+    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarText:   { fontSize: 17, fontWeight: '800', color: C.brand },
-  profileName:  { fontSize: 15, fontWeight: '700', color: C.text, marginBottom: 2 },
-  profileEmail: { fontSize: 12, color: C.textSub },
-
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 8, marginHorizontal: 20 },
-
-  sectionLabel: {
-    fontSize: 10, fontWeight: '700', color: C.textSub,
-    letterSpacing: 1.2, textTransform: 'uppercase',
-    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4,
-  },
-
+  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:      { fontSize: 12, color: COLORS.textSub },
+  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
   item: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 20, paddingVertical: 11,
-    marginHorizontal: 8, borderRadius: 12,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
   },
-  itemActive: { backgroundColor: C.brandDim },
-  itemIcon: {
-    width: 34, height: 34, borderRadius: 9,
-    backgroundColor: C.surface2,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  itemIconActive: { backgroundColor: 'rgba(108,92,231,0.25)' },
-  itemLabel:      { fontSize: 14, fontWeight: '600', color: C.textSub, flex: 1 },
-  itemLabelActive:{ color: C.text, fontWeight: '700' },
-
-  badge: {
-    backgroundColor: C.red, borderRadius: 10,
-    minWidth: 20, height: 20,
-    justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 5,
-  },
-  badgeText: { fontSize: 10, fontWeight: '800', color: '#fff' },
-
-  logoutBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingHorizontal: 28, paddingVertical: 20,
-  },
-  logoutText: { fontSize: 14, fontWeight: '700', color: C.red },
+  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  logout:     { paddingVertical: 14 },
+  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
 });
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function MainTabs({ navigation }) {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+        headerTintColor: COLORS.text,
+        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
+        headerRight: () => (
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
+            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
+        ),
+        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
+        tabBarActiveTintColor: COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
+      })}
+    >
+      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
+      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
+      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
+      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
+    </Tab.Navigator>
+  );
+}
+
+// ── Main Stack ────────────────────────────────────────────────────────────
+function MainStackNav() {
+  const commonHeader = {
+    headerShown: true,
+    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    headerTintColor: COLORS.text,
+    headerTitleStyle: { fontWeight: '800', fontSize: 17 },
+    headerBackTitleVisible: false,
+  };
+
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
+      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
+      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
+      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
+      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
+    </MainStack.Navigator>
+  );
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainStackNav} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
 </file>
 
 <file path="verly-mobile/src/constants/theme.js">
@@ -5008,562 +5014,16 @@ const styles = StyleSheet.create({
 </file>
 
 <file path="verly-mobile/src/screens/HistoricoScreen.js">
-/**
- * src/screens/ScoreScreen.js
- * "Valeu a Pena?" — Score de Compras
- * Design polished: SVG circle, Lucide icons, mapa de lojas via WebView+Leaflet
- */
+import React from 'react';
+import { View, Text } from 'react-native';
 
-import React, { useState, useRef } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Platform,
-  Dimensions,
-} from 'react-native';
-import { WebView } from 'react-native-webview';
-import Svg, { Circle } from 'react-native-svg';
-import {
-  ShoppingBag, Tag, Zap, Calendar, TrendingDown,
-  ChevronDown, ChevronUp, MapPin, Star, AlertTriangle,
-  CheckCircle, Clock, X,
-} from 'lucide-react-native';
-import * as Location from 'expo-location';
-import { scoreAPI } from '../services/api';
-
-const { width: SCREEN_W } = Dimensions.get('window');
-
-const C = {
-  brand:    '#6C5CE7',
-  brandDim: 'rgba(108,92,231,0.15)',
-  bg:       '#0C0C14',
-  surface:  '#13131F',
-  surface2: '#1C1C2E',
-  border:   '#252540',
-  text:     '#EEEEF8',
-  textSub:  '#7070A0',
-  green:    '#00C896',
-  red:      '#FF5370',
-  yellow:   '#FFB300',
-  orange:   '#FF7043',
-};
-
-const CATEGORIAS = [
-  'Alimentação','Vestuário','Tecnologia','Saúde & Beleza',
-  'Entretenimento','Casa & Decoração','Desporto','Educação',
-  'Transportes','Outros',
-];
-
-const USO_OPTIONS = [
-  { key: 'daily',   label: 'Diário',    Icon: Zap },
-  { key: 'weekly',  label: 'Semanal',   Icon: Calendar },
-  { key: 'monthly', label: 'Mensal',    Icon: Clock },
-  { key: 'rarely',  label: 'Raramente', Icon: TrendingDown },
-  { key: 'never',   label: 'Nunca',     Icon: X },
-];
-
-// ── SVG Score Circle ──────────────────────────────────────────────────────────
-
-function ScoreCircle({ score, color }) {
-  const SIZE = 120;
-  const R    = 50;
-  const STROKE = 8;
-  const circ = 2 * Math.PI * R;
-  const dash = (score / 100) * circ;
-
+export default function HistoricoScreen() {
   return (
-    <View style={{ width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' }}>
-      <Svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`}>
-        {/* Track */}
-        <Circle
-          cx={SIZE / 2} cy={SIZE / 2} r={R}
-          fill="none"
-          stroke={C.surface2}
-          strokeWidth={STROKE}
-        />
-        {/* Progress */}
-        <Circle
-          cx={SIZE / 2} cy={SIZE / 2} r={R}
-          fill="none"
-          stroke={color}
-          strokeWidth={STROKE}
-          strokeDasharray={`${dash} ${circ}`}
-          strokeLinecap="round"
-          rotation="-90"
-          originX={SIZE / 2}
-          originY={SIZE / 2}
-        />
-      </Svg>
-      <View style={{ position: 'absolute', alignItems: 'center' }}>
-        <Text style={{ fontSize: 28, fontWeight: '900', color, letterSpacing: -1 }}>{score}</Text>
-        <Text style={{ fontSize: 10, color: C.textSub, fontWeight: '600' }}>/100</Text>
-      </View>
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0C0C14' }}>
+      <Text style={{ color: 'white' }}>Histórico em breve</Text>
     </View>
   );
 }
-
-// ── Lojas Map WebView ─────────────────────────────────────────────────────────
-
-function MapaLojas({ lojas, userLat, userLng, item }) {
-  if (!lojas || lojas.length === 0 || userLat == null) return null;
-
-  const html = `
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:#0C0C14; font-family: -apple-system, sans-serif; }
-  #map { width:100%; height:220px; }
-  .leaflet-container { background:#0C0C14 !important; }
-  #list { max-height:160px; overflow-y:auto; padding:0 12px; }
-  .loja { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid #252540; }
-  .loja:last-child { border-bottom:none; }
-  .num { width:24px; height:24px; background:linear-gradient(135deg,#6C5CE7,#9B8FFF);
-         border-radius:6px; display:flex; align-items:center; justify-content:center;
-         font-size:11px; font-weight:800; color:white; flex-shrink:0; }
-  .info { flex:1; min-width:0; }
-  .nome { font-size:13px; font-weight:600; color:#EEEEF8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .end  { font-size:11px; color:#7070A0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .dist { font-size:11px; color:#6C5CE7; font-weight:700; flex-shrink:0; }
-</style>
-</head>
-<body>
-<div id="map"></div>
-<div id="list">
-  ${lojas.map((l, i) => `
-    <div class="loja">
-      <div class="num">${i + 1}</div>
-      <div class="info">
-        <div class="nome">${l.nome}</div>
-        ${l.endereco ? `<div class="end">${l.endereco}</div>` : ''}
-      </div>
-      ${l.distancia ? `<div class="dist">${l.distancia}</div>` : ''}
-    </div>
-  `).join('')}
-</div>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-const map = L.map('map', { zoomControl:false, attributionControl:false })
-             .setView([${userLat},${userLng}], 14);
-
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom:19 })
- .addTo(map);
-
-// Utilizador
-L.marker([${userLat},${userLng}], {
-  icon: L.divIcon({
-    html:'<div style="width:12px;height:12px;background:#6C5CE7;border:3px solid white;border-radius:50%;box-shadow:0 0 8px rgba(108,92,231,0.8);"></div>',
-    className:'', iconAnchor:[6,6]
-  })
-}).addTo(map).bindPopup('A tua localização');
-
-const lojas = ${JSON.stringify(lojas)};
-lojas.forEach((l, i) => {
-  L.marker([l.lat, l.lng], {
-    icon: L.divIcon({
-      html:\`<div style="width:26px;height:26px;background:linear-gradient(135deg,#6C5CE7,#9B8FFF);border:2px solid white;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:white;box-shadow:0 2px 8px rgba(0,0,0,0.5);">\${i+1}</div>\`,
-      className:'', iconAnchor:[13,13]
-    })
-  }).addTo(map).bindPopup(\`<b>\${l.nome}</b>\${l.endereco ? '<br>'+l.endereco : ''}\`);
-});
-</script>
-</body>
-</html>
-`;
-
-  return (
-    <View style={styles.mapaCard}>
-      <View style={styles.mapaHeader}>
-        <MapPin size={14} color={C.brand} />
-        <Text style={styles.mapaTitle}>{lojas.length} loja{lojas.length !== 1 ? 's' : ''} próximas para "{item}"</Text>
-      </View>
-      <WebView
-        source={{ html }}
-        style={{ width: '100%', height: 380, backgroundColor: C.bg }}
-        scrollEnabled={false}
-        javaScriptEnabled
-      />
-    </View>
-  );
-}
-
-// ── Main Screen ───────────────────────────────────────────────────────────────
-
-export default function ScoreScreen() {
-  const [item,       setItem]       = useState('');
-  const [preco,      setPreco]      = useState('');
-  const [categoria,  setCategoria]  = useState('Tecnologia');
-  const [uso,        setUso]        = useState('monthly');
-  const [showCats,   setShowCats]   = useState(false);
-  const [loading,    setLoading]    = useState(false);
-  const [resultado,  setResultado]  = useState(null);
-  const [lojas,      setLojas]      = useState([]);
-  const [userLat,    setUserLat]    = useState(null);
-  const [userLng,    setUserLng]    = useState(null);
-  const [loadingMap, setLoadingMap] = useState(false);
-
-  const scoreColor = (s) => {
-    if (s >= 75) return C.green;
-    if (s >= 50) return C.yellow;
-    if (s >= 30) return C.orange;
-    return C.red;
-  };
-
-  const chipStyle = (type) => {
-    const map = {
-      good: { bg: 'rgba(0,200,150,0.12)',  border: C.green,  text: C.green  },
-      bad:  { bg: 'rgba(255,83,112,0.12)', border: C.red,    text: C.red    },
-      mid:  { bg: 'rgba(255,179,0,0.12)',  border: C.yellow, text: C.yellow },
-    };
-    return map[type] || map.mid;
-  };
-
-  const buscarLojas = async (itemNome, cat) => {
-    setLoadingMap(true);
-    setLojas([]);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLoadingMap(false);
-        return;
-      }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const lat = loc.coords.latitude;
-      const lng = loc.coords.longitude;
-      setUserLat(lat);
-      setUserLng(lng);
-
-      const token = await import('../services/api').then(m => m.getToken ? m.getToken() : null);
-      const resp = await fetch('http://127.0.0.1:5000/api/v1/scoring/lojas-proximas', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ item: itemNome, categoria: cat, lat, lng }),
-      });
-      const data = await resp.json();
-      if (data.success && data.lojas?.length > 0) {
-        setLojas(data.lojas);
-      }
-    } catch (e) {
-      // silently fail — mapa não é crítico
-    } finally {
-      setLoadingMap(false);
-    }
-  };
-
-  const analisar = async () => {
-    if (!preco || isNaN(parseFloat(preco))) {
-      Alert.alert('Atenção', 'Insere um preço válido.');
-      return;
-    }
-    setLoading(true);
-    setResultado(null);
-    setLojas([]);
-    try {
-      const data = await scoreAPI.analisar({
-        item: item || 'Item',
-        preco: parseFloat(preco),
-        categoria,
-        uso,
-      });
-      if (data.success) {
-        setResultado(data.resultado);
-        // buscar lojas em paralelo (não bloqueia o resultado)
-        buscarLojas(item || categoria, categoria);
-      }
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Valeu a Pena?</Text>
-        <Text style={styles.headerSub}>Analisa qualquer compra antes ou depois de a fazer</Text>
-      </View>
-
-      {/* Form Card */}
-      <View style={styles.card}>
-
-        {/* Produto */}
-        <Text style={styles.label}>Produto ou serviço</Text>
-        <View style={styles.inputWrap}>
-          <ShoppingBag size={16} color={C.textSub} style={{ marginRight: 10 }} />
-          <TextInput
-            style={styles.inputText}
-            value={item}
-            onChangeText={setItem}
-            placeholder="ex: iPhone 15, Sapatilhas Nike..."
-            placeholderTextColor={C.textSub}
-          />
-        </View>
-
-        {/* Preço */}
-        <Text style={styles.label}>Preço (€)</Text>
-        <View style={styles.inputWrap}>
-          <Tag size={16} color={C.textSub} style={{ marginRight: 10 }} />
-          <TextInput
-            style={styles.inputText}
-            value={preco}
-            onChangeText={setPreco}
-            placeholder="0.00"
-            placeholderTextColor={C.textSub}
-            keyboardType="decimal-pad"
-          />
-        </View>
-
-        {/* Categoria — dropdown */}
-        <Text style={styles.label}>Categoria</Text>
-        <TouchableOpacity style={styles.selectWrap} onPress={() => setShowCats(!showCats)}>
-          <Text style={styles.selectText}>{categoria}</Text>
-          {showCats
-            ? <ChevronUp size={16} color={C.textSub} />
-            : <ChevronDown size={16} color={C.textSub} />
-          }
-        </TouchableOpacity>
-        {showCats && (
-          <View style={styles.dropdown}>
-            {CATEGORIAS.map(cat => (
-              <TouchableOpacity
-                key={cat}
-                style={[styles.dropItem, cat === categoria && styles.dropItemActive]}
-                onPress={() => { setCategoria(cat); setShowCats(false); }}
-              >
-                <Text style={[styles.dropItemText, cat === categoria && { color: C.brand }]}>
-                  {cat}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* Frequência de uso — chips com ícones Lucide */}
-        <Text style={styles.label}>Com que frequência usas?</Text>
-        <View style={styles.usoGrid}>
-          {USO_OPTIONS.map(op => {
-            const active = uso === op.key;
-            const { Icon } = op;
-            return (
-              <TouchableOpacity
-                key={op.key}
-                style={[styles.usoBtn, active && styles.usoBtnActive]}
-                onPress={() => setUso(op.key)}
-              >
-                <Icon size={15} color={active ? C.brand : C.textSub} />
-                <Text style={[styles.usoLabel, active && { color: C.brand }]}>{op.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* CTA */}
-        <TouchableOpacity
-          style={[styles.btn, loading && { opacity: 0.6 }]}
-          onPress={analisar}
-          disabled={loading}
-        >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.btnText}>Analisar Compra</Text>
-          }
-        </TouchableOpacity>
-      </View>
-
-      {/* Resultado */}
-      {resultado && (() => {
-        const sc = scoreColor(resultado.score);
-        return (
-          <>
-            <View style={styles.card}>
-
-              {/* Score row */}
-              <View style={styles.resultRow}>
-                <ScoreCircle score={resultado.score} color={sc} />
-                <View style={{ flex: 1, marginLeft: 20 }}>
-                  <Text style={[styles.resultLabel, { color: sc }]}>{resultado.label}</Text>
-                  <Text style={styles.resultMsg}>{resultado.message}</Text>
-                </View>
-              </View>
-
-              {/* Chips good/bad/mid */}
-              {resultado.chips?.length > 0 && (
-                <View style={styles.chips}>
-                  {resultado.chips.map((chip, i) => {
-                    const cs = chipStyle(chip.type);
-                    return (
-                      <View key={i} style={[styles.chip, { backgroundColor: cs.bg, borderColor: cs.border }]}>
-                        <Text style={[styles.chipText, { color: cs.text }]}>{chip.text}</Text>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-
-              {/* Comparação de mercado */}
-              {resultado.preco_medio_mercado && (
-                <View style={styles.mercadoBox}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                    <Star size={13} color={C.brand} />
-                    <Text style={styles.mercadoTitle}>Comparação de Mercado</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={styles.mercadoSub}>Preço médio em Portugal</Text>
-                    <Text style={[styles.mercadoVal, { color: C.brand }]}>
-                      {resultado.preco_medio_mercado.toFixed(2)}€
-                    </Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    <Text style={styles.mercadoSub}>Avaliação</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {resultado.avaliacao_mercado === 'barato'     && <CheckCircle  size={13} color={C.green}  />}
-                      {resultado.avaliacao_mercado === 'caro'       && <AlertTriangle size={13} color={C.orange} />}
-                      {resultado.avaliacao_mercado === 'muito_caro' && <AlertTriangle size={13} color={C.red}    />}
-                      <Text style={[styles.mercadoVal, {
-                        color: resultado.avaliacao_mercado === 'barato'     ? C.green
-                             : resultado.avaliacao_mercado === 'caro'       ? C.orange
-                             : resultado.avaliacao_mercado === 'muito_caro' ? C.red
-                             : C.textSub,
-                      }]}>
-                        {resultado.avaliacao_mercado === 'barato'     ? 'Bom negócio'
-                       : resultado.avaliacao_mercado === 'caro'       ? 'Acima do mercado'
-                       : resultado.avaliacao_mercado === 'muito_caro' ? 'Muito caro'
-                       : 'Preço justo'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-            </View>
-
-            {/* Loading do mapa */}
-            {loadingMap && (
-              <View style={styles.mapaLoading}>
-                <ActivityIndicator color={C.brand} size="small" />
-                <Text style={styles.mapaLoadingText}>A procurar lojas próximas...</Text>
-              </View>
-            )}
-
-            {/* Mapa Leaflet via WebView */}
-            {!loadingMap && lojas.length > 0 && (
-              <MapaLojas
-                lojas={lojas}
-                userLat={userLat}
-                userLng={userLng}
-                item={item || categoria}
-              />
-            )}
-          </>
-        );
-      })()}
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: C.bg },
-  content: { paddingBottom: 48 },
-
-  header:      { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24 },
-  headerTitle: { fontSize: 30, fontWeight: '800', color: C.text, letterSpacing: -0.5, marginBottom: 6 },
-  headerSub:   { fontSize: 14, color: C.textSub, lineHeight: 20 },
-
-  card: {
-    marginHorizontal: 16, marginBottom: 14,
-    backgroundColor: C.surface,
-    borderRadius: 18, padding: 20,
-    borderWidth: 1, borderColor: C.border,
-  },
-
-  label: {
-    fontSize: 12, fontWeight: '700', color: C.textSub,
-    marginBottom: 8, marginTop: 18,
-    letterSpacing: 0.5, textTransform: 'uppercase',
-  },
-
-  inputWrap: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.surface2,
-    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
-    borderWidth: 1, borderColor: C.border,
-  },
-  inputText: { flex: 1, color: C.text, fontSize: 15 },
-
-  selectWrap: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: C.surface2, borderRadius: 12,
-    paddingHorizontal: 14, paddingVertical: 13,
-    borderWidth: 1, borderColor: C.border,
-  },
-  selectText:     { color: C.text, fontSize: 15 },
-  dropdown:       { backgroundColor: C.surface2, borderRadius: 12, borderWidth: 1, borderColor: C.border, marginTop: 4, overflow: 'hidden' },
-  dropItem:       { paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: C.border },
-  dropItemActive: { backgroundColor: C.brandDim },
-  dropItemText:   { color: C.text, fontSize: 14 },
-
-  usoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  usoBtn: {
-    flex: 1, minWidth: 58, flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: C.surface2, borderRadius: 10,
-    paddingHorizontal: 10, paddingVertical: 10,
-    borderWidth: 1, borderColor: C.border, justifyContent: 'center',
-  },
-  usoBtnActive: { borderColor: C.brand, backgroundColor: C.brandDim },
-  usoLabel:     { fontSize: 11, fontWeight: '700', color: C.textSub },
-
-  btn: {
-    backgroundColor: C.brand, borderRadius: 14, padding: 16,
-    alignItems: 'center', marginTop: 22,
-  },
-  btnText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 0.2 },
-
-  resultRow:   { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-  resultLabel: { fontSize: 20, fontWeight: '800', marginBottom: 6, letterSpacing: -0.3 },
-  resultMsg:   { fontSize: 13, color: C.textSub, lineHeight: 19 },
-
-  chips:    { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
-  chip:     { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1 },
-  chipText: { fontSize: 12, fontWeight: '700' },
-
-  mercadoBox: {
-    backgroundColor: C.surface2, borderRadius: 12, padding: 14,
-    borderWidth: 1, borderColor: C.border, marginTop: 4,
-  },
-  mercadoTitle: { fontSize: 13, fontWeight: '700', color: C.text },
-  mercadoSub:   { fontSize: 12, color: C.textSub },
-  mercadoVal:   { fontSize: 13, fontWeight: '800' },
-
-  mapaLoading: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    marginHorizontal: 16, marginBottom: 14,
-    backgroundColor: C.surface, borderRadius: 14, padding: 16,
-    borderWidth: 1, borderColor: C.border,
-  },
-  mapaLoadingText: { color: C.textSub, fontSize: 13 },
-
-  mapaCard: {
-    marginHorizontal: 16, marginBottom: 14,
-    backgroundColor: C.surface, borderRadius: 18,
-    borderWidth: 1, borderColor: C.border,
-    overflow: 'hidden',
-  },
-  mapaHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    padding: 14, borderBottomWidth: 1, borderBottomColor: C.border,
-  },
-  mapaTitle: { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
-});
 </file>
 
 <file path="verly-mobile/src/screens/ImpulseScreen.js">
@@ -6545,348 +6005,16 @@ const styles = StyleSheet.create({
 </file>
 
 <file path="verly-mobile/src/screens/ScoreScreen.js">
-/**
- * src/screens/ScoreScreen.js
- * Valeu a Pena? — Score de compras
- * Design luxury dark · sem emojis · Lucide icons · círculo SVG animado
- */
+import React from 'react';
+import { View, Text } from 'react-native';
 
-import React, { useState, useRef } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Animated,
-} from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
-import {
-  ShoppingBag, Tag, RefreshCcw, TrendingUp, TrendingDown,
-  Minus, CheckCircle, XCircle, AlertCircle, ChevronDown,
-} from 'lucide-react-native';
-import { scoreAPI } from '../services/api';
-
-const C = {
-  bg:      '#0A0A12',
-  surface: '#111120',
-  surface2:'#181828',
-  surface3:'#1E1E32',
-  border:  '#22223A',
-  brand:   '#6C5CE7',
-  text:    '#F0F0F8',
-  textSub: '#6A6A90',
-  textMid: '#9898C0',
-  green:   '#00C896',
-  red:     '#FF5370',
-  yellow:  '#FFB300',
-};
-
-const CATEGORIAS = [
-  'Alimentação', 'Vestuário', 'Tecnologia', 'Casa & Decoração',
-  'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
-  'Educação', 'Outros',
-];
-
-const USOS = [
-  { key: 'daily',   label: 'Diário' },
-  { key: 'weekly',  label: 'Semanal' },
-  { key: 'monthly', label: 'Mensal' },
-  { key: 'yearly',  label: 'Anual' },
-  { key: 'once',    label: 'Uma vez' },
-];
-
-// ── Círculo de score SVG ──────────────────────────────────────────────────────
-function ScoreCircle({ score }) {
-  const r = 56;
-  const cx = 72;
-  const cy = 72;
-  const circ = 2 * Math.PI * r;
-  const pct = Math.max(0, Math.min(100, score)) / 100;
-  const offset = circ * (1 - pct);
-
-  const color =
-    score >= 70 ? C.green :
-    score >= 40 ? C.yellow :
-    C.red;
-
+export default function ScoreScreen() {
   return (
-    <View style={styles.circleWrap}>
-      <Svg width={144} height={144} viewBox="0 0 144 144">
-        {/* Track */}
-        <Circle
-          cx={cx} cy={cy} r={r}
-          fill="none"
-          stroke={C.surface3}
-          strokeWidth={10}
-        />
-        {/* Fill */}
-        <Circle
-          cx={cx} cy={cy} r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth={10}
-          strokeDasharray={circ}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          rotation="-90"
-          origin={`${cx},${cy}`}
-        />
-      </Svg>
-      <View style={styles.circleCenter}>
-        <Text style={[styles.circleScore, { color }]}>{score}</Text>
-        <Text style={styles.circleLabel}>/ 100</Text>
-      </View>
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0C0C14' }}>
+      <Text style={{ color: 'white' }}>Score em breve</Text>
     </View>
   );
 }
-
-// ── Selector pill ─────────────────────────────────────────────────────────────
-function PillSelector({ items, selected, onSelect }) {
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pillRow}>
-      {items.map(item => {
-        const key   = typeof item === 'string' ? item : item.key;
-        const label = typeof item === 'string' ? item : item.label;
-        const active = selected === key;
-        return (
-          <TouchableOpacity
-            key={key}
-            style={[styles.pill, active && styles.pillActive]}
-            onPress={() => onSelect(key)}
-          >
-            <Text style={[styles.pillText, active && styles.pillTextActive]}>{label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-  );
-}
-
-// ── Score verdict ─────────────────────────────────────────────────────────────
-function VerdictIcon({ recomendacao }) {
-  if (recomendacao === 'Compra') return <CheckCircle size={18} color={C.green} />;
-  if (recomendacao === 'Evitar') return <XCircle size={18} color={C.red} />;
-  return <AlertCircle size={18} color={C.yellow} />;
-}
-
-// ── Ecrã ──────────────────────────────────────────────────────────────────────
-export default function ScoreScreen() {
-  const [item,      setItem]      = useState('');
-  const [preco,     setPreco]     = useState('');
-  const [categoria, setCategoria] = useState('Tecnologia');
-  const [uso,       setUso]       = useState('monthly');
-  const [loading,   setLoading]   = useState(false);
-  const [resultado, setResultado] = useState(null);
-
-  const analisar = async () => {
-    if (!item.trim()) { Alert.alert('Atenção', 'Indica o nome do produto.'); return; }
-    const p = parseFloat(preco.replace(',', '.'));
-    if (!p || p <= 0) { Alert.alert('Atenção', 'Indica um preço válido.'); return; }
-
-    setLoading(true);
-    setResultado(null);
-    try {
-      const data = await scoreAPI.analisar({ item: item.trim(), preco: p, categoria, uso });
-      setResultado(data.resultado);
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const reset = () => {
-    setResultado(null);
-    setItem('');
-    setPreco('');
-  };
-
-  const scoreColor =
-    resultado?.score >= 70 ? C.green :
-    resultado?.score >= 40 ? C.yellow :
-    C.red;
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Form */}
-      <View style={styles.card}>
-        <Text style={styles.fieldLabel}>Produto</Text>
-        <View style={styles.inputRow}>
-          <ShoppingBag size={16} color={C.textSub} style={{ marginRight: 10 }} />
-          <TextInput
-            style={styles.input}
-            value={item}
-            onChangeText={setItem}
-            placeholder="Ex: iPhone 16 Pro"
-            placeholderTextColor={C.textSub}
-          />
-        </View>
-
-        <Text style={styles.fieldLabel}>Preço (€)</Text>
-        <View style={styles.inputRow}>
-          <Tag size={16} color={C.textSub} style={{ marginRight: 10 }} />
-          <TextInput
-            style={styles.input}
-            value={preco}
-            onChangeText={setPreco}
-            placeholder="0.00"
-            placeholderTextColor={C.textSub}
-            keyboardType="decimal-pad"
-          />
-        </View>
-
-        <Text style={styles.fieldLabel}>Categoria</Text>
-        <PillSelector items={CATEGORIAS} selected={categoria} onSelect={setCategoria} />
-
-        <Text style={[styles.fieldLabel, { marginTop: 16 }]}>Frequência de uso</Text>
-        <PillSelector items={USOS} selected={uso} onSelect={setUso} />
-
-        <TouchableOpacity
-          style={[styles.btn, loading && { opacity: 0.6 }]}
-          onPress={analisar}
-          disabled={loading}
-        >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.btnText}>Calcular Score</Text>
-          }
-        </TouchableOpacity>
-      </View>
-
-      {/* Resultado */}
-      {resultado && (
-        <View style={styles.card}>
-          {/* Círculo + Veredicto */}
-          <View style={styles.resultTop}>
-            <ScoreCircle score={resultado.score} />
-            <View style={styles.resultInfo}>
-              <Text style={styles.resultItem} numberOfLines={2}>{resultado.item}</Text>
-              <View style={[
-                styles.verdictBadge,
-                { backgroundColor: scoreColor + '18', borderColor: scoreColor + '40' },
-              ]}>
-                <VerdictIcon recomendacao={resultado.recomendacao} />
-                <Text style={[styles.verdictText, { color: scoreColor }]}>{resultado.recomendacao}</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Métricas */}
-          <View style={styles.metricsRow}>
-            {[
-              { label: 'Custo/Uso', value: `${resultado.custo_por_uso?.toFixed(2) ?? '—'}€` },
-              { label: 'Utilidade', value: `${resultado.utilidade ?? '—'}%` },
-              { label: 'Durabilidade', value: `${resultado.durabilidade ?? '—'}` },
-            ].map(m => (
-              <View key={m.label} style={styles.metricBox}>
-                <Text style={styles.metricVal}>{m.value}</Text>
-                <Text style={styles.metricLbl}>{m.label}</Text>
-              </View>
-            ))}
-          </View>
-
-          {/* Frase */}
-          {resultado.frase && (
-            <View style={styles.quoteBox}>
-              <Text style={styles.quoteText}>"{resultado.frase}"</Text>
-            </View>
-          )}
-
-          {/* Justificação */}
-          {resultado.justificacao && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <TrendingUp size={13} color={C.textSub} />
-                <Text style={styles.sectionTitle}>Análise</Text>
-              </View>
-              <Text style={styles.sectionText}>{resultado.justificacao}</Text>
-            </View>
-          )}
-
-          {/* Alternativas */}
-          {resultado.alternativas?.length > 0 && (
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Minus size={13} color={C.textSub} />
-                <Text style={styles.sectionTitle}>Alternativas</Text>
-              </View>
-              {resultado.alternativas.map((a, i) => (
-                <Text key={i} style={[styles.sectionText, { marginTop: 4 }]}>· {a}</Text>
-              ))}
-            </View>
-          )}
-
-          <TouchableOpacity style={styles.resetBtn} onPress={reset}>
-            <RefreshCcw size={14} color={C.textSub} />
-            <Text style={styles.resetText}>Analisar outro produto</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: C.bg },
-  content: { padding: 16, paddingBottom: 48 },
-
-  card: {
-    backgroundColor: C.surface, borderRadius: 18, padding: 20,
-    marginBottom: 14, borderWidth: 1, borderColor: C.border,
-  },
-
-  fieldLabel: { fontSize: 11, fontWeight: '700', color: C.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, marginTop: 18 },
-
-  inputRow: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.surface2, borderRadius: 12,
-    borderWidth: 1, borderColor: C.border,
-    paddingHorizontal: 14, paddingVertical: 12,
-  },
-  input: { flex: 1, color: C.text, fontSize: 15 },
-
-  pillRow: { flexDirection: 'row', gap: 8, paddingVertical: 2 },
-  pill:    { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border },
-  pillActive:     { backgroundColor: C.brand + '22', borderColor: C.brand },
-  pillText:       { fontSize: 13, color: C.textSub, fontWeight: '600' },
-  pillTextActive: { color: C.brand },
-
-  btn:     { backgroundColor: C.brand, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 22 },
-  btnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
-
-  // Resultado
-  resultTop:   { flexDirection: 'row', alignItems: 'center', gap: 20, marginBottom: 20 },
-  circleWrap:  { position: 'relative', width: 144, height: 144, alignItems: 'center', justifyContent: 'center' },
-  circleCenter:{ position: 'absolute', alignItems: 'center' },
-  circleScore: { fontSize: 36, fontWeight: '900', lineHeight: 40 },
-  circleLabel: { fontSize: 12, color: C.textSub, fontWeight: '600' },
-  resultInfo:  { flex: 1, gap: 12 },
-  resultItem:  { fontSize: 17, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
-
-  verdictBadge: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, borderWidth: 1, alignSelf: 'flex-start' },
-  verdictText:  { fontSize: 14, fontWeight: '800' },
-
-  metricsRow: { flexDirection: 'row', gap: 10, marginBottom: 18 },
-  metricBox:  { flex: 1, backgroundColor: C.surface2, borderRadius: 12, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: C.border },
-  metricVal:  { fontSize: 16, fontWeight: '800', color: C.text, marginBottom: 4 },
-  metricLbl:  { fontSize: 10, color: C.textSub, letterSpacing: 0.3 },
-
-  quoteBox: {
-    backgroundColor: C.surface2, borderRadius: 10, padding: 14,
-    borderLeftWidth: 3, borderLeftColor: C.brand, marginBottom: 16,
-  },
-  quoteText: { fontSize: 14, color: C.textMid, fontStyle: 'italic', lineHeight: 22 },
-
-  section:       { marginBottom: 14 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  sectionTitle:  { fontSize: 11, fontWeight: '700', color: C.textSub, letterSpacing: 0.5, textTransform: 'uppercase' },
-  sectionText:   { fontSize: 14, color: C.text, lineHeight: 22 },
-
-  resetBtn:  { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center', paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, marginTop: 8 },
-  resetText: { fontSize: 13, color: C.textSub, fontWeight: '600' },
-});
 </file>
 
 <file path="verly-mobile/src/screens/SubscricoesScreen.js">
@@ -12298,205 +11426,183 @@ async function analisarExtrato(file) {
 </file>
 
 <file path="verly-mobile/src/navigation/AppNavigator.js">
-/**
- * src/navigation/AppNavigator.js
- * Drawer lateral + Tab bar em baixo + Stack para ecrãs secundários.
- * Badge de notificações actualizado a cada 60s em background.
- */
-
 import React, { useState, useEffect, useRef } from 'react';
-import { ActivityIndicator, View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import {
+  ActivityIndicator, View, Text, StyleSheet,
+  TouchableOpacity, ScrollView, SafeAreaView,
+} from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator }      from '@react-navigation/stack';
-import { createBottomTabNavigator }  from '@react-navigation/bottom-tabs';
-import { createDrawerNavigator }     from '@react-navigation/drawer';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import { useAuth }        from '../context/AuthContext';
+import { useAuth } from '../context/AuthContext';
 import { notificacoesAPI } from '../services/api';
 
-// ── Ecrãs ─────────────────────────────────────────────────────────────────────
-import LoginScreen        from '../screens/auth/LoginScreen';
-import RegisterScreen     from '../screens/auth/RegisterScreen';
-import DashboardScreen    from '../screens/DashboardScreen';
-import FaturasScreen      from '../screens/FaturasScreen';
+import LoginScreen         from '../screens/auth/LoginScreen';
+import RegisterScreen      from '../screens/auth/RegisterScreen';
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
 import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen         from '../screens/ChatScreen';
-import SubscricoesScreen  from '../screens/SubscricoesScreen';
-import PerfilScreen       from '../screens/PerfilScreen';
-import NotificacoesScreen from '../screens/NotificacoesScreen';
-import MetasScreen        from '../screens/MetasScreen';
-import EstatisticasScreen from '../screens/EstatisticasScreen';
-import ScoreScreen        from '../screens/ScoreScreen';
-import ImpulseScreen      from '../screens/ImpulseScreen';
-import RelatorioScreen    from '../screens/RelatorioScreen';
-import HistoricoScreen    from '../screens/HistoricoScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
+import MetasScreen         from '../screens/MetasScreen';
+import EstatisticasScreen  from '../screens/EstatisticasScreen';
+import ScoreScreen         from '../screens/ScoreScreen';
+import ImpulseScreen       from '../screens/ImpulseScreen';
+import RelatorioScreen     from '../screens/RelatorioScreen';
+import HistoricoScreen     from '../screens/HistoricoScreen';
 
-import TabIcon     from '../components/TabIcon';
-import DrawerContent from '../components/DrawerContent';
+import TabIcon from '../components/TabIcon';
 
-const Stack   = createStackNavigator();
-const Tab     = createBottomTabNavigator();
+const Stack     = createStackNavigator();
 const AuthStack = createStackNavigator();
 const MainStack = createStackNavigator();
-const Drawer  = createDrawerNavigator();
+const Tab       = createBottomTabNavigator();
 
 export const COLORS = {
   brand:   '#6C5CE7',
   bg:      '#0C0C14',
   surface: '#13131F',
+  surface2:'#1C1C2E',
   border:  '#252540',
   text:    '#EEEEF8',
   textSub: '#7070A0',
   red:     '#FF5370',
   green:   '#00C896',
   yellow:  '#FFB300',
+  brandDim:'rgba(108,92,231,0.15)',
 };
 
-// ── Botão hamburger para o header ─────────────────────────────────────────────
-function HamburgerBtn({ onPress, badgeCount }) {
+function MenuScreen({ navigation }) {
+  const { user, logout } = useAuth();
+
+  const initials = user?.nome
+    ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
+    : '?';
+
+  const items = [
+    { label: 'Histórico',       screen: 'Historico'    },
+    { label: 'Relatório',       screen: 'Relatorio'    },
+    { label: 'Score',           screen: 'Score'        },
+    { label: 'Impulse Control', screen: 'Impulse'      },
+    { label: 'Estatísticas',    screen: 'Estatisticas' },
+    { label: 'Subscrições',     screen: 'Subscricoes'  },
+    { label: 'Notificações',    screen: 'Notificacoes' },
+  ];
+
   return (
-    <TouchableOpacity onPress={onPress} style={hStyles.wrap} activeOpacity={0.7}>
-      <View style={hStyles.line} />
-      <View style={[hStyles.line, { width: 16 }]} />
-      <View style={hStyles.line} />
-      {badgeCount > 0 && (
-        <View style={hStyles.badge}>
-          <Text style={hStyles.badgeText}>{badgeCount > 9 ? '9+' : badgeCount}</Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      <ScrollView contentContainerStyle={{ padding: 24 }}>
+        <View style={mStyles.profileRow}>
+          <View style={mStyles.avatar}>
+            <Text style={mStyles.avatarText}>{initials}</Text>
+          </View>
+          <View>
+            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
+            <Text style={mStyles.email}>{user?.email || ''}</Text>
+          </View>
         </View>
-      )}
-    </TouchableOpacity>
+
+        <View style={mStyles.divider} />
+
+        {items.map(item => (
+          <TouchableOpacity
+            key={item.screen}
+            style={mStyles.item}
+            onPress={() => navigation.navigate(item.screen)}
+            activeOpacity={0.7}
+          >
+            <Text style={mStyles.itemText}>{item.label}</Text>
+            <Text style={{ color: COLORS.textSub }}>›</Text>
+          </TouchableOpacity>
+        ))}
+
+        <View style={mStyles.divider} />
+
+        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
+          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-const hStyles = StyleSheet.create({
-  wrap:  { padding: 14, marginLeft: 4, position: 'relative' },
-  line:  { width: 22, height: 2, backgroundColor: COLORS.text, borderRadius: 2, marginVertical: 2.5 },
-  badge: {
-    position: 'absolute', top: 8, right: 6,
-    backgroundColor: COLORS.red, borderRadius: 8,
-    minWidth: 16, height: 16,
+const mStyles = StyleSheet.create({
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
+  avatar: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
     justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: 3,
   },
-  badgeText: { fontSize: 9, fontWeight: '800', color: '#fff' },
+  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:      { fontSize: 12, color: COLORS.textSub },
+  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  item: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  logout:     { paddingVertical: 14 },
+  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
 });
 
-// ── Tabs principais ───────────────────────────────────────────────────────────
-function MainTabs({ navigation, notifCount }) {
+function MainTabs({ navigation }) {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: true,
-        headerStyle:       { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-        headerTintColor:   COLORS.text,
-        headerTitleStyle:  { fontWeight: '800', fontSize: 18 },
-        headerLeft: () => (
-          <HamburgerBtn
-            onPress={() => navigation.openDrawer()}
-            badgeCount={notifCount}
-          />
+        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+        headerTintColor: COLORS.text,
+        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
+        headerRight: () => (
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
+            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
         ),
-        tabBarStyle: {
-          backgroundColor: COLORS.surface,
-          borderTopColor:  COLORS.border,
-          borderTopWidth:  1,
-          paddingBottom:   10,
-          paddingTop:      8,
-          height:          68,
-        },
-        tabBarActiveTintColor:   COLORS.brand,
+        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
+        tabBarActiveTintColor: COLORS.brand,
         tabBarInactiveTintColor: COLORS.textSub,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
-        tabBarIcon: ({ color, size }) => (
-          <TabIcon name={route.name} color={color} size={size} />
-        ),
+        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
       })}
     >
-      <Tab.Screen name="Dashboard"  component={DashboardScreen}  options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
-      <Tab.Screen name="Faturas"    component={FaturasScreen}     options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
-      <Tab.Screen name="Chat"       component={ChatScreen}        options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
-      <Tab.Screen name="Metas"      component={MetasScreen}       options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
-      <Tab.Screen name="Perfil"     component={PerfilScreen}      options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
+      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
+      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
+      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
+      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
     </Tab.Navigator>
   );
 }
 
-// ── Stack com ecrãs secundários ───────────────────────────────────────────────
-function MainStackNav({ navigation, notifCount }) {
+function MainStackNav() {
   const commonHeader = {
     headerShown: true,
-    headerStyle:      { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-    headerTintColor:  COLORS.text,
+    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    headerTintColor: COLORS.text,
     headerTitleStyle: { fontWeight: '800', fontSize: 17 },
     headerBackTitleVisible: false,
   };
 
   return (
     <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs">
-        {(props) => <MainTabs {...props} notifCount={notifCount} />}
-      </MainStack.Screen>
-
-      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen}
-        options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
-      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}
-        options={{ ...commonHeader, headerTitle: 'Notificações' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}
-        options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
-      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}
-        options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
-      <MainStack.Screen name="Score"         component={ScoreScreen}
-        options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
-      <MainStack.Screen name="Impulse"       component={ImpulseScreen}
-        options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
-      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}
-        options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
-      <MainStack.Screen name="Historico"     component={HistoricoScreen}
-        options={{ ...commonHeader, headerTitle: 'Histórico' }} />
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
+      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
+      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
+      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
+      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
     </MainStack.Navigator>
   );
 }
 
-// ── Drawer que envolve tudo ───────────────────────────────────────────────────
-function DrawerNav() {
-  const [notifCount, setNotifCount] = useState(0);
-  const intervalRef = useRef(null);
-
-  const fetchNotifCount = async () => {
-    try {
-      const data = await notificacoesAPI.listar();
-      setNotifCount(data.notificacoes?.length || 0);
-    } catch (_) {}
-  };
-
-  useEffect(() => {
-    fetchNotifCount();
-    intervalRef.current = setInterval(fetchNotifCount, 60_000); // polling 60s
-    return () => clearInterval(intervalRef.current);
-  }, []);
-
-  return (
-    <Drawer.Navigator
-      drawerContent={(props) => (
-        <DrawerContent {...props} notifCount={notifCount} />
-      )}
-      screenOptions={{
-        headerShown:       false,
-        drawerType:        'slide',
-        drawerStyle:       { backgroundColor: '#0C0C14', width: 290 },
-        overlayColor:      'rgba(0,0,0,0.6)',
-        swipeEdgeWidth:    60,
-        sceneContainerStyle: { backgroundColor: '#0C0C14' },
-      }}
-    >
-      <Drawer.Screen name="MainStack">
-        {(props) => <MainStackNav {...props} notifCount={notifCount} />}
-      </Drawer.Screen>
-    </Drawer.Navigator>
-  );
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
 function AuthNavigator() {
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
@@ -12506,7 +11612,6 @@ function AuthNavigator() {
   );
 }
 
-// ── Root ──────────────────────────────────────────────────────────────────────
 export default function AppNavigator() {
   const { user, loading } = useAuth();
 
@@ -12522,7 +11627,7 @@ export default function AppNavigator() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user ? (
-          <Stack.Screen name="Main" component={DrawerNav} />
+          <Stack.Screen name="Main" component={MainStackNav} />
         ) : (
           <Stack.Screen name="Auth" component={AuthNavigator} />
         )}
@@ -14835,12 +13940,13 @@ a:hover { color: var(--brand); }
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
-    "react-native-reanimated": "~3.17.4",
+    "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.0",
-    "react-native-webview": "13.15.0"
+    "react-native-webview": "13.15.0",
+    "react-native-worklets": "^0.8.3"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"
@@ -14860,7 +13966,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Muda para o IP da tua máquina quando testares em dispositivo físico
 // Em emulador Android: http://10.0.2.2:5000/api/v1
 // Em dispositivo físico: http://<SEU_IP_LOCAL>:5000/api/v1
-const BASE_URL = 'http://127.0.0.1:5000/api/v1';
+const BASE_URL = 'http://192.168.1.245:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 

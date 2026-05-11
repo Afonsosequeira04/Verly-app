@@ -1,7 +1,4 @@
-/**
- * App.js — Ponto de entrada da app Verly Mobile
- */
-
+import 'react-native-gesture-handler';
 import React from 'react';
 import { StatusBar } from 'react-native';
 import { AuthProvider } from './src/context/AuthContext';
