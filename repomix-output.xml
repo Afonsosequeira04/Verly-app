@@ -49,6 +49,7 @@ app/api/chat.py
 app/api/dashboard.py
 app/api/faturas.py
 app/api/mobile_extras.py
+app/api/playlists.py
 app/auth.py
 app/chat.py
 app/configuracoes.py
@@ -138,12 +139,12 @@ verly-mobile/src/navigation/AppNavigator.js
 verly-mobile/src/screens/auth/LoginScreen.js
 verly-mobile/src/screens/auth/RegisterScreen.js
 verly-mobile/src/screens/ChatScreen.js
+verly-mobile/src/screens/CriarEmScreen.js
 verly-mobile/src/screens/DashboardScreen.js
 verly-mobile/src/screens/EstatisticasScreen.js
 verly-mobile/src/screens/FaturaDetalheScreen.js
 verly-mobile/src/screens/FaturasScreen.js
 verly-mobile/src/screens/HistoricoScreen.js
-verly-mobile/src/screens/ImpulseScreen.js
 verly-mobile/src/screens/MetasScreen.js
 verly-mobile/src/screens/NotificacoesScreen.js
 verly-mobile/src/screens/PerfilScreen.js
@@ -156,22 +157,962 @@ verly-mobile/src/services/api.js
 <files>
 This section contains the contents of the repository's files.
 
-<file path="package.json">
-{
-  "dependencies": {
-    "react-native-worklets": "^0.8.3"
-  }
-}
+<file path="app/api/playlists.py">
+"""
+app/api/playlists.py — Playlists de faturas ("Criar Em")
+
+GET    /api/v1/playlists              → lista as playlists do utilizador
+POST   /api/v1/playlists              → cria uma nova playlist
+GET    /api/v1/playlists/<id>         → detalhe de uma playlist
+PATCH  /api/v1/playlists/<id>         → edita nome/descrição/cor
+DELETE /api/v1/playlists/<id>         → apaga playlist
+POST   /api/v1/playlists/<id>/faturas → adiciona fatura à playlist
+DELETE /api/v1/playlists/<id>/faturas/<fatura_id> → remove fatura da playlist
+
+--- Colaboração ---
+POST   /api/v1/playlists/<id>/partilhar    → gera código de partilha
+POST   /api/v1/playlists/juntar/<codigo>   → junta-se a uma playlist partilhada
+GET    /api/v1/playlists/<id>/membros      → lista membros
+DELETE /api/v1/playlists/<id>/sair         → sai da playlist colaborativa
+"""
+
+import secrets
+from datetime import datetime
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura
+from app import db
+
+# ── Modelos inline (adiciona ao models.py depois) ─────────────────────────────
+# Por agora usamos tabelas SQLite via db.engine direto para não exigir migration
+
+def _ensure_tables():
+    """Cria as tabelas se não existirem."""
+    db.engine.execute("""
+        CREATE TABLE IF NOT EXISTS playlist (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome        TEXT    NOT NULL,
+            descricao   TEXT,
+            cor         TEXT    DEFAULT '#6C5CE7',
+            icone       TEXT    DEFAULT 'list',
+            owner_id    INTEGER NOT NULL,
+            codigo      TEXT    UNIQUE,
+            colaborativa INTEGER DEFAULT 0,
+            criado_em   TEXT    DEFAULT (datetime('now'))
+        )
+    """)
+    db.engine.execute("""
+        CREATE TABLE IF NOT EXISTS playlist_fatura (
+            playlist_id INTEGER NOT NULL,
+            fatura_id   INTEGER NOT NULL,
+            adicionado_em TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (playlist_id, fatura_id)
+        )
+    """)
+    db.engine.execute("""
+        CREATE TABLE IF NOT EXISTS playlist_membro (
+            playlist_id INTEGER NOT NULL,
+            user_id     INTEGER NOT NULL,
+            papel       TEXT    DEFAULT 'editor',
+            joined_at   TEXT    DEFAULT (datetime('now')),
+            PRIMARY KEY (playlist_id, user_id)
+        )
+    """)
+
+
+def _row_to_dict(row):
+    return dict(row) if row else None
+
+
+def _playlist_detail(playlist_id, user_id):
+    """Devolve dict completo de uma playlist com faturas e membros."""
+    pl = db.engine.execute(
+        "SELECT * FROM playlist WHERE id = ?", (playlist_id,)
+    ).fetchone()
+    if not pl:
+        return None
+
+    # verificar acesso
+    if pl['owner_id'] != user_id:
+        membro = db.engine.execute(
+            "SELECT 1 FROM playlist_membro WHERE playlist_id=? AND user_id=?",
+            (playlist_id, user_id)
+        ).fetchone()
+        if not membro:
+            return None
+
+    # faturas
+    rows = db.engine.execute("""
+        SELECT f.id, f.loja, f.total, f.categoria, f.data_compra, f.items
+        FROM fatura f
+        JOIN playlist_fatura pf ON pf.fatura_id = f.id
+        WHERE pf.playlist_id = ?
+        ORDER BY f.data_compra DESC
+    """, (playlist_id,)).fetchall()
+    faturas = [dict(r) for r in rows]
+
+    total = sum(f.get('total') or 0 for f in faturas)
+
+    # membros
+    membros = db.engine.execute("""
+        SELECT pm.user_id, pm.papel, u.nome, u.email
+        FROM playlist_membro pm
+        JOIN user u ON u.id = pm.user_id
+        WHERE pm.playlist_id = ?
+    """, (playlist_id,)).fetchall()
+
+    return {
+        **dict(pl),
+        'faturas':     faturas,
+        'total':       total,
+        'num_faturas': len(faturas),
+        'membros':     [dict(m) for m in membros],
+        'is_owner':    pl['owner_id'] == user_id,
+    }
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
+
+@api_bp.route('/playlists', methods=['GET'])
+@jwt_required()
+def listar_playlists():
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+
+    # playlists próprias
+    proprias = db.engine.execute(
+        "SELECT * FROM playlist WHERE owner_id = ? ORDER BY criado_em DESC", (user_id,)
+    ).fetchall()
+
+    # playlists colaborativas onde é membro
+    colaborativas = db.engine.execute("""
+        SELECT p.* FROM playlist p
+        JOIN playlist_membro pm ON pm.playlist_id = p.id
+        WHERE pm.user_id = ?
+        ORDER BY p.criado_em DESC
+    """, (user_id,)).fetchall()
+
+    result = []
+    seen = set()
+    for pl in list(proprias) + list(colaborativas):
+        d = dict(pl)
+        if d['id'] in seen:
+            continue
+        seen.add(d['id'])
+        # contagem de faturas
+        count = db.engine.execute(
+            "SELECT COUNT(*) as c FROM playlist_fatura WHERE playlist_id=?", (d['id'],)
+        ).fetchone()
+        d['num_faturas'] = count['c'] if count else 0
+        d['is_owner'] = d['owner_id'] == user_id
+        result.append(d)
+
+    return jsonify({'playlists': result})
+
+
+@api_bp.route('/playlists', methods=['POST'])
+@jwt_required()
+def criar_playlist():
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    data = request.get_json(silent=True) or {}
+
+    nome      = (data.get('nome') or '').strip()
+    descricao = (data.get('descricao') or '').strip()
+    cor       = data.get('cor', '#6C5CE7')
+    icone     = data.get('icone', 'list')
+
+    if not nome:
+        return jsonify({'error': 'Nome obrigatório.'}), 400
+
+    cur = db.engine.execute(
+        "INSERT INTO playlist (nome, descricao, cor, icone, owner_id) VALUES (?,?,?,?,?)",
+        (nome, descricao, cor, icone, user_id)
+    )
+    playlist_id = cur.lastrowid
+
+    return jsonify({
+        'success': True,
+        'playlist': {
+            'id': playlist_id, 'nome': nome, 'descricao': descricao,
+            'cor': cor, 'icone': icone, 'owner_id': user_id,
+            'colaborativa': 0, 'num_faturas': 0, 'faturas': [], 'membros': [],
+            'is_owner': True,
+        }
+    }), 201
+
+
+@api_bp.route('/playlists/<int:playlist_id>', methods=['GET'])
+@jwt_required()
+def detalhe_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    detail = _playlist_detail(playlist_id, user_id)
+    if not detail:
+        return jsonify({'error': 'Playlist não encontrada ou sem acesso.'}), 404
+    return jsonify(detail)
+
+
+@api_bp.route('/playlists/<int:playlist_id>', methods=['PATCH'])
+@jwt_required()
+def editar_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    pl = db.engine.execute(
+        "SELECT * FROM playlist WHERE id=? AND owner_id=?", (playlist_id, user_id)
+    ).fetchone()
+    if not pl:
+        return jsonify({'error': 'Não encontrado ou sem permissão.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    campos = {}
+    for field in ['nome', 'descricao', 'cor', 'icone']:
+        if field in data:
+            campos[field] = data[field]
+    if not campos:
+        return jsonify({'error': 'Nada para atualizar.'}), 400
+
+    sets = ', '.join(f"{k}=?" for k in campos)
+    vals = list(campos.values()) + [playlist_id]
+    db.engine.execute(f"UPDATE playlist SET {sets} WHERE id=?", vals)
+    return jsonify({'success': True})
+
+
+@api_bp.route('/playlists/<int:playlist_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    pl = db.engine.execute(
+        "SELECT id FROM playlist WHERE id=? AND owner_id=?", (playlist_id, user_id)
+    ).fetchone()
+    if not pl:
+        return jsonify({'error': 'Não encontrado ou sem permissão.'}), 404
+    db.engine.execute("DELETE FROM playlist_fatura WHERE playlist_id=?", (playlist_id,))
+    db.engine.execute("DELETE FROM playlist_membro WHERE playlist_id=?", (playlist_id,))
+    db.engine.execute("DELETE FROM playlist WHERE id=?", (playlist_id,))
+    return jsonify({'success': True})
+
+
+@api_bp.route('/playlists/<int:playlist_id>/faturas', methods=['POST'])
+@jwt_required()
+def adicionar_fatura_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    detail = _playlist_detail(playlist_id, user_id)
+    if not detail:
+        return jsonify({'error': 'Playlist não encontrada ou sem acesso.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    fatura_ids = data.get('fatura_ids', [])
+    if isinstance(fatura_ids, int):
+        fatura_ids = [fatura_ids]
+
+    adicionadas = 0
+    for fid in fatura_ids:
+        fatura = Fatura.query.filter_by(id=fid, user_id=user_id).first()
+        if not fatura:
+            continue
+        exists = db.engine.execute(
+            "SELECT 1 FROM playlist_fatura WHERE playlist_id=? AND fatura_id=?",
+            (playlist_id, fid)
+        ).fetchone()
+        if not exists:
+            db.engine.execute(
+                "INSERT INTO playlist_fatura (playlist_id, fatura_id) VALUES (?,?)",
+                (playlist_id, fid)
+            )
+            adicionadas += 1
+
+    return jsonify({'success': True, 'adicionadas': adicionadas})
+
+
+@api_bp.route('/playlists/<int:playlist_id>/faturas/<int:fatura_id>', methods=['DELETE'])
+@jwt_required()
+def remover_fatura_playlist(playlist_id, fatura_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    detail = _playlist_detail(playlist_id, user_id)
+    if not detail:
+        return jsonify({'error': 'Playlist não encontrada ou sem acesso.'}), 404
+    db.engine.execute(
+        "DELETE FROM playlist_fatura WHERE playlist_id=? AND fatura_id=?",
+        (playlist_id, fatura_id)
+    )
+    return jsonify({'success': True})
+
+
+# ── Colaboração ────────────────────────────────────────────────────────────────
+
+@api_bp.route('/playlists/<int:playlist_id>/partilhar', methods=['POST'])
+@jwt_required()
+def partilhar_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    pl = db.engine.execute(
+        "SELECT * FROM playlist WHERE id=? AND owner_id=?", (playlist_id, user_id)
+    ).fetchone()
+    if not pl:
+        return jsonify({'error': 'Não encontrado ou sem permissão.'}), 404
+
+    codigo = dict(pl).get('codigo')
+    if not codigo:
+        codigo = secrets.token_urlsafe(8).upper()
+        db.engine.execute(
+            "UPDATE playlist SET codigo=?, colaborativa=1 WHERE id=?",
+            (codigo, playlist_id)
+        )
+
+    return jsonify({'codigo': codigo, 'playlist_id': playlist_id})
+
+
+@api_bp.route('/playlists/juntar/<string:codigo>', methods=['POST'])
+@jwt_required()
+def juntar_playlist(codigo):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    pl = db.engine.execute(
+        "SELECT * FROM playlist WHERE codigo=?", (codigo.upper(),)
+    ).fetchone()
+    if not pl:
+        return jsonify({'error': 'Código inválido ou playlist não encontrada.'}), 404
+
+    pl_dict = dict(pl)
+    if pl_dict['owner_id'] == user_id:
+        return jsonify({'error': 'Já és o criador desta playlist.'}), 400
+
+    exists = db.engine.execute(
+        "SELECT 1 FROM playlist_membro WHERE playlist_id=? AND user_id=?",
+        (pl_dict['id'], user_id)
+    ).fetchone()
+    if not exists:
+        db.engine.execute(
+            "INSERT INTO playlist_membro (playlist_id, user_id, papel) VALUES (?,?,?)",
+            (pl_dict['id'], user_id, 'editor')
+        )
+
+    return jsonify({'success': True, 'playlist': pl_dict})
+
+
+@api_bp.route('/playlists/<int:playlist_id>/membros', methods=['GET'])
+@jwt_required()
+def membros_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    detail = _playlist_detail(playlist_id, user_id)
+    if not detail:
+        return jsonify({'error': 'Playlist não encontrada ou sem acesso.'}), 404
+    return jsonify({'membros': detail['membros']})
+
+
+@api_bp.route('/playlists/<int:playlist_id>/sair', methods=['DELETE'])
+@jwt_required()
+def sair_playlist(playlist_id):
+    user_id = int(get_jwt_identity())
+    _ensure_tables()
+    db.engine.execute(
+        "DELETE FROM playlist_membro WHERE playlist_id=? AND user_id=?",
+        (playlist_id, user_id)
+    )
+    return jsonify({'success': True})
 </file>
 
-<file path="verly-mobile/babel.config.js">
-module.exports = function (api) {
-  api.cache(true);
-  return {
-    presets: ['babel-preset-expo'],
-    plugins: ['react-native-reanimated/plugin'],
-  };
+<file path="verly-mobile/src/screens/CriarEmScreen.js">
+/**
+ * src/screens/CriarEmScreen.js
+ * "Criar Em" — Playlists de faturas agrupadas, personalizáveis e colaborativas.
+ */
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
+  TextInput, Modal, ScrollView, Alert, ActivityIndicator,
+  RefreshControl, Share,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { apiFetch } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+// ── Constantes ────────────────────────────────────────────────────────────────
+
+const CORES = [
+  '#6C5CE7', '#00C896', '#FF5370', '#FFB300',
+  '#0984E3', '#E17055', '#A29BFE', '#55EFC4',
+];
+
+const ICONES = [
+  { key: 'list',      label: '📋' },
+  { key: 'star',      label: '⭐' },
+  { key: 'shopping',  label: '🛍️' },
+  { key: 'home',      label: '🏠' },
+  { key: 'food',      label: '🍔' },
+  { key: 'travel',    label: '✈️' },
+  { key: 'health',    label: '💊' },
+  { key: 'tech',      label: '💻' },
+];
+
+const ICONE_EMOJI = Object.fromEntries(ICONES.map(i => [i.key, i.label]));
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+
+const playlistsAPI = {
+  listar:   ()           => apiFetch('/playlists'),
+  criar:    (data)       => apiFetch('/playlists', { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:  (id)         => apiFetch(`/playlists/${id}`),
+  editar:   (id, data)   => apiFetch(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  apagar:   (id)         => apiFetch(`/playlists/${id}`, { method: 'DELETE' }),
+  addFatura: (id, ids)   => apiFetch(`/playlists/${id}/faturas`, { method: 'POST', body: JSON.stringify({ fatura_ids: ids }) }),
+  remFatura: (id, fid)   => apiFetch(`/playlists/${id}/faturas/${fid}`, { method: 'DELETE' }),
+  partilhar: (id)        => apiFetch(`/playlists/${id}/partilhar`, { method: 'POST' }),
+  juntar:   (codigo)     => apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
 };
+
+const faturasAPI2 = {
+  listar: () => apiFetch('/faturas'),
+};
+
+// ── Componente principal ──────────────────────────────────────────────────────
+
+export default function CriarEmScreen({ navigation }) {
+  const [playlists, setPlaylists]   = useState([]);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Modais
+  const [showCreate, setShowCreate]   = useState(false);
+  const [showJuntar, setShowJuntar]   = useState(false);
+  const [showDetail, setShowDetail]   = useState(false);
+  const [detailData, setDetailData]   = useState(null);
+  const [detailLoad, setDetailLoad]   = useState(false);
+  const [showAddFat, setShowAddFat]   = useState(false);
+  const [faturas, setFaturas]         = useState([]);
+  const [selectedFat, setSelectedFat] = useState([]);
+
+  // Form criar
+  const [form, setForm] = useState({ nome: '', descricao: '', cor: CORES[0], icone: 'list' });
+  const [creating, setCreating] = useState(false);
+
+  // Juntar
+  const [codInput, setCodInput] = useState('');
+  const [joining, setJoining]   = useState(false);
+
+  // ── Carregar ────────────────────────────────────────────────────────────────
+
+  const load = async (showRefresh = false) => {
+    if (showRefresh) setRefreshing(true);
+    else setLoading(true);
+    try {
+      const data = await playlistsAPI.listar();
+      setPlaylists(data.playlists || []);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useFocusEffect(useCallback(() => { load(); }, []));
+
+  // ── Criar playlist ──────────────────────────────────────────────────────────
+
+  const handleCriar = async () => {
+    if (!form.nome.trim()) return Alert.alert('Atenção', 'Dá um nome à playlist.');
+    setCreating(true);
+    try {
+      const res = await playlistsAPI.criar(form);
+      setPlaylists(prev => [res.playlist, ...prev]);
+      setShowCreate(false);
+      setForm({ nome: '', descricao: '', cor: CORES[0], icone: 'list' });
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  // ── Abrir detalhe ───────────────────────────────────────────────────────────
+
+  const openDetail = async (pl) => {
+    setShowDetail(true);
+    setDetailData(null);
+    setDetailLoad(true);
+    try {
+      const data = await playlistsAPI.detalhe(pl.id);
+      setDetailData(data);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+      setShowDetail(false);
+    } finally {
+      setDetailLoad(false);
+    }
+  };
+
+  // ── Apagar playlist ─────────────────────────────────────────────────────────
+
+  const handleApagar = (id) => {
+    Alert.alert('Apagar playlist', 'Tens a certeza? Esta ação não pode ser revertida.', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Apagar', style: 'destructive', onPress: async () => {
+        try {
+          await playlistsAPI.apagar(id);
+          setPlaylists(prev => prev.filter(p => p.id !== id));
+          setShowDetail(false);
+        } catch (e) {
+          Alert.alert('Erro', e.message);
+        }
+      }},
+    ]);
+  };
+
+  // ── Partilhar ───────────────────────────────────────────────────────────────
+
+  const handlePartilhar = async (id) => {
+    try {
+      const res = await playlistsAPI.partilhar(id);
+      await Share.share({
+        message: `Junta-te à minha playlist Verly com o código: ${res.codigo}`,
+        title: 'Playlist Verly',
+      });
+      setDetailData(prev => prev ? { ...prev, codigo: res.codigo, colaborativa: 1 } : prev);
+    } catch (e) {
+      // user canceled share
+    }
+  };
+
+  // ── Juntar por código ───────────────────────────────────────────────────────
+
+  const handleJuntar = async () => {
+    if (!codInput.trim()) return;
+    setJoining(true);
+    try {
+      const res = await playlistsAPI.juntar(codInput.trim());
+      Alert.alert('✅ Juntaste-te!', `Bem-vindo à playlist "${res.playlist.nome}".`);
+      setShowJuntar(false);
+      setCodInput('');
+      load();
+    } catch (e) {
+      Alert.alert('Código inválido', e.message);
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  // ── Adicionar faturas ───────────────────────────────────────────────────────
+
+  const openAddFaturas = async () => {
+    try {
+      const data = await faturasAPI2.listar();
+      const existingIds = (detailData?.faturas || []).map(f => f.id);
+      setFaturas((data.faturas || []).filter(f => !existingIds.includes(f.id)));
+      setSelectedFat([]);
+      setShowAddFat(true);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    }
+  };
+
+  const toggleFatura = (id) => {
+    setSelectedFat(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleAddFaturas = async () => {
+    if (!selectedFat.length) return;
+    try {
+      await playlistsAPI.addFatura(detailData.id, selectedFat);
+      const refreshed = await playlistsAPI.detalhe(detailData.id);
+      setDetailData(refreshed);
+      setShowAddFat(false);
+      setPlaylists(prev => prev.map(p =>
+        p.id === detailData.id ? { ...p, num_faturas: refreshed.num_faturas } : p
+      ));
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    }
+  };
+
+  const handleRemFatura = async (faturaId) => {
+    try {
+      await playlistsAPI.remFatura(detailData.id, faturaId);
+      const refreshed = await playlistsAPI.detalhe(detailData.id);
+      setDetailData(refreshed);
+      setPlaylists(prev => prev.map(p =>
+        p.id === detailData.id ? { ...p, num_faturas: refreshed.num_faturas } : p
+      ));
+    } catch {}
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <View style={s.center}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={s.root}>
+      {/* Header actions */}
+      <View style={s.topBar}>
+        <TouchableOpacity style={s.btnSecondary} onPress={() => setShowJuntar(true)}>
+          <Text style={s.btnSecondaryText}>+ Juntar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.btnPrimary} onPress={() => setShowCreate(true)}>
+          <Text style={s.btnPrimaryText}>+ Nova Lista</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Lista */}
+      {playlists.length === 0 ? (
+        <View style={s.empty}>
+          <Text style={s.emptyIcon}>📋</Text>
+          <Text style={s.emptyTitle}>Sem listas ainda</Text>
+          <Text style={s.emptySub}>Cria a tua primeira lista de faturas ou junta-te a uma lista de um amigo.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={playlists}
+          keyExtractor={item => item.id.toString()}
+          contentContainerStyle={{ padding: 16 }}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={COLORS.brand} />}
+          renderItem={({ item }) => (
+            <TouchableOpacity style={[s.card, { borderLeftColor: item.cor || COLORS.brand }]} onPress={() => openDetail(item)} activeOpacity={0.8}>
+              <View style={s.cardHeader}>
+                <View style={[s.cardIcon, { backgroundColor: (item.cor || COLORS.brand) + '22' }]}>
+                  <Text style={s.cardIconText}>{ICONE_EMOJI[item.icone] || '📋'}</Text>
+                </View>
+                <View style={s.cardInfo}>
+                  <Text style={s.cardNome}>{item.nome}</Text>
+                  {item.descricao ? <Text style={s.cardDesc} numberOfLines={1}>{item.descricao}</Text> : null}
+                </View>
+                {!item.is_owner && (
+                  <View style={s.colabBadge}>
+                    <Text style={s.colabBadgeText}>Collab</Text>
+                  </View>
+                )}
+              </View>
+              <View style={s.cardFooter}>
+                <Text style={s.cardStat}>{item.num_faturas} faturas</Text>
+                {item.colaborativa ? <Text style={s.cardStat}>🔗 Partilhada</Text> : null}
+              </View>
+            </TouchableOpacity>
+          )}
+        />
+      )}
+
+      {/* ── Modal: Criar playlist ─────────────────────────────────────────── */}
+      <Modal visible={showCreate} animationType="slide" transparent onRequestClose={() => setShowCreate(false)}>
+        <View style={s.overlay}>
+          <View style={s.sheet}>
+            <Text style={s.sheetTitle}>Nova Lista</Text>
+
+            <Text style={s.label}>Nome *</Text>
+            <TextInput
+              style={s.input}
+              value={form.nome}
+              onChangeText={v => setForm(p => ({ ...p, nome: v }))}
+              placeholder="Ex: Férias Verão, Casa Nova..."
+              placeholderTextColor={COLORS.textSub}
+              maxLength={50}
+            />
+
+            <Text style={s.label}>Descrição (opcional)</Text>
+            <TextInput
+              style={[s.input, { height: 72 }]}
+              value={form.descricao}
+              onChangeText={v => setForm(p => ({ ...p, descricao: v }))}
+              placeholder="Sobre o que é esta lista?"
+              placeholderTextColor={COLORS.textSub}
+              multiline
+              maxLength={200}
+            />
+
+            <Text style={s.label}>Cor</Text>
+            <View style={s.colorRow}>
+              {CORES.map(c => (
+                <TouchableOpacity key={c} style={[s.colorDot, { backgroundColor: c }, form.cor === c && s.colorDotSelected]} onPress={() => setForm(p => ({ ...p, cor: c }))} />
+              ))}
+            </View>
+
+            <Text style={s.label}>Ícone</Text>
+            <View style={s.iconRow}>
+              {ICONES.map(ic => (
+                <TouchableOpacity key={ic.key} style={[s.iconBtn, form.icone === ic.key && { backgroundColor: form.cor + '33', borderColor: form.cor }]} onPress={() => setForm(p => ({ ...p, icone: ic.key }))}>
+                  <Text style={s.iconBtnText}>{ic.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={s.sheetActions}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setShowCreate(false)}>
+                <Text style={s.cancelBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.submitBtn, creating && { opacity: 0.6 }]} onPress={handleCriar} disabled={creating}>
+                {creating ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.submitBtnText}>Criar</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Modal: Juntar por código ──────────────────────────────────────── */}
+      <Modal visible={showJuntar} animationType="slide" transparent onRequestClose={() => setShowJuntar(false)}>
+        <View style={s.overlay}>
+          <View style={[s.sheet, { paddingBottom: 32 }]}>
+            <Text style={s.sheetTitle}>Juntar a uma Lista</Text>
+            <Text style={s.sheetSub}>Pede o código de partilha ao teu amigo e introduz aqui.</Text>
+            <TextInput
+              style={[s.input, { textAlign: 'center', fontSize: 22, fontWeight: '800', letterSpacing: 4 }]}
+              value={codInput}
+              onChangeText={v => setCodInput(v.toUpperCase())}
+              placeholder="CÓDIGO"
+              placeholderTextColor={COLORS.textSub}
+              autoCapitalize="characters"
+              maxLength={12}
+            />
+            <View style={s.sheetActions}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setShowJuntar(false)}>
+                <Text style={s.cancelBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.submitBtn, joining && { opacity: 0.6 }]} onPress={handleJuntar} disabled={joining}>
+                {joining ? <ActivityIndicator color="#fff" size="small" /> : <Text style={s.submitBtnText}>Juntar</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Modal: Detalhe da playlist ────────────────────────────────────── */}
+      <Modal visible={showDetail} animationType="slide" onRequestClose={() => setShowDetail(false)}>
+        <View style={s.rootModal}>
+          {/* Header */}
+          <View style={s.detailHeader}>
+            <TouchableOpacity onPress={() => setShowDetail(false)}>
+              <Text style={s.backBtn}>‹ Voltar</Text>
+            </TouchableOpacity>
+            {detailData?.is_owner && (
+              <TouchableOpacity onPress={() => handleApagar(detailData.id)}>
+                <Text style={s.deleteBtn}>Apagar</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {detailLoad || !detailData ? (
+            <View style={s.center}><ActivityIndicator color={COLORS.brand} /></View>
+          ) : (
+            <ScrollView contentContainerStyle={{ padding: 20 }}>
+              {/* Info */}
+              <View style={[s.detailBanner, { backgroundColor: (detailData.cor || COLORS.brand) + '22', borderColor: detailData.cor || COLORS.brand }]}>
+                <Text style={s.detailIcon}>{ICONE_EMOJI[detailData.icone] || '📋'}</Text>
+                <Text style={[s.detailNome, { color: detailData.cor || COLORS.brand }]}>{detailData.nome}</Text>
+                {detailData.descricao ? <Text style={s.detailDesc}>{detailData.descricao}</Text> : null}
+                <Text style={s.detailTotal}>{(detailData.total || 0).toFixed(2)}€ total</Text>
+              </View>
+
+              {/* Código de partilha */}
+              {detailData.codigo ? (
+                <View style={s.codigoBox}>
+                  <Text style={s.codigoLabel}>Código de partilha</Text>
+                  <Text style={s.codigoText}>{detailData.codigo}</Text>
+                </View>
+              ) : null}
+
+              {/* Ações */}
+              <View style={s.actionRow}>
+                {detailData.is_owner && (
+                  <TouchableOpacity style={s.actionBtn} onPress={() => handlePartilhar(detailData.id)}>
+                    <Text style={s.actionBtnText}>🔗 Partilhar</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={s.actionBtn} onPress={openAddFaturas}>
+                  <Text style={s.actionBtnText}>+ Adicionar Faturas</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Membros */}
+              {detailData.membros?.length > 0 && (
+                <View style={s.section}>
+                  <Text style={s.sectionTitle}>Membros</Text>
+                  {detailData.membros.map(m => (
+                    <View key={m.user_id} style={s.membroRow}>
+                      <View style={s.membroAvatar}>
+                        <Text style={s.membroAvatarText}>{(m.nome || '?')[0].toUpperCase()}</Text>
+                      </View>
+                      <Text style={s.membroNome}>{m.nome}</Text>
+                      <Text style={s.membroPapel}>{m.papel}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {/* Faturas */}
+              <View style={s.section}>
+                <Text style={s.sectionTitle}>Faturas ({detailData.num_faturas})</Text>
+                {detailData.faturas.length === 0 ? (
+                  <Text style={s.emptyFat}>Ainda sem faturas. Adiciona algumas!</Text>
+                ) : (
+                  detailData.faturas.map(f => (
+                    <View key={f.id} style={s.fatRow}>
+                      <View style={s.fatInfo}>
+                        <Text style={s.fatLoja}>{f.loja || 'Desconhecida'}</Text>
+                        <Text style={s.fatMeta}>{f.categoria} · {f.data_compra || ''}</Text>
+                      </View>
+                      <Text style={s.fatTotal}>{(f.total || 0).toFixed(2)}€</Text>
+                      <TouchableOpacity onPress={() => handleRemFatura(f.id)} style={s.remBtn}>
+                        <Text style={s.remBtnText}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      </Modal>
+
+      {/* ── Modal: Selecionar faturas ─────────────────────────────────────── */}
+      <Modal visible={showAddFat} animationType="slide" transparent onRequestClose={() => setShowAddFat(false)}>
+        <View style={s.overlay}>
+          <View style={[s.sheet, { maxHeight: '80%' }]}>
+            <Text style={s.sheetTitle}>Adicionar Faturas</Text>
+            <Text style={s.sheetSub}>Seleciona as faturas para adicionar a esta lista.</Text>
+            <ScrollView style={{ maxHeight: 320 }}>
+              {faturas.length === 0 ? (
+                <Text style={s.emptySub}>Todas as tuas faturas já estão nesta lista.</Text>
+              ) : (
+                faturas.map(f => {
+                  const sel = selectedFat.includes(f.id);
+                  return (
+                    <TouchableOpacity key={f.id} style={[s.fatPickRow, sel && s.fatPickRowSel]} onPress={() => toggleFatura(f.id)}>
+                      <View style={[s.checkbox, sel && s.checkboxSel]}>
+                        {sel && <Text style={{ color: '#fff', fontSize: 10 }}>✓</Text>}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.fatLoja}>{f.loja || 'Desconhecida'}</Text>
+                        <Text style={s.fatMeta}>{f.categoria} · {f.data_compra || ''}</Text>
+                      </View>
+                      <Text style={s.fatTotal}>{(f.total || 0).toFixed(2)}€</Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+            <View style={s.sheetActions}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setShowAddFat(false)}>
+                <Text style={s.cancelBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.submitBtn, !selectedFat.length && { opacity: 0.4 }]} onPress={handleAddFaturas} disabled={!selectedFat.length}>
+                <Text style={s.submitBtnText}>Adicionar ({selectedFat.length})</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+// ── Estilos ───────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: COLORS.bg },
+  rootModal: { flex: 1, backgroundColor: COLORS.bg },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  topBar:  { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, padding: 16, paddingBottom: 8 },
+
+  btnPrimary:     { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9 },
+  btnPrimaryText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  btnSecondary:     { backgroundColor: COLORS.surface, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9, borderWidth: 1, borderColor: COLORS.border },
+  btnSecondaryText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
+
+  // Cards
+  card: { backgroundColor: COLORS.surface, borderRadius: 14, marginBottom: 12, padding: 16, borderLeftWidth: 4 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
+  cardIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  cardIconText: { fontSize: 22 },
+  cardInfo: { flex: 1 },
+  cardNome: { fontSize: 16, fontWeight: '700', color: COLORS.text },
+  cardDesc: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  cardFooter: { flexDirection: 'row', gap: 16 },
+  cardStat: { fontSize: 12, color: COLORS.textSub, fontWeight: '600' },
+  colabBadge: { backgroundColor: COLORS.brandDim, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  colabBadgeText: { color: COLORS.brand, fontSize: 10, fontWeight: '700' },
+
+  // Empty
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
+  emptyIcon: { fontSize: 48, marginBottom: 12 },
+  emptyTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginBottom: 8 },
+  emptySub: { fontSize: 14, color: COLORS.textSub, textAlign: 'center', lineHeight: 20 },
+
+  // Modal sheet
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: COLORS.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24 },
+  sheetTitle: { fontSize: 20, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
+  sheetSub: { fontSize: 13, color: COLORS.textSub, marginBottom: 20 },
+
+  label: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, marginBottom: 6, marginTop: 14, textTransform: 'uppercase' },
+  input: { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
+
+  colorRow: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  colorDot: { width: 32, height: 32, borderRadius: 16 },
+  colorDotSelected: { borderWidth: 3, borderColor: '#fff' },
+
+  iconRow: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+  iconBtn: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, justifyContent: 'center', alignItems: 'center' },
+  iconBtnText: { fontSize: 22 },
+
+  sheetActions: { flexDirection: 'row', gap: 12, marginTop: 24 },
+  cancelBtn: { flex: 1, backgroundColor: COLORS.surface2, borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
+  cancelBtnText: { color: COLORS.textSub, fontWeight: '700' },
+  submitBtn: { flex: 1, backgroundColor: COLORS.brand, borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
+  submitBtnText: { color: '#fff', fontWeight: '800' },
+
+  // Detail
+  detailHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 56, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  backBtn: { fontSize: 16, color: COLORS.brand, fontWeight: '700' },
+  deleteBtn: { fontSize: 14, color: COLORS.red, fontWeight: '700' },
+  detailBanner: { borderRadius: 16, padding: 20, alignItems: 'center', borderWidth: 1, marginBottom: 16 },
+  detailIcon: { fontSize: 40, marginBottom: 8 },
+  detailNome: { fontSize: 22, fontWeight: '800', marginBottom: 4 },
+  detailDesc: { fontSize: 14, color: COLORS.textSub, marginBottom: 8, textAlign: 'center' },
+  detailTotal: { fontSize: 18, fontWeight: '700', color: COLORS.text },
+
+  codigoBox: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
+  codigoLabel: { fontSize: 11, color: COLORS.textSub, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
+  codigoText: { fontSize: 28, fontWeight: '800', color: COLORS.brand, letterSpacing: 6 },
+
+  actionRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  actionBtn: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 10, paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
+  actionBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 13 },
+
+  section: { marginBottom: 20 },
+  sectionTitle: { fontSize: 14, fontWeight: '800', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 12 },
+
+  membroRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
+  membroAvatar: { width: 36, height: 36, borderRadius: 10, backgroundColor: COLORS.brandDim, justifyContent: 'center', alignItems: 'center' },
+  membroAvatarText: { color: COLORS.brand, fontWeight: '800' },
+  membroNome: { flex: 1, color: COLORS.text, fontWeight: '600' },
+  membroPapel: { color: COLORS.textSub, fontSize: 12 },
+
+  fatRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 10, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: COLORS.border },
+  fatInfo: { flex: 1 },
+  fatLoja: { fontSize: 14, fontWeight: '700', color: COLORS.text },
+  fatMeta: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  fatTotal: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginRight: 10 },
+  remBtn: { padding: 4 },
+  remBtnText: { color: COLORS.red, fontWeight: '700' },
+  emptyFat: { color: COLORS.textSub, textAlign: 'center', marginTop: 8 },
+
+  fatPickRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, marginBottom: 6, borderWidth: 1, borderColor: COLORS.border },
+  fatPickRowSel: { borderColor: COLORS.brand, backgroundColor: COLORS.brandDim },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: COLORS.border, justifyContent: 'center', alignItems: 'center' },
+  checkboxSel: { backgroundColor: COLORS.brand, borderColor: COLORS.brand },
+});
 </file>
 
 <file path="app/api/auth.py">
@@ -320,51 +1261,197 @@ def update_me():
 
 <file path="app/api/chat.py">
 """
-app/api/chat.py — Chat para o mobile
-POST /api/v1/chat/mensagem  → envia mensagem e recebe resposta da IA
-GET  /api/v1/chat/historico → histórico da conversa
-POST /api/v1/chat/limpar    → limpa histórico
+app/api/chat.py — Chat API para mobile (JWT)
+
+POST /api/v1/chat/mensagem   → envia mensagem, recebe resposta da IA
+GET  /api/v1/chat/historico  → histórico das últimas N conversas
+POST /api/v1/chat/limpar     → apaga histórico
 """
+
+import os
 import logging
+import requests
 from flask import request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
-from app.models import Conversa, User
+from app.models import Conversa, Fatura, User, Meta
 from app import db
 
 logger = logging.getLogger(__name__)
 
+# ── Normalização de personalidade ──────────────────────────────────────────────
+
+_PERSONALITY_ALIASES = {'strict': 'pro', 'friendly': 'calm', 'rebel': 'savage'}
+_VALID_PERSONALITIES = {'savage', 'sarcastic', 'calm', 'pro'}
+
+def _normalise_personality(p):
+    p = (p or 'calm').strip().lower()
+    p = _PERSONALITY_ALIASES.get(p, p)
+    return p if p in _VALID_PERSONALITIES else 'calm'
+
+# ── System prompts ─────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPTS = {
+    'savage': """És a Verly. Assistente financeira brutal e sem filtros.
+REGRAS:
+- Respostas CURTAS. Máximo 3-4 frases. Nunca mais.
+- Tom direto e cortante. Sem "Olá", sem "Estou aqui para ajudar".
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Quando o utilizador gasta mal, diz-lhe com exemplos concretos.
+- Português de Portugal.""",
+
+    'sarcastic': """És a Verly. Assistente financeira sarcástica e irónica.
+REGRAS:
+- Respostas CURTAS. Máximo 3-4 frases. Nunca mais.
+- Tom irónico e espirituoso. Sem "Olá", sem introduções longas.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Sarcasmo inteligente que faça pensar.
+- Português de Portugal.""",
+
+    'calm': """És a Verly. Coach financeira empática e direta.
+REGRAS:
+- Respostas CURTAS e úteis. Máximo 3-4 frases. Nunca mais.
+- Vai direto ao ponto. Sem "Olá", sem parágrafos longos.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Sê concreto: números, categorias, datas reais.
+- Português de Portugal.""",
+
+    'pro': """És a Verly. CFO pessoal analítico e preciso.
+REGRAS:
+- Respostas CURTAS e factuais. Máximo 3-4 frases. Nunca mais.
+- Vai direto aos números. Sem introduções.
+- Usa os dados reais das faturas. Nunca inventes valores.
+- Foca em: totais, categorias, padrões de gasto.
+- Português de Portugal.""",
+}
+
+# ── Helpers de contexto ────────────────────────────────────────────────────────
+
+def _build_faturas_context(faturas) -> str:
+    if not faturas:
+        return "O utilizador ainda não tem faturas registadas."
+    linhas = [f"Total de faturas: {len(faturas)}"]
+    por_categoria = {}
+    for f in faturas:
+        linha = f"- {f.loja or 'Loja desconhecida'}"
+        if f.data_compra:
+            linha += f" | {f.data_compra}"
+        if f.total:
+            linha += f" | {f.total:.2f}€"
+        if f.categoria:
+            linha += f" | {f.categoria}"
+        if f.data_garantia:
+            linha += f" | garantia até {f.data_garantia}"
+        linhas.append(linha)
+        cat = f.categoria or 'Outros'
+        por_categoria[cat] = por_categoria.get(cat, 0) + (f.total or 0)
+    total = sum(f.total or 0 for f in faturas)
+    linhas.append(f"\nTotal gasto (todas as faturas): {total:.2f}€")
+    if por_categoria:
+        linhas.append("\nGastos por categoria:")
+        for cat, val in sorted(por_categoria.items(), key=lambda x: x[1], reverse=True):
+            linhas.append(f"  {cat}: {val:.2f}€")
+    return "\n".join(linhas)
+
+
+def _build_metas_context(user_id) -> str:
+    from app.metas import get_gastos_mes_atual
+    metas = Meta.query.filter_by(user_id=user_id).all()
+    if not metas:
+        return ""
+    gastos = get_gastos_mes_atual(user_id)
+    linhas = ["\n--- METAS MENSAIS ---"]
+    for m in metas:
+        gasto = gastos.get(m.categoria, 0)
+        pct = round((gasto / m.valor_limite) * 100) if m.valor_limite > 0 else 0
+        estado = "✅ OK" if pct < 80 else ("⚠️ QUASE NO LIMITE" if pct < 100 else "🔴 ULTRAPASSADO")
+        linhas.append(f"• {m.categoria}: {gasto:.2f}€ de {m.valor_limite:.2f}€ ({pct}%) — {estado}")
+    return "\n".join(linhas)
+
+
+def _get_historico_recente(user_id, limite=10):
+    conversas = (
+        Conversa.query
+        .filter_by(user_id=user_id)
+        .order_by(Conversa.timestamp.desc())
+        .limit(limite)
+        .all()
+    )
+    historico = []
+    for c in reversed(conversas):
+        historico.append({"role": "user", "content": c.pergunta})
+        historico.append({"role": "assistant", "content": c.resposta})
+    return historico
+
+
+# ── Groq chat direto (sem índice — funciona mesmo sem ficheiros carregados) ────
+
+def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
+    """Chama Groq diretamente com contexto das faturas — sem dependência do índice LlamaIndex."""
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return "⚠️ Chave GROQ_API_KEY não configurada no servidor."
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    system_prompt = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
+    faturas_ctx   = _build_faturas_context(faturas)
+    metas_ctx     = _build_metas_context(user_id)
+    historico     = _get_historico_recente(user_id, limite=10)
+
+    system_content = (
+        f"{system_prompt}\n\n"
+        f"DADOS REAIS DO UTILIZADOR:\n{faturas_ctx}"
+        f"{metas_ctx}\n\n"
+        "MEMÓRIA: Tens acesso ao histórico desta conversa. Usa-o para respostas coerentes. "
+        "Não te apresentes novamente se já o fizeste."
+    )
+
+    messages = [{"role": "system", "content": system_content}] + historico + [
+        {"role": "user", "content": mensagem}
+    ]
+
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 500,
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            logger.error(f"Groq error {r.status_code}: {r.text}")
+            return "Erro ao contactar o assistente. Tenta novamente."
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logger.error(f"Groq exception: {e}")
+        return "Erro de ligação ao assistente. Verifica a tua conexão."
+
+
+# ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @api_bp.route('/chat/mensagem', methods=['POST'])
 @jwt_required()
 def chat_mensagem():
-    from app.ai import get_user_paths, rebuild_index, ask_question
-    user_id = int(get_jwt_identity())
-    user    = User.query.get_or_404(user_id)
-
-    data    = request.get_json(silent=True) or {}
+    user_id  = int(get_jwt_identity())
+    user     = User.query.get_or_404(user_id)
+    data     = request.get_json(silent=True) or {}
     mensagem = (data.get('mensagem') or '').strip()[:2000]
 
     if not mensagem:
         return jsonify({'error': 'Mensagem vazia.'}), 400
 
-    data_dir, storage_dir = get_user_paths(
-        current_app.config['UPLOAD_FOLDER'],
-        current_app.config['STORAGE_FOLDER'],
-        user_id
-    )
+    personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
     try:
-        index    = rebuild_index(data_dir, storage_dir)
-        resposta = ask_question(
-            index, mensagem, user_id,
-            personalidade=getattr(user, 'personalidade', 'calm')
-        )
+        resposta = _chat_groq_direto(mensagem, user_id, personalidade)
     except Exception as e:
         logger.error(f'Erro no chat API: {e}')
         return jsonify({'error': 'Erro ao processar a mensagem.'}), 500
 
-    # Guardar conversa
     conversa = Conversa(user_id=user_id, pergunta=mensagem, resposta=resposta)
     db.session.add(conversa)
     db.session.commit()
@@ -375,12 +1462,15 @@ def chat_mensagem():
 @api_bp.route('/chat/historico', methods=['GET'])
 @jwt_required()
 def chat_historico():
-    user_id = int(get_jwt_identity())
-    limite  = min(int(request.args.get('limite', 20)), 50)
-    conversas = (Conversa.query
-                 .filter_by(user_id=user_id)
-                 .order_by(Conversa.timestamp.desc())
-                 .limit(limite).all())
+    user_id   = int(get_jwt_identity())
+    limite    = min(int(request.args.get('limite', 20)), 50)
+    conversas = (
+        Conversa.query
+        .filter_by(user_id=user_id)
+        .order_by(Conversa.timestamp.desc())
+        .limit(limite)
+        .all()
+    )
     return jsonify({'historico': [
         {
             'id':        c.id,
@@ -397,81 +1487,6 @@ def chat_historico():
 def chat_limpar():
     user_id = int(get_jwt_identity())
     Conversa.query.filter_by(user_id=user_id).delete()
-    db.session.commit()
-    return jsonify({'success': True})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-"""
-app/api/subscricoes.py — Subscrições para o mobile
-GET /api/v1/subscricoes → lista de subscrições detectadas
-"""
-from app.subscriptions import detect_subscriptions
-
-
-@api_bp.route('/subscricoes', methods=['GET'])
-@jwt_required()
-def subscricoes():
-    user_id = int(get_jwt_identity())
-    data    = detect_subscriptions(user_id)
-    return jsonify(data)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-"""
-app/api/metas.py — Metas financeiras para o mobile
-GET  /api/v1/metas           → lista de metas
-POST /api/v1/metas           → criar meta
-DELETE /api/v1/metas/<id>    → apagar meta
-"""
-from app.models import Meta
-
-
-@api_bp.route('/metas', methods=['GET'])
-@jwt_required()
-def listar_metas():
-    user_id = int(get_jwt_identity())
-    metas   = Meta.query.filter_by(user_id=user_id).all()
-    return jsonify({'metas': [
-        {
-            'id':        m.id,
-            'nome':      m.nome,
-            'limite':    m.limite,
-            'categoria': m.categoria,
-        }
-        for m in metas
-    ]})
-
-
-@api_bp.route('/metas', methods=['POST'])
-@jwt_required()
-def criar_meta():
-    user_id = int(get_jwt_identity())
-    data    = request.get_json(silent=True) or {}
-    nome    = (data.get('nome') or '').strip()[:100]
-    limite  = data.get('limite')
-    categoria = (data.get('categoria') or 'Outros').strip()
-
-    if not nome or limite is None:
-        return jsonify({'error': 'Nome e limite são obrigatórios.'}), 400
-
-    try:
-        limite = float(limite)
-    except (ValueError, TypeError):
-        return jsonify({'error': 'Limite inválido.'}), 400
-
-    meta = Meta(user_id=user_id, nome=nome, limite=limite, categoria=categoria)
-    db.session.add(meta)
-    db.session.commit()
-    return jsonify({'id': meta.id, 'nome': meta.nome, 'limite': meta.limite}), 201
-
-
-@api_bp.route('/metas/<int:meta_id>', methods=['DELETE'])
-@jwt_required()
-def apagar_meta(meta_id):
-    user_id = int(get_jwt_identity())
-    meta    = Meta.query.filter_by(id=meta_id, user_id=user_id).first_or_404()
-    db.session.delete(meta)
     db.session.commit()
     return jsonify({'success': True})
 </file>
@@ -2808,13 +3823,12 @@ if __name__ == '__main__':
     run()
 </file>
 
-<file path="run.py">
-from app import create_app
-
-app = create_app()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+<file path="package.json">
+{
+  "dependencies": {
+    "react-native-worklets": "^0.8.3"
+  }
+}
 </file>
 
 <file path="security.py">
@@ -4025,240 +5039,14 @@ document.getElementById('metaModal').addEventListener('click', function(e) {
 legacy-peer-deps=true
 </file>
 
-<file path="verly-mobile/App.js">
-import 'react-native-gesture-handler';
-import React from 'react';
-import { StatusBar } from 'react-native';
-import { AuthProvider } from './src/context/AuthContext';
-import AppNavigator, { COLORS } from './src/navigation/AppNavigator';
-
-export default function App() {
-  return (
-    <AuthProvider>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
-      <AppNavigator />
-    </AuthProvider>
-  );
-}
-</file>
-
-<file path="verly-mobile/src/components/DrawerContent.js">
-import 'react-native-gesture-handler';
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  ActivityIndicator, View, Text, StyleSheet,
-  TouchableOpacity, ScrollView, SafeAreaView,
-} from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-
-import { useAuth } from '../context/AuthContext';
-import { notificacoesAPI } from '../services/api';
-
-import LoginScreen         from '../screens/auth/LoginScreen';
-import RegisterScreen      from '../screens/auth/RegisterScreen';
-import DashboardScreen     from '../screens/DashboardScreen';
-import FaturasScreen       from '../screens/FaturasScreen';
-import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen          from '../screens/ChatScreen';
-import SubscricoesScreen   from '../screens/SubscricoesScreen';
-import PerfilScreen        from '../screens/PerfilScreen';
-import NotificacoesScreen  from '../screens/NotificacoesScreen';
-import MetasScreen         from '../screens/MetasScreen';
-import EstatisticasScreen  from '../screens/EstatisticasScreen';
-import ScoreScreen         from '../screens/ScoreScreen';
-import ImpulseScreen       from '../screens/ImpulseScreen';
-import RelatorioScreen     from '../screens/RelatorioScreen';
-import HistoricoScreen     from '../screens/HistoricoScreen';
-
-import TabIcon from '../components/TabIcon';
-
-const Stack     = createStackNavigator();
-const AuthStack = createStackNavigator();
-const MainStack = createStackNavigator();
-const Tab       = createBottomTabNavigator();
-
-export const COLORS = {
-  brand:   '#6C5CE7',
-  bg:      '#0C0C14',
-  surface: '#13131F',
-  surface2:'#1C1C2E',
-  border:  '#252540',
-  text:    '#EEEEF8',
-  textSub: '#7070A0',
-  red:     '#FF5370',
-  green:   '#00C896',
-  yellow:  '#FFB300',
-  brandDim:'rgba(108,92,231,0.15)',
-};
-
-// ── Menu Screen (replaces drawer) ─────────────────────────────────────────
-function MenuScreen({ navigation }) {
-  const { user, logout } = useAuth();
-
-  const initials = user?.nome
-    ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
-    : '?';
-
-  const items = [
-    { label: 'Histórico',       screen: 'Historico'    },
-    { label: 'Relatório',       screen: 'Relatorio'    },
-    { label: 'Score',           screen: 'Score'        },
-    { label: 'Impulse Control', screen: 'Impulse'      },
-    { label: 'Estatísticas',    screen: 'Estatisticas' },
-    { label: 'Subscrições',     screen: 'Subscricoes'  },
-    { label: 'Notificações',    screen: 'Notificacoes' },
-  ];
-
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
-      <ScrollView contentContainerStyle={{ padding: 24 }}>
-        {/* Profile */}
-        <View style={mStyles.profileRow}>
-          <View style={mStyles.avatar}>
-            <Text style={mStyles.avatarText}>{initials}</Text>
-          </View>
-          <View>
-            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
-            <Text style={mStyles.email}>{user?.email || ''}</Text>
-          </View>
-        </View>
-
-        <View style={mStyles.divider} />
-
-        {items.map(item => (
-          <TouchableOpacity
-            key={item.screen}
-            style={mStyles.item}
-            onPress={() => navigation.navigate(item.screen)}
-            activeOpacity={0.7}
-          >
-            <Text style={mStyles.itemText}>{item.label}</Text>
-            <Text style={{ color: COLORS.textSub }}>›</Text>
-          </TouchableOpacity>
-        ))}
-
-        <View style={mStyles.divider} />
-
-        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
-          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const mStyles = StyleSheet.create({
-  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
-  avatar: {
-    width: 46, height: 46, borderRadius: 14,
-    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
-  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  email:      { fontSize: 12, color: COLORS.textSub },
-  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
-  item: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
-  },
-  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
-  logout:     { paddingVertical: 14 },
-  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
-});
-
-// ── Tabs ──────────────────────────────────────────────────────────────────
-function MainTabs({ navigation }) {
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: true,
-        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-        headerTintColor: COLORS.text,
-        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
-        headerRight: () => (
-          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
-            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
-          </TouchableOpacity>
-        ),
-        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
-        tabBarActiveTintColor: COLORS.brand,
-        tabBarInactiveTintColor: COLORS.textSub,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
-        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
-      })}
-    >
-      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
-      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
-      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
-      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
-      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
-    </Tab.Navigator>
-  );
-}
-
-// ── Main Stack ────────────────────────────────────────────────────────────
-function MainStackNav() {
-  const commonHeader = {
-    headerShown: true,
-    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-    headerTintColor: COLORS.text,
-    headerTitleStyle: { fontWeight: '800', fontSize: 17 },
-    headerBackTitleVisible: false,
+<file path="verly-mobile/babel.config.js">
+module.exports = function (api) {
+  api.cache(true);
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: ['react-native-reanimated/plugin'],
   };
-
-  return (
-    <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs"          component={MainTabs} />
-      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
-      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
-      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
-      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
-      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
-      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
-      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
-      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
-    </MainStack.Navigator>
-  );
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────
-function AuthNavigator() {
-  return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Login"    component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-    </AuthStack.Navigator>
-  );
-}
-
-// ── Root ──────────────────────────────────────────────────────────────────
-export default function AppNavigator() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
-        <ActivityIndicator size="large" color={COLORS.brand} />
-      </View>
-    );
-  }
-
-  return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainStackNav} />
-        ) : (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-}
+};
 </file>
 
 <file path="verly-mobile/src/constants/theme.js">
@@ -5013,280 +5801,6 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/HistoricoScreen.js">
-import React from 'react';
-import { View, Text } from 'react-native';
-
-export default function HistoricoScreen() {
-  return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0C0C14' }}>
-      <Text style={{ color: 'white' }}>Histórico em breve</Text>
-    </View>
-  );
-}
-</file>
-
-<file path="verly-mobile/src/screens/ImpulseScreen.js">
-/**
- * src/screens/ImpulseScreen.js
- * Impulse Control Mode — analisa antes de comprar
- * Design polished: sem emojis, Lucide icons, layout limpo
- */
-
-import React, { useState } from 'react';
-import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert,
-} from 'react-native';
-import {
-  Brain, ShieldCheck, ShieldX, Lightbulb, AlignLeft,
-  RotateCcw, Flame, Smile, Wind, BarChart2,
-} from 'lucide-react-native';
-import { impulseAPI } from '../services/api';
-
-const C = {
-  brand:   '#6C5CE7',
-  bg:      '#0C0C14',
-  surface: '#13131F',
-  surface2:'#1C1C2E',
-  border:  '#252540',
-  text:    '#EEEEF8',
-  textSub: '#7070A0',
-  green:   '#00C896',
-  red:     '#FF5370',
-  yellow:  '#FFB300',
-};
-
-const PERSONALIDADES = [
-  {
-    key:   'calm',
-    label: 'Calmo',
-    desc:  'Empático e construtivo',
-    color: C.green,
-    Icon:  Wind,
-  },
-  {
-    key:   'pro',
-    label: 'Profissional',
-    desc:  'Análise financeira fria',
-    color: C.brand,
-    Icon:  BarChart2,
-  },
-  {
-    key:   'sarcastic',
-    label: 'Sarcástico',
-    desc:  'Irónico mas útil',
-    color: C.yellow,
-    Icon:  Smile,
-  },
-  {
-    key:   'savage',
-    label: 'Direto',
-    desc:  'Brutal e sem filtros',
-    color: C.red,
-    Icon:  Flame,
-  },
-];
-
-export default function ImpulseScreen() {
-  const [produto,       setProduto]       = useState('');
-  const [personalidade, setPersonalidade] = useState('calm');
-  const [loading,       setLoading]       = useState(false);
-  const [resultado,     setResultado]     = useState(null);
-
-  const pInfo = PERSONALIDADES.find(p => p.key === personalidade) || PERSONALIDADES[0];
-
-  const analisar = async () => {
-    if (!produto.trim()) {
-      Alert.alert('Atenção', 'Descreve o que queres comprar.');
-      return;
-    }
-    setLoading(true);
-    setResultado(null);
-    try {
-      const data = await impulseAPI.analisar({ produto: produto.trim(), personalidade });
-      if (data.success) setResultado(data.resultado);
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const reset = () => { setResultado(null); setProduto(''); };
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerIcon}>
-          <Brain size={22} color={C.brand} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Impulse Control</Text>
-          <Text style={styles.headerSub}>Pensa duas vezes antes de gastar</Text>
-        </View>
-      </View>
-
-      {/* Form */}
-      <View style={styles.card}>
-        <Text style={styles.label}>O que queres comprar?</Text>
-        <TextInput
-          style={styles.textarea}
-          value={produto}
-          onChangeText={setProduto}
-          placeholder="Descreve o produto e porque queres comprar..."
-          placeholderTextColor={C.textSub}
-          multiline
-          numberOfLines={3}
-          textAlignVertical="top"
-        />
-
-        <Text style={styles.label}>Tom da análise</Text>
-        <View style={styles.persGrid}>
-          {PERSONALIDADES.map(p => {
-            const active = personalidade === p.key;
-            const { Icon } = p;
-            return (
-              <TouchableOpacity
-                key={p.key}
-                style={[styles.persBtn, active && { borderColor: p.color, backgroundColor: `${p.color}15` }]}
-                onPress={() => setPersonalidade(p.key)}
-              >
-                <View style={[styles.persIconWrap, active && { backgroundColor: `${p.color}22` }]}>
-                  <Icon size={16} color={active ? p.color : C.textSub} />
-                </View>
-                <Text style={[styles.persBtnLabel, active && { color: p.color }]}>{p.label}</Text>
-                <Text style={styles.persBtnDesc}>{p.desc}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        <TouchableOpacity
-          style={[styles.btn, { backgroundColor: pInfo.color }, loading && { opacity: 0.6 }]}
-          onPress={analisar}
-          disabled={loading}
-        >
-          {loading
-            ? <ActivityIndicator color="#fff" />
-            : <Text style={styles.btnText}>Analisar com Verly</Text>
-          }
-        </TouchableOpacity>
-      </View>
-
-      {/* Resultado */}
-      {resultado && (
-        <View style={styles.card}>
-          {/* Veredicto */}
-          <View style={[
-            styles.veredictoBox,
-            { borderColor: resultado.aguardar ? C.red : C.green,
-              backgroundColor: resultado.aguardar ? 'rgba(255,83,112,0.08)' : 'rgba(0,200,150,0.08)' }
-          ]}>
-            {resultado.aguardar
-              ? <ShieldX  size={20} color={C.red}   style={{ marginRight: 10 }} />
-              : <ShieldCheck size={20} color={C.green} style={{ marginRight: 10 }} />
-            }
-            <Text style={[styles.veredictoText, { color: resultado.aguardar ? C.red : C.green }]}>
-              {resultado.aguardar ? 'Espera antes de comprar' : 'Podes avançar'}
-            </Text>
-          </View>
-
-          {/* Frase principal */}
-          <View style={styles.quoteBox}>
-            <Text style={styles.quoteText}>"{resultado.veredicto}"</Text>
-          </View>
-
-          {/* Análise */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <AlignLeft size={13} color={C.textSub} />
-              <Text style={styles.sectionTitle}>Análise</Text>
-            </View>
-            <Text style={styles.sectionText}>{resultado.analise}</Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          {/* Alternativa */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Lightbulb size={13} color={C.yellow} />
-              <Text style={[styles.sectionTitle, { color: C.yellow }]}>Alternativa</Text>
-            </View>
-            <Text style={styles.sectionText}>{resultado.alternativa}</Text>
-          </View>
-
-          {/* Reset */}
-          <TouchableOpacity style={styles.resetBtn} onPress={reset}>
-            <RotateCcw size={14} color={C.textSub} />
-            <Text style={styles.resetText}>Analisar outro produto</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: C.bg },
-  content: { paddingBottom: 48 },
-
-  header:     { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24 },
-  headerIcon: { width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(108,92,231,0.15)', alignItems: 'center', justifyContent: 'center' },
-  headerTitle:{ fontSize: 24, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
-  headerSub:  { fontSize: 13, color: C.textSub, marginTop: 2 },
-
-  card: {
-    marginHorizontal: 16, marginBottom: 14,
-    backgroundColor: C.surface, borderRadius: 18, padding: 20,
-    borderWidth: 1, borderColor: C.border,
-  },
-
-  label: { fontSize: 12, fontWeight: '700', color: C.textSub, marginBottom: 8, marginTop: 18, letterSpacing: 0.5, textTransform: 'uppercase' },
-
-  textarea: {
-    backgroundColor: C.surface2, borderRadius: 12,
-    padding: 14, color: C.text, fontSize: 15,
-    borderWidth: 1, borderColor: C.border,
-    minHeight: 90, lineHeight: 22,
-  },
-
-  persGrid:     { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
-  persBtn:      { width: '47.5%', backgroundColor: C.surface2, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: C.border },
-  persIconWrap: { width: 32, height: 32, borderRadius: 9, backgroundColor: C.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  persBtnLabel: { fontSize: 13, fontWeight: '800', color: C.text, marginBottom: 2 },
-  persBtnDesc:  { fontSize: 11, color: C.textSub, lineHeight: 15 },
-
-  btn:     { borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 22 },
-  btnText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 0.2 },
-
-  veredictoBox: { flexDirection: 'row', alignItems: 'center', borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 16 },
-  veredictoText:{ fontSize: 15, fontWeight: '800', flex: 1 },
-
-  quoteBox: {
-    backgroundColor: C.surface2, borderRadius: 10, padding: 14, marginBottom: 16,
-    borderLeftWidth: 3, borderLeftColor: C.brand,
-  },
-  quoteText: { fontSize: 14, color: C.text, fontStyle: 'italic', lineHeight: 22 },
-
-  section:       { marginBottom: 14 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  sectionTitle:  { fontSize: 12, fontWeight: '700', color: C.textSub, letterSpacing: 0.5, textTransform: 'uppercase' },
-  sectionText:   { fontSize: 14, color: C.text, lineHeight: 22 },
-
-  divider: { height: 1, backgroundColor: C.border, marginVertical: 14 },
-
-  resetBtn:  { flexDirection: 'row', alignItems: 'center', gap: 8, justifyContent: 'center', paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: C.border, marginTop: 8 },
-  resetText: { fontSize: 13, color: C.textSub, fontWeight: '600' },
-});
-</file>
-
 <file path="verly-mobile/src/screens/MetasScreen.js">
 /**
  * src/screens/MetasScreen.js
@@ -6002,19 +6516,6 @@ const styles = StyleSheet.create({
   detalheCount: { fontSize: 12, color: C.textSub, minWidth: 24 },
   detalheTotal: { fontSize: 14, fontWeight: '800', color: C.brand, minWidth: 70, textAlign: 'right' },
 });
-</file>
-
-<file path="verly-mobile/src/screens/ScoreScreen.js">
-import React from 'react';
-import { View, Text } from 'react-native';
-
-export default function ScoreScreen() {
-  return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0C0C14' }}>
-      <Text style={{ color: 'white' }}>Score em breve</Text>
-    </View>
-  );
-}
 </file>
 
 <file path="verly-mobile/src/screens/SubscricoesScreen.js">
@@ -6933,6 +7434,15 @@ RESUMO DE VALORES
   Pull & Bear - Servico ao Cliente: support@pull-e-bear.pt
 
 ================================================================================
+</file>
+
+<file path="run.py">
+from app import create_app
+
+app = create_app()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
 </file>
 
 <file path="templates/configuracoes.html">
@@ -8411,6 +8921,242 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
+<file path="verly-mobile/App.js">
+import 'react-native-gesture-handler';
+import React from 'react';
+import { StatusBar } from 'react-native';
+import { AuthProvider } from './src/context/AuthContext';
+import AppNavigator, { COLORS } from './src/navigation/AppNavigator';
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+      <AppNavigator />
+    </AuthProvider>
+  );
+}
+</file>
+
+<file path="verly-mobile/src/components/DrawerContent.js">
+import 'react-native-gesture-handler';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  ActivityIndicator, View, Text, StyleSheet,
+  TouchableOpacity, ScrollView, SafeAreaView,
+} from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+
+import { useAuth } from '../context/AuthContext';
+import { notificacoesAPI } from '../services/api';
+
+import LoginScreen         from '../screens/auth/LoginScreen';
+import RegisterScreen      from '../screens/auth/RegisterScreen';
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
+import MetasScreen         from '../screens/MetasScreen';
+import EstatisticasScreen  from '../screens/EstatisticasScreen';
+import ScoreScreen         from '../screens/ScoreScreen';
+import ImpulseScreen       from '../screens/ImpulseScreen';
+import RelatorioScreen     from '../screens/RelatorioScreen';
+import HistoricoScreen     from '../screens/HistoricoScreen';
+
+import TabIcon from '../components/TabIcon';
+
+const Stack     = createStackNavigator();
+const AuthStack = createStackNavigator();
+const MainStack = createStackNavigator();
+const Tab       = createBottomTabNavigator();
+
+export const COLORS = {
+  brand:   '#6C5CE7',
+  bg:      '#0C0C14',
+  surface: '#13131F',
+  surface2:'#1C1C2E',
+  border:  '#252540',
+  text:    '#EEEEF8',
+  textSub: '#7070A0',
+  red:     '#FF5370',
+  green:   '#00C896',
+  yellow:  '#FFB300',
+  brandDim:'rgba(108,92,231,0.15)',
+};
+
+// ── Menu Screen (replaces drawer) ─────────────────────────────────────────
+function MenuScreen({ navigation }) {
+  const { user, logout } = useAuth();
+
+  const initials = user?.nome
+    ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
+    : '?';
+
+  const items = [
+    { label: 'Histórico',       screen: 'Historico'    },
+    { label: 'Relatório',       screen: 'Relatorio'    },
+    { label: 'Score',           screen: 'Score'        },
+    { label: 'Impulse Control', screen: 'Impulse'      },
+    { label: 'Estatísticas',    screen: 'Estatisticas' },
+    { label: 'Subscrições',     screen: 'Subscricoes'  },
+    { label: 'Notificações',    screen: 'Notificacoes' },
+  ];
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      <ScrollView contentContainerStyle={{ padding: 24 }}>
+        {/* Profile */}
+        <View style={mStyles.profileRow}>
+          <View style={mStyles.avatar}>
+            <Text style={mStyles.avatarText}>{initials}</Text>
+          </View>
+          <View>
+            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
+            <Text style={mStyles.email}>{user?.email || ''}</Text>
+          </View>
+        </View>
+
+        <View style={mStyles.divider} />
+
+        {items.map(item => (
+          <TouchableOpacity
+            key={item.screen}
+            style={mStyles.item}
+            onPress={() => navigation.navigate(item.screen)}
+            activeOpacity={0.7}
+          >
+            <Text style={mStyles.itemText}>{item.label}</Text>
+            <Text style={{ color: COLORS.textSub }}>›</Text>
+          </TouchableOpacity>
+        ))}
+
+        <View style={mStyles.divider} />
+
+        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
+          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const mStyles = StyleSheet.create({
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
+  avatar: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:      { fontSize: 12, color: COLORS.textSub },
+  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  item: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  logout:     { paddingVertical: 14 },
+  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
+});
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function MainTabs({ navigation }) {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+        headerTintColor: COLORS.text,
+        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
+        headerRight: () => (
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
+            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
+        ),
+        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
+        tabBarActiveTintColor: COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
+      })}
+    >
+      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
+      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
+      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
+      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
+    </Tab.Navigator>
+  );
+}
+
+// ── Main Stack ────────────────────────────────────────────────────────────
+function MainStackNav() {
+  const commonHeader = {
+    headerShown: true,
+    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    headerTintColor: COLORS.text,
+    headerTitleStyle: { fontWeight: '800', fontSize: 17 },
+    headerBackTitleVisible: false,
+  };
+
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
+      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
+      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
+      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
+      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
+    </MainStack.Navigator>
+  );
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainStackNav} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+</file>
+
 <file path="verly-mobile/src/components/TabIcon.js">
 /**
  * src/components/TabIcon.js — atualizado com ícone de Metas e Estatísticas
@@ -9813,6 +10559,19 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/HistoricoScreen.js">
+import React from 'react';
+import { View, Text } from 'react-native';
+
+export default function HistoricoScreen() {
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0C0C14' }}>
+      <Text style={{ color: 'white' }}>Histórico em breve</Text>
+    </View>
+  );
+}
+</file>
+
 <file path="verly-mobile/src/screens/PerfilScreen.js">
 /**
  * src/screens/PerfilScreen.js
@@ -9972,6 +10731,452 @@ const styles = StyleSheet.create({
   settingDesc:  { fontSize: 12, color: COLORS.textSub },
   logoutBtn: { backgroundColor: 'rgba(255,71,87,0.08)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   logoutText: { color: COLORS.red, fontSize: 15, fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/ScoreScreen.js">
+/**
+ * src/screens/ScoreScreen.js
+ * "Valeu a Pena?" — Score de Compras
+ * Versão mobile completa: score, análise IA, mapa de lojas com react-native-maps
+ *
+ * NOTA: Requer react-native-maps instalado:
+ *   npx expo install react-native-maps
+ */
+
+import React, { useState, useRef } from 'react';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, ActivityIndicator, Alert, Platform,
+  Dimensions, Modal,
+} from 'react-native';
+import * as Location from 'expo-location';
+import { scoreAPI } from '../services/api';
+import { COLORS } from '../constants/theme';
+
+const { width: W } = Dimensions.get('window');
+
+// ── Dados ─────────────────────────────────────────────────────────────────────
+
+const CATEGORIAS = [
+  'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
+  'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes', 'Educação', 'Outros',
+];
+
+const USO_OPCOES = [
+  { key: 'daily',   label: 'Uso diário',     emoji: '🔥' },
+  { key: 'weekly',  label: 'Uso regular',     emoji: '✅' },
+  { key: 'monthly', label: 'Uso ocasional',   emoji: '📅' },
+  { key: 'rarely',  label: 'Raramente',       emoji: '😬' },
+  { key: 'never',   label: 'Nunca usei',      emoji: '💸' },
+];
+
+// ── Helpers visuais ───────────────────────────────────────────────────────────
+
+function getScoreColor(score) {
+  if (score >= 75) return COLORS.green;
+  if (score >= 50) return COLORS.yellow;
+  if (score >= 25) return '#FF8C00';
+  return COLORS.red;
+}
+
+function getScoreLabel(score) {
+  if (score >= 75) return 'Excelente compra! 🎉';
+  if (score >= 50) return 'Compra razoável 👍';
+  if (score >= 25) return 'Podes fazer melhor 😕';
+  return 'Compra questionável 🚨';
+}
+
+function getAvaliacaoLabel(av) {
+  const map = {
+    barato:    { text: 'Preço abaixo do mercado 🟢', color: COLORS.green },
+    justo:     { text: 'Preço de mercado 🔵',         color: COLORS.brand },
+    caro:      { text: 'Acima do mercado 🟠',          color: COLORS.yellow },
+    muito_caro:{ text: 'Muito acima do mercado 🔴',    color: COLORS.red },
+  };
+  return map[av] || { text: av, color: COLORS.textSub };
+}
+
+// ── Componente de score circular ──────────────────────────────────────────────
+
+function ScoreCircle({ score }) {
+  const color = getScoreColor(score);
+  return (
+    <View style={[sc.circle, { borderColor: color }]}>
+      <Text style={[sc.circleScore, { color }]}>{score}</Text>
+      <Text style={sc.circleLabel}>/100</Text>
+    </View>
+  );
+}
+
+const sc = StyleSheet.create({
+  circle: { width: 140, height: 140, borderRadius: 70, borderWidth: 8, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.surface },
+  circleScore: { fontSize: 48, fontWeight: '900' },
+  circleLabel: { fontSize: 14, color: COLORS.textSub, fontWeight: '600', marginTop: -4 },
+});
+
+// ── Mapa de lojas (usa react-native-maps se disponível) ───────────────────────
+
+function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
+  const [MapView, setMapView] = useState(null);
+  const [Marker, setMarker] = useState(null);
+  const [mapReady, setMapReady] = useState(false);
+
+  React.useEffect(() => {
+    if (!visible) return;
+    try {
+      const maps = require('react-native-maps');
+      setMapView(() => maps.default);
+      setMarker(() => maps.Marker);
+      setMapReady(true);
+    } catch {
+      setMapReady(false);
+    }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
+        {/* Header */}
+        <View style={m.header}>
+          <TouchableOpacity onPress={onClose} style={m.closeBtn}>
+            <Text style={m.closeBtnText}>‹ Fechar</Text>
+          </TouchableOpacity>
+          <Text style={m.headerTitle}>Lojas Próximas ({lojas.length})</Text>
+          <View style={{ width: 80 }} />
+        </View>
+
+        {!mapReady ? (
+          // Fallback: lista de lojas sem mapa
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            <View style={m.noMapBanner}>
+              <Text style={m.noMapText}>
+                📍 Mapa não disponível.{'\n'}Instala react-native-maps para ver o mapa.
+              </Text>
+            </View>
+            {lojas.map((loja, i) => (
+              <View key={i} style={m.lojaCard}>
+                <View style={m.lojaInfo}>
+                  <Text style={m.lojaNome}>{loja.nome}</Text>
+                  <Text style={m.lojaMeta}>{loja.distancia} · {loja.endereco || ''}</Text>
+                  {loja.avaliacao ? <Text style={m.lojaRating}>⭐ {loja.avaliacao}</Text> : null}
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={{ flex: 1 }}>
+            {/* Mapa */}
+            {React.createElement(MapView, {
+              style: { flex: 1 },
+              initialRegion: {
+                latitude:      userLat || 38.7,
+                longitude:     userLng || -9.14,
+                latitudeDelta:  0.05,
+                longitudeDelta: 0.05,
+              },
+            },
+              // Marcador do utilizador
+              userLat && React.createElement(Marker, {
+                key: 'user',
+                coordinate: { latitude: userLat, longitude: userLng },
+                title: 'A tua localização',
+                pinColor: COLORS.brand,
+              }),
+              // Marcadores das lojas
+              ...lojas.map((loja, i) =>
+                loja.lat && React.createElement(Marker, {
+                  key: i,
+                  coordinate: { latitude: loja.lat, longitude: loja.lng },
+                  title: loja.nome,
+                  description: `${loja.distancia}${loja.avaliacao ? ` · ⭐ ${loja.avaliacao}` : ''}`,
+                })
+              )
+            )}
+
+            {/* Lista overlay */}
+            <View style={m.overlay}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ padding: 12, gap: 10 }}>
+                {lojas.map((loja, i) => (
+                  <View key={i} style={m.lojaChip}>
+                    <Text style={m.lojaNomeChip}>{loja.nome}</Text>
+                    <Text style={m.lojaDistChip}>{loja.distancia}</Text>
+                    {loja.avaliacao ? <Text style={m.lojaRating}>⭐ {loja.avaliacao}</Text> : null}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+const m = StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 56, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: COLORS.bg },
+  closeBtn: { width: 80 },
+  closeBtnText: { color: COLORS.brand, fontSize: 16, fontWeight: '700' },
+  headerTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
+  noMapBanner: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, marginBottom: 16, alignItems: 'center' },
+  noMapText: { color: COLORS.textSub, textAlign: 'center', lineHeight: 22 },
+  lojaCard: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border },
+  lojaInfo: {},
+  lojaNome: { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  lojaMeta: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
+  lojaRating: { fontSize: 12, color: COLORS.yellow, marginTop: 4 },
+  overlay: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.surface + 'EE' },
+  lojaChip: { backgroundColor: COLORS.surface2, borderRadius: 12, padding: 12, minWidth: 130, borderWidth: 1, borderColor: COLORS.border },
+  lojaNomeChip: { fontSize: 13, fontWeight: '700', color: COLORS.text },
+  lojaDistChip: { fontSize: 11, color: COLORS.textSub, marginTop: 2 },
+});
+
+// ── Ecrã principal ────────────────────────────────────────────────────────────
+
+export default function ScoreScreen() {
+  const [item, setItem]       = useState('');
+  const [preco, setPreco]     = useState('');
+  const [categoria, setCategoria] = useState(CATEGORIAS[0]);
+  const [uso, setUso]         = useState('weekly');
+  const [loading, setLoading] = useState(false);
+  const [resultado, setResultado] = useState(null);
+
+  const [lojas, setLojas]     = useState([]);
+  const [lojasLoad, setLojasLoad] = useState(false);
+  const [showMapa, setShowMapa] = useState(false);
+  const [userCoords, setUserCoords] = useState({ lat: null, lng: null });
+
+  const scrollRef = useRef(null);
+
+  // ── Analisar ──────────────────────────────────────────────────────────────
+
+  const handleAnalisar = async () => {
+    if (!item.trim()) return Alert.alert('Atenção', 'Indica o produto.');
+    const precoNum = parseFloat(preco.replace(',', '.'));
+    if (isNaN(precoNum) || precoNum <= 0) return Alert.alert('Atenção', 'Indica um preço válido.');
+
+    setLoading(true);
+    setResultado(null);
+    setLojas([]);
+    try {
+      const data = await scoreAPI.analisar({ item: item.trim(), preco: precoNum, categoria, uso });
+      setResultado(data);
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 400, animated: true }), 300);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Lojas próximas ─────────────────────────────────────────────────────────
+
+  const handleLojas = async () => {
+    setLojasLoad(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Sem permissão', 'Preciso de acesso à localização para mostrar lojas próximas.');
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude: lat, longitude: lng } = loc.coords;
+      setUserCoords({ lat, lng });
+
+      const data = await scoreAPI.lojasProximas({ item: item.trim(), categoria, lat, lng });
+      setLojas(data.lojas || []);
+      setShowMapa(true);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLojasLoad(false);
+    }
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  return (
+    <ScrollView ref={scrollRef} style={s.root} contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      
+      {/* Título */}
+      <View style={s.hero}>
+        <Text style={s.heroTitle}>Valeu a Pena?</Text>
+        <Text style={s.heroSub}>Avalia qualquer compra com inteligência artificial.</Text>
+      </View>
+
+      {/* Formulário */}
+      <View style={s.card}>
+        <Text style={s.label}>Produto / Serviço</Text>
+        <TextInput
+          style={s.input}
+          value={item}
+          onChangeText={setItem}
+          placeholder="Ex: Nike Air Max, iPhone 16, Café..."
+          placeholderTextColor={COLORS.textSub}
+        />
+
+        <Text style={s.label}>Preço Pago (€)</Text>
+        <TextInput
+          style={s.input}
+          value={preco}
+          onChangeText={setPreco}
+          placeholder="0.00"
+          placeholderTextColor={COLORS.textSub}
+          keyboardType="decimal-pad"
+        />
+
+        <Text style={s.label}>Categoria</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+          <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+            {CATEGORIAS.map(c => (
+              <TouchableOpacity key={c} style={[s.chip, categoria === c && s.chipActive]} onPress={() => setCategoria(c)}>
+                <Text style={[s.chipText, categoria === c && s.chipTextActive]}>{c}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+
+        <Text style={s.label}>Frequência de Uso</Text>
+        <View style={s.usoGrid}>
+          {USO_OPCOES.map(u => (
+            <TouchableOpacity key={u.key} style={[s.usoBtn, uso === u.key && s.usoBtnActive]} onPress={() => setUso(u.key)}>
+              <Text style={s.usoEmoji}>{u.emoji}</Text>
+              <Text style={[s.usoLabel, uso === u.key && { color: COLORS.brand }]}>{u.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <TouchableOpacity style={[s.analyzeBtn, loading && { opacity: 0.6 }]} onPress={handleAnalisar} disabled={loading}>
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.analyzeBtnText}>Analisar Compra</Text>}
+        </TouchableOpacity>
+      </View>
+
+      {/* Resultado */}
+      {resultado && (
+        <View style={s.resultCard}>
+          {/* Score */}
+          <View style={s.scoreSection}>
+            <ScoreCircle score={resultado.score_final ?? resultado.score ?? 0} />
+            <Text style={[s.scoreLabel, { color: getScoreColor(resultado.score_final ?? resultado.score ?? 0) }]}>
+              {getScoreLabel(resultado.score_final ?? resultado.score ?? 0)}
+            </Text>
+          </View>
+
+          {/* Preço de mercado */}
+          {resultado.avaliacao_mercado && resultado.avaliacao_mercado.preco_medio && (
+            <View style={s.mercadoBox}>
+              <Text style={s.mercadoLabel}>Preço de mercado estimado</Text>
+              <Text style={s.mercadoPreco}>{resultado.avaliacao_mercado.preco_medio.toFixed(2)}€</Text>
+              <Text style={[s.mercadoAv, { color: getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).color }]}>
+                {getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).text}
+              </Text>
+              {resultado.avaliacao_mercado.comentario ? (
+                <Text style={s.mercadoCom}>{resultado.avaliacao_mercado.comentario}</Text>
+              ) : null}
+            </View>
+          )}
+
+          {/* Fatores */}
+          {resultado.fatores && resultado.fatores.length > 0 && (
+            <View style={s.fatoresSection}>
+              <Text style={s.fatoresTitle}>Análise Detalhada</Text>
+              {resultado.fatores.map((f, i) => (
+                <View key={i} style={s.fatorRow}>
+                  <Text style={s.fatorNome}>{f.nome || f.label}</Text>
+                  <View style={s.fatorBarBg}>
+                    <View style={[s.fatorBar, { width: `${Math.min(f.score ?? f.valor ?? 0, 100)}%`, backgroundColor: getScoreColor(f.score ?? f.valor ?? 50) }]} />
+                  </View>
+                  <Text style={s.fatorVal}>{f.score ?? f.valor ?? 0}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Conselho da IA */}
+          {resultado.conselho && (
+            <View style={s.conselhoBox}>
+              <Text style={s.conselhoIcon}>✦</Text>
+              <Text style={s.conselhoText}>{resultado.conselho}</Text>
+            </View>
+          )}
+
+          {/* Lojas próximas */}
+          <TouchableOpacity style={[s.lojasBtn, lojasLoad && { opacity: 0.6 }]} onPress={handleLojas} disabled={lojasLoad}>
+            {lojasLoad ? (
+              <ActivityIndicator color={COLORS.brand} size="small" />
+            ) : (
+              <Text style={s.lojasBtnText}>📍 Ver Lojas Próximas</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Mapa */}
+      <MapaLojas
+        lojas={lojas}
+        userLat={userCoords.lat}
+        userLng={userCoords.lng}
+        visible={showMapa}
+        onClose={() => setShowMapa(false)}
+      />
+    </ScrollView>
+  );
+}
+
+// ── Estilos ───────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: COLORS.bg },
+
+  hero: { marginBottom: 20 },
+  heroTitle: { fontSize: 28, fontWeight: '900', color: COLORS.text },
+  heroSub: { fontSize: 14, color: COLORS.textSub, marginTop: 4 },
+
+  card: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
+
+  label: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 8, marginTop: 14 },
+  input: { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
+
+  chip: { backgroundColor: COLORS.surface2, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, borderWidth: 1, borderColor: COLORS.border },
+  chipActive: { backgroundColor: COLORS.brandDim, borderColor: COLORS.brand },
+  chipText: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
+  chipTextActive: { color: COLORS.brand },
+
+  usoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  usoBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: COLORS.border },
+  usoBtnActive: { borderColor: COLORS.brand, backgroundColor: COLORS.brandDim },
+  usoEmoji: { fontSize: 16 },
+  usoLabel: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
+
+  analyzeBtn: { backgroundColor: COLORS.brand, borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 20 },
+  analyzeBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+
+  // Resultado
+  resultCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
+
+  scoreSection: { alignItems: 'center', marginBottom: 20 },
+  scoreLabel: { fontSize: 18, fontWeight: '800', marginTop: 14 },
+
+  mercadoBox: { backgroundColor: COLORS.surface2, borderRadius: 12, padding: 16, marginBottom: 16, alignItems: 'center' },
+  mercadoLabel: { fontSize: 11, color: COLORS.textSub, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
+  mercadoPreco: { fontSize: 26, fontWeight: '900', color: COLORS.text, marginBottom: 4 },
+  mercadoAv: { fontSize: 14, fontWeight: '700' },
+  mercadoCom: { fontSize: 12, color: COLORS.textSub, marginTop: 4, textAlign: 'center' },
+
+  fatoresSection: { marginBottom: 16 },
+  fatoresTitle: { fontSize: 13, fontWeight: '800', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 12 },
+  fatorRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  fatorNome: { fontSize: 12, color: COLORS.textSub, width: 100 },
+  fatorBarBg: { flex: 1, height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: 'hidden' },
+  fatorBar: { height: 6, borderRadius: 3 },
+  fatorVal: { fontSize: 12, fontWeight: '700', color: COLORS.text, width: 28, textAlign: 'right' },
+
+  conselhoBox: { flexDirection: 'row', gap: 10, backgroundColor: COLORS.brandDim, borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: COLORS.brand + '40' },
+  conselhoIcon: { fontSize: 18, color: COLORS.brand },
+  conselhoText: { flex: 1, fontSize: 14, color: COLORS.text, lineHeight: 20 },
+
+  lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface2, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border },
+  lojasBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
 });
 </file>
 
@@ -10799,25 +12004,20 @@ Run the Application:
 
 <file path="app/api/__init__.py">
 """
-app/api/__init__.py — Blueprint da API REST para o React Native
-
-Todos os endpoints aqui retornam JSON.
-Autenticação via JWT (flask-jwt-extended).
-
-Registar no __init__.py principal:
-    from app.api import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api/v1')
+app/api/__init__.py
+Regista o blueprint da API mobile e importa todas as rotas.
 """
-
 from flask import Blueprint
-from app import csrf
 
-api_bp = Blueprint('api', __name__)
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
 
-# Excluir as rotas da API do CSRF protection (usam JWT em vez de CSRF)
-csrf.exempt(api_bp)
-
-from app.api import auth, dashboard, faturas, chat, mobile_extras  # noqa
+# Importa as rotas — a ordem não importa
+from app.api import auth        # noqa: F401, E402
+from app.api import chat        # noqa: F401, E402  ← versão corrigida (Groq direto)
+from app.api import dashboard   # noqa: F401, E402
+from app.api import faturas     # noqa: F401, E402
+from app.api import mobile_extras  # noqa: F401, E402
+from app.api import playlists   # noqa: F401, E402  ← NOVO
 </file>
 
 <file path="templates/perfil.html">
@@ -11423,218 +12623,6 @@ async function analisarExtrato(file) {
 </script>
 {% endblock %}
 {% endblock %}
-</file>
-
-<file path="verly-mobile/src/navigation/AppNavigator.js">
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  ActivityIndicator, View, Text, StyleSheet,
-  TouchableOpacity, ScrollView, SafeAreaView,
-} from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
-import { createStackNavigator } from '@react-navigation/stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-
-import { useAuth } from '../context/AuthContext';
-import { notificacoesAPI } from '../services/api';
-
-import LoginScreen         from '../screens/auth/LoginScreen';
-import RegisterScreen      from '../screens/auth/RegisterScreen';
-import DashboardScreen     from '../screens/DashboardScreen';
-import FaturasScreen       from '../screens/FaturasScreen';
-import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
-import ChatScreen          from '../screens/ChatScreen';
-import SubscricoesScreen   from '../screens/SubscricoesScreen';
-import PerfilScreen        from '../screens/PerfilScreen';
-import NotificacoesScreen  from '../screens/NotificacoesScreen';
-import MetasScreen         from '../screens/MetasScreen';
-import EstatisticasScreen  from '../screens/EstatisticasScreen';
-import ScoreScreen         from '../screens/ScoreScreen';
-import ImpulseScreen       from '../screens/ImpulseScreen';
-import RelatorioScreen     from '../screens/RelatorioScreen';
-import HistoricoScreen     from '../screens/HistoricoScreen';
-
-import TabIcon from '../components/TabIcon';
-
-const Stack     = createStackNavigator();
-const AuthStack = createStackNavigator();
-const MainStack = createStackNavigator();
-const Tab       = createBottomTabNavigator();
-
-export const COLORS = {
-  brand:   '#6C5CE7',
-  bg:      '#0C0C14',
-  surface: '#13131F',
-  surface2:'#1C1C2E',
-  border:  '#252540',
-  text:    '#EEEEF8',
-  textSub: '#7070A0',
-  red:     '#FF5370',
-  green:   '#00C896',
-  yellow:  '#FFB300',
-  brandDim:'rgba(108,92,231,0.15)',
-};
-
-function MenuScreen({ navigation }) {
-  const { user, logout } = useAuth();
-
-  const initials = user?.nome
-    ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
-    : '?';
-
-  const items = [
-    { label: 'Histórico',       screen: 'Historico'    },
-    { label: 'Relatório',       screen: 'Relatorio'    },
-    { label: 'Score',           screen: 'Score'        },
-    { label: 'Impulse Control', screen: 'Impulse'      },
-    { label: 'Estatísticas',    screen: 'Estatisticas' },
-    { label: 'Subscrições',     screen: 'Subscricoes'  },
-    { label: 'Notificações',    screen: 'Notificacoes' },
-  ];
-
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
-      <ScrollView contentContainerStyle={{ padding: 24 }}>
-        <View style={mStyles.profileRow}>
-          <View style={mStyles.avatar}>
-            <Text style={mStyles.avatarText}>{initials}</Text>
-          </View>
-          <View>
-            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
-            <Text style={mStyles.email}>{user?.email || ''}</Text>
-          </View>
-        </View>
-
-        <View style={mStyles.divider} />
-
-        {items.map(item => (
-          <TouchableOpacity
-            key={item.screen}
-            style={mStyles.item}
-            onPress={() => navigation.navigate(item.screen)}
-            activeOpacity={0.7}
-          >
-            <Text style={mStyles.itemText}>{item.label}</Text>
-            <Text style={{ color: COLORS.textSub }}>›</Text>
-          </TouchableOpacity>
-        ))}
-
-        <View style={mStyles.divider} />
-
-        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
-          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const mStyles = StyleSheet.create({
-  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
-  avatar: {
-    width: 46, height: 46, borderRadius: 14,
-    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
-  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  email:      { fontSize: 12, color: COLORS.textSub },
-  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
-  item: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
-  },
-  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
-  logout:     { paddingVertical: 14 },
-  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
-});
-
-function MainTabs({ navigation }) {
-  return (
-    <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: true,
-        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-        headerTintColor: COLORS.text,
-        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
-        headerRight: () => (
-          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
-            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
-          </TouchableOpacity>
-        ),
-        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
-        tabBarActiveTintColor: COLORS.brand,
-        tabBarInactiveTintColor: COLORS.textSub,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
-        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
-      })}
-    >
-      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
-      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
-      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
-      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
-      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
-    </Tab.Navigator>
-  );
-}
-
-function MainStackNav() {
-  const commonHeader = {
-    headerShown: true,
-    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-    headerTintColor: COLORS.text,
-    headerTitleStyle: { fontWeight: '800', fontSize: 17 },
-    headerBackTitleVisible: false,
-  };
-
-  return (
-    <MainStack.Navigator screenOptions={{ headerShown: false }}>
-      <MainStack.Screen name="Tabs"          component={MainTabs} />
-      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
-      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
-      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
-      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
-      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
-      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
-      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
-      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
-    </MainStack.Navigator>
-  );
-}
-
-function AuthNavigator() {
-  return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Login"    component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-    </AuthStack.Navigator>
-  );
-}
-
-export default function AppNavigator() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
-        <ActivityIndicator size="large" color={COLORS.brand} />
-      </View>
-    );
-  }
-
-  return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {user ? (
-          <Stack.Screen name="Main" component={MainStackNav} />
-        ) : (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
-  );
-}
 </file>
 
 <file path="app/auth.py">
@@ -13911,226 +14899,247 @@ a:hover { color: var(--brand); }
 </html>
 </file>
 
-<file path="verly-mobile/package.json">
-{
-  "name": "verly-mobile",
-  "version": "1.0.0",
-  "main": "node_modules/expo/AppEntry.js",
-  "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web"
-  },
-  "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-navigation/bottom-tabs": "^6.5.11",
-    "@react-navigation/drawer": "^6.7.2",
-    "@react-navigation/native": "^6.1.9",
-    "@react-navigation/native-stack": "^7.14.14",
-    "@react-navigation/stack": "^6.3.20",
-    "axios": "^1.6.7",
-    "expo": "^54.0.34",
-    "expo-document-picker": "~14.0.8",
-    "expo-image-picker": "~17.0.11",
-    "expo-location": "~19.0.8",
-    "expo-status-bar": "~3.0.9",
-    "lucide-react-native": "^0.322.0",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-reanimated": "~4.1.1",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0",
-    "react-native-svg": "15.12.1",
-    "react-native-web": "^0.21.0",
-    "react-native-webview": "13.15.0",
-    "react-native-worklets": "^0.8.3"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.20.0"
-  },
-  "private": true
-}
-</file>
-
-<file path="verly-mobile/src/services/api.js">
+<file path="verly-mobile/src/navigation/AppNavigator.js">
 /**
- * src/services/api.js
- * Serviço central de comunicação com o backend Flask.
+ * src/navigation/AppNavigator.js
+ * Navegação principal da app Verly Mobile.
+ * - Bottom tabs: Dashboard, Faturas, Chat IA, Metas, Perfil
+ * - Menu lateral (stack screen): Histórico, Relatório, Score, Criar Em, Estatísticas, Subscrições, Notificações
  */
 
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React from 'react';
+import {
+  ActivityIndicator, View, Text, StyleSheet,
+  TouchableOpacity, ScrollView, SafeAreaView,
+} from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-// Muda para o IP da tua máquina quando testares em dispositivo físico
-// Em emulador Android: http://10.0.2.2:5000/api/v1
-// Em dispositivo físico: http://<SEU_IP_LOCAL>:5000/api/v1
-const BASE_URL = 'http://192.168.1.245:5000/api/v1';
+import { useAuth } from '../context/AuthContext';
 
-const TOKEN_KEY = '@verly_token';
+import LoginScreen         from '../screens/auth/LoginScreen';
+import RegisterScreen      from '../screens/auth/RegisterScreen';
+import DashboardScreen     from '../screens/DashboardScreen';
+import FaturasScreen       from '../screens/FaturasScreen';
+import FaturaDetalheScreen from '../screens/FaturaDetalheScreen';
+import ChatScreen          from '../screens/ChatScreen';
+import SubscricoesScreen   from '../screens/SubscricoesScreen';
+import PerfilScreen        from '../screens/PerfilScreen';
+import NotificacoesScreen  from '../screens/NotificacoesScreen';
+import MetasScreen         from '../screens/MetasScreen';
+import EstatisticasScreen  from '../screens/EstatisticasScreen';
+import ScoreScreen         from '../screens/ScoreScreen';
+import CriarEmScreen       from '../screens/CriarEmScreen';   // ← substitui ImpulseScreen
+import RelatorioScreen     from '../screens/RelatorioScreen';
+import HistoricoScreen     from '../screens/HistoricoScreen';
 
-// ── Token ─────────────────────────────────────────────────────────────────────
+import TabIcon from '../components/TabIcon';
 
-export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
-export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
-export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
+const Stack     = createStackNavigator();
+const AuthStack = createStackNavigator();
+const MainStack = createStackNavigator();
+const Tab       = createBottomTabNavigator();
 
-// ── Fetch base ────────────────────────────────────────────────────────────────
+export const COLORS = {
+  brand:    '#6C5CE7',
+  bg:       '#0C0C14',
+  surface:  '#13131F',
+  surface2: '#1C1C2E',
+  border:   '#252540',
+  text:     '#EEEEF8',
+  textSub:  '#7070A0',
+  red:      '#FF5370',
+  green:    '#00C896',
+  yellow:   '#FFB300',
+  brandDim: 'rgba(108,92,231,0.15)',
+};
 
-async function apiFetch(path, options = {}) {
-  const token = await getToken();
+// ── Menu screen ────────────────────────────────────────────────────────────────
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {}),
+function MenuScreen({ navigation }) {
+  const { user, logout } = useAuth();
+
+  const initials = user?.nome
+    ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
+    : '?';
+
+  const items = [
+    { label: 'Histórico',    icon: '🕐', screen: 'Historico'    },
+    { label: 'Relatório',    icon: '📊', screen: 'Relatorio'    },
+    { label: 'Score de Compra', icon: '⭐', screen: 'Score'     },
+    { label: 'Criar Em',     icon: '📋', screen: 'CriarEm'      }, // ← NOVO (era Impulse)
+    { label: 'Estatísticas', icon: '📈', screen: 'Estatisticas' },
+    { label: 'Subscrições',  icon: '🔁', screen: 'Subscricoes'  },
+    { label: 'Notificações', icon: '🔔', screen: 'Notificacoes' },
+  ];
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      <ScrollView contentContainerStyle={{ padding: 24 }}>
+        {/* Perfil */}
+        <View style={mStyles.profileRow}>
+          <View style={mStyles.avatar}>
+            <Text style={mStyles.avatarText}>{initials}</Text>
+          </View>
+          <View>
+            <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
+            <Text style={mStyles.email}>{user?.email || ''}</Text>
+          </View>
+        </View>
+
+        <View style={mStyles.divider} />
+
+        {items.map(item => (
+          <TouchableOpacity
+            key={item.screen}
+            style={mStyles.item}
+            onPress={() => navigation.navigate(item.screen)}
+            activeOpacity={0.7}
+          >
+            <View style={mStyles.itemLeft}>
+              <Text style={mStyles.itemIcon}>{item.icon}</Text>
+              <Text style={mStyles.itemText}>{item.label}</Text>
+            </View>
+            <Text style={{ color: COLORS.textSub, fontSize: 18 }}>›</Text>
+          </TouchableOpacity>
+        ))}
+
+        <View style={mStyles.divider} />
+
+        <TouchableOpacity style={mStyles.logout} onPress={logout} activeOpacity={0.7}>
+          <Text style={mStyles.logoutText}>Terminar Sessão</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const mStyles = StyleSheet.create({
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },
+  avatar: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText:  { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:        { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:       { fontSize: 12, color: COLORS.textSub },
+  divider:     { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  item: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  itemLeft:    { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  itemIcon:    { fontSize: 18, width: 24, textAlign: 'center' },
+  itemText:    { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  logout:      { paddingVertical: 14 },
+  logoutText:  { fontSize: 15, fontWeight: '700', color: COLORS.red },
+});
+
+// ── Bottom Tabs ────────────────────────────────────────────────────────────────
+
+function MainTabs({ navigation }) {
+  return (
+    <Tab.Navigator
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: {
+          backgroundColor: COLORS.bg, shadowColor: 'transparent',
+          elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+        },
+        headerTintColor: COLORS.text,
+        headerTitleStyle: { fontWeight: '800', fontSize: 18 },
+        headerRight: () => (
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
+            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
+        ),
+        tabBarStyle: {
+          backgroundColor: COLORS.surface, borderTopColor: COLORS.border,
+          borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68,
+        },
+        tabBarActiveTintColor:   COLORS.brand,
+        tabBarInactiveTintColor: COLORS.textSub,
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+        tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
+      })}
+    >
+      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
+      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
+      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
+      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil' }} />
+    </Tab.Navigator>
+  );
+}
+
+// ── Main Stack ─────────────────────────────────────────────────────────────────
+
+function MainStackNav() {
+  const commonHeader = {
+    headerShown: true,
+    headerStyle: {
+      backgroundColor: COLORS.bg, shadowColor: 'transparent',
+      elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+    },
+    headerTintColor: COLORS.text,
+    headerTitleStyle: { fontWeight: '800', fontSize: 17 },
+    headerBackTitleVisible: false,
   };
 
-  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  return (
+    <MainStack.Navigator screenOptions={{ headerShown: false }}>
+      <MainStack.Screen name="Tabs"          component={MainTabs} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
+      <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
+      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
+      <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...commonHeader, headerTitle: 'Criar Em' }} />
+      <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
+      <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
+    </MainStack.Navigator>
+  );
+}
 
-  if (response.status === 401) {
-    await removeToken();
-    throw new Error('UNAUTHORIZED');
+// ── Auth ───────────────────────────────────────────────────────────────────────
+
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login"    component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+// ── Root ───────────────────────────────────────────────────────────────────────
+
+export default function AppNavigator() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg }}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
   }
 
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
-  return data;
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {user ? (
+          <Stack.Screen name="Main" component={MainStackNav} />
+        ) : (
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
 }
-
-// ── Upload (multipart) ────────────────────────────────────────────────────────
-
-async function apiUpload(path, formData) {
-  const token = await getToken();
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method: 'POST',
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: formData,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
-  return data;
-}
-
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
-export const authAPI = {
-  login:    (email, password) =>
-    apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  register: (nome, email, password) =>
-    apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
-  me:       () => apiFetch('/auth/me'),
-  updateMe: (updates) =>
-    apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
-};
-
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-
-export const dashboardAPI = {
-  get: () => apiFetch('/dashboard'),
-};
-
-// ── Faturas ───────────────────────────────────────────────────────────────────
-
-export const faturasAPI = {
-  listar: (params = {}) => {
-    const query = new URLSearchParams(params).toString();
-    return apiFetch(`/faturas${query ? `?${query}` : ''}`);
-  },
-  detalhe: (id) => apiFetch(`/faturas/${id}`),
-  apagar:  (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
-  upload:  (fileUri, fileName, fileType) => {
-    const formData = new FormData();
-    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
-    return apiUpload('/faturas/upload', formData);
-  },
-};
-
-// ── Notificações ──────────────────────────────────────────────────────────────
-
-export const notificacoesAPI = {
-  listar: () => apiFetch('/notificacoes'),
-};
-
-// ── Chat ──────────────────────────────────────────────────────────────────────
-
-export const chatAPI = {
-  enviar:    (mensagem) =>
-    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
-  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
-  limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
-};
-
-// ── Subscrições ───────────────────────────────────────────────────────────────
-
-export const subscricoesAPI = {
-  listar: () => apiFetch('/subscricoes'),
-};
-
-// ── Metas ─────────────────────────────────────────────────────────────────────
-
-export const metasAPI = {
-  listar: () => apiFetch('/metas'),
-  criar:  (nome, limite, categoria) =>
-    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
-  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
-};
-
-// ── Estatísticas ──────────────────────────────────────────────────────────────
-
-export const estatisticasAPI = {
-  get: () => apiFetch('/estatisticas'),
-};
-
-// ── Score de Compras ──────────────────────────────────────────────────────────
-
-export const scoreAPI = {
-  analisar: ({ item, preco, categoria, uso }) =>
-    apiFetch('/scoring/analisar', {
-      method: 'POST',
-      body: JSON.stringify({ item, preco, categoria, uso }),
-    }),
-
-  scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
-
-  lojasProximas: ({ item, categoria, lat, lng }) =>
-    apiFetch('/scoring/lojas-proximas', {
-      method: 'POST',
-      body: JSON.stringify({ item, categoria, lat, lng }),
-    }),
-};
-
-// ── Impulse Control ───────────────────────────────────────────────────────────
-
-export const impulseAPI = {
-  analisar: ({ produto, personalidade }) =>
-    apiFetch('/impulse/analisar', {
-      method: 'POST',
-      body: JSON.stringify({ produto, personalidade }),
-    }),
-};
-
-// ── Relatório Mensal ──────────────────────────────────────────────────────────
-
-export const relatorioAPI = {
-  get: (mes = null, ano = null) => {
-    const params = new URLSearchParams();
-    if (mes) params.set('mes', mes);
-    if (ano) params.set('ano', ano);
-    const query = params.toString();
-    return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
-  },
-};
-
-// ── Histórico ─────────────────────────────────────────────────────────────────
-
-export const historicoAPI = {
-  listar: (params = {}) => {
-    const query = new URLSearchParams(params).toString();
-    return apiFetch(`/historico/api${query ? `?${query}` : ''}`);
-  },
-};
 </file>
 
 <file path="app/ai.py">
@@ -16044,6 +17053,231 @@ async function deleteFatura(id) {
 }
 </script>
 {% endblock %}
+</file>
+
+<file path="verly-mobile/package.json">
+{
+  "name": "verly-mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-navigation/bottom-tabs": "^6.5.11",
+    "@react-navigation/drawer": "^6.7.2",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/native-stack": "^7.14.14",
+    "@react-navigation/stack": "^6.3.20",
+    "axios": "^1.6.7",
+    "expo": "^54.0.34",
+    "expo-document-picker": "~14.0.8",
+    "expo-image-picker": "~17.0.11",
+    "expo-location": "~19.0.8",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^0.322.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-maps": "1.20.1",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-web": "^0.21.0",
+    "react-native-webview": "13.15.0",
+    "react-native-worklets": "^0.8.3"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
+</file>
+
+<file path="verly-mobile/src/services/api.js">
+/**
+ * src/services/api.js
+ * Serviço central de comunicação com o backend Flask.
+ */
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Muda para o IP da tua máquina quando testares em dispositivo físico
+const BASE_URL = 'http://192.168.1.245:5000/api/v1';
+
+const TOKEN_KEY = '@verly_token';
+
+// ── Token ──────────────────────────────────────────────────────────────────────
+
+export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
+export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
+export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
+
+// ── Fetch base (exportado para uso direto) ─────────────────────────────────────
+
+export async function apiFetch(path, options = {}) {
+  const token = await getToken();
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {}),
+  };
+
+  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  if (response.status === 401) {
+    await removeToken();
+    throw new Error('UNAUTHORIZED');
+  }
+
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  return data;
+}
+
+// ── Upload (multipart) ─────────────────────────────────────────────────────────
+
+async function apiUpload(path, formData) {
+  const token = await getToken();
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: formData,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  return data;
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+
+export const authAPI = {
+  login:    (email, password) =>
+    apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  register: (nome, email, password) =>
+    apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
+  me:       () => apiFetch('/auth/me'),
+  updateMe: (updates) =>
+    apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
+};
+
+// ── Dashboard ──────────────────────────────────────────────────────────────────
+
+export const dashboardAPI = {
+  get: () => apiFetch('/dashboard'),
+};
+
+// ── Faturas ────────────────────────────────────────────────────────────────────
+
+export const faturasAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/faturas${query ? `?${query}` : ''}`);
+  },
+  detalhe: (id) => apiFetch(`/faturas/${id}`),
+  apagar:  (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
+  upload:  (fileUri, fileName, fileType) => {
+    const formData = new FormData();
+    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
+    return apiUpload('/faturas/upload', formData);
+  },
+};
+
+// ── Notificações ───────────────────────────────────────────────────────────────
+
+export const notificacoesAPI = {
+  listar: () => apiFetch('/notificacoes'),
+};
+
+// ── Chat ───────────────────────────────────────────────────────────────────────
+
+export const chatAPI = {
+  enviar:    (mensagem) =>
+    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
+  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
+  limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
+};
+
+// ── Subscrições ────────────────────────────────────────────────────────────────
+
+export const subscricoesAPI = {
+  listar: () => apiFetch('/subscricoes'),
+};
+
+// ── Metas ──────────────────────────────────────────────────────────────────────
+
+export const metasAPI = {
+  listar: () => apiFetch('/metas'),
+  criar:  (nome, limite, categoria) =>
+    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
+  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+};
+
+// ── Estatísticas ───────────────────────────────────────────────────────────────
+
+export const estatisticasAPI = {
+  get: () => apiFetch('/estatisticas'),
+};
+
+// ── Score de Compras ───────────────────────────────────────────────────────────
+
+export const scoreAPI = {
+  analisar: ({ item, preco, categoria, uso }) =>
+    apiFetch('/scoring/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ item, preco, categoria, uso }),
+    }),
+  scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
+  lojasProximas: ({ item, categoria, lat, lng }) =>
+    apiFetch('/scoring/lojas-proximas', {
+      method: 'POST',
+      body: JSON.stringify({ item, categoria, lat, lng }),
+    }),
+};
+
+// ── Playlists (Criar Em) ───────────────────────────────────────────────────────
+
+export const playlistsAPI = {
+  listar:    ()           => apiFetch('/playlists'),
+  criar:     (data)       => apiFetch('/playlists', { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:   (id)         => apiFetch(`/playlists/${id}`),
+  editar:    (id, data)   => apiFetch(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  apagar:    (id)         => apiFetch(`/playlists/${id}`, { method: 'DELETE' }),
+  addFatura: (id, ids)    => apiFetch(`/playlists/${id}/faturas`, { method: 'POST', body: JSON.stringify({ fatura_ids: ids }) }),
+  remFatura: (id, fid)    => apiFetch(`/playlists/${id}/faturas/${fid}`, { method: 'DELETE' }),
+  partilhar: (id)         => apiFetch(`/playlists/${id}/partilhar`, { method: 'POST' }),
+  juntar:    (codigo)     => apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
+  membros:   (id)         => apiFetch(`/playlists/${id}/membros`),
+  sair:      (id)         => apiFetch(`/playlists/${id}/sair`, { method: 'DELETE' }),
+};
+
+// ── Relatório Mensal ───────────────────────────────────────────────────────────
+
+export const relatorioAPI = {
+  get: (mes = null, ano = null) => {
+    const params = new URLSearchParams();
+    if (mes) params.set('mes', mes);
+    if (ano) params.set('ano', ano);
+    const query = params.toString();
+    return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
+  },
+};
+
+// ── Histórico ──────────────────────────────────────────────────────────────────
+
+export const historicoAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/historico/api${query ? `?${query}` : ''}`);
+  },
+};
 </file>
 
 <file path="app/chat.py">

@@ -6,21 +6,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Muda para o IP da tua máquina quando testares em dispositivo físico
-// Em emulador Android: http://10.0.2.2:5000/api/v1
-// Em dispositivo físico: http://<SEU_IP_LOCAL>:5000/api/v1
 const BASE_URL = 'http://192.168.1.245:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
-// ── Token ─────────────────────────────────────────────────────────────────────
+// ── Token ──────────────────────────────────────────────────────────────────────
 
 export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
 export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
 export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
 
-// ── Fetch base ────────────────────────────────────────────────────────────────
+// ── Fetch base (exportado para uso direto) ─────────────────────────────────────
 
-async function apiFetch(path, options = {}) {
+export async function apiFetch(path, options = {}) {
   const token = await getToken();
 
   const headers = {
@@ -41,7 +39,7 @@ async function apiFetch(path, options = {}) {
   return data;
 }
 
-// ── Upload (multipart) ────────────────────────────────────────────────────────
+// ── Upload (multipart) ─────────────────────────────────────────────────────────
 
 async function apiUpload(path, formData) {
   const token = await getToken();
@@ -55,7 +53,7 @@ async function apiUpload(path, formData) {
   return data;
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
+// ── Auth ───────────────────────────────────────────────────────────────────────
 
 export const authAPI = {
   login:    (email, password) =>
@@ -67,13 +65,13 @@ export const authAPI = {
     apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
 };
 
-// ── Dashboard ─────────────────────────────────────────────────────────────────
+// ── Dashboard ──────────────────────────────────────────────────────────────────
 
 export const dashboardAPI = {
   get: () => apiFetch('/dashboard'),
 };
 
-// ── Faturas ───────────────────────────────────────────────────────────────────
+// ── Faturas ────────────────────────────────────────────────────────────────────
 
 export const faturasAPI = {
   listar: (params = {}) => {
@@ -89,13 +87,13 @@ export const faturasAPI = {
   },
 };
 
-// ── Notificações ──────────────────────────────────────────────────────────────
+// ── Notificações ───────────────────────────────────────────────────────────────
 
 export const notificacoesAPI = {
   listar: () => apiFetch('/notificacoes'),
 };
 
-// ── Chat ──────────────────────────────────────────────────────────────────────
+// ── Chat ───────────────────────────────────────────────────────────────────────
 
 export const chatAPI = {
   enviar:    (mensagem) =>
@@ -104,13 +102,13 @@ export const chatAPI = {
   limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
 };
 
-// ── Subscrições ───────────────────────────────────────────────────────────────
+// ── Subscrições ────────────────────────────────────────────────────────────────
 
 export const subscricoesAPI = {
   listar: () => apiFetch('/subscricoes'),
 };
 
-// ── Metas ─────────────────────────────────────────────────────────────────────
+// ── Metas ──────────────────────────────────────────────────────────────────────
 
 export const metasAPI = {
   listar: () => apiFetch('/metas'),
@@ -119,13 +117,13 @@ export const metasAPI = {
   apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
 };
 
-// ── Estatísticas ──────────────────────────────────────────────────────────────
+// ── Estatísticas ───────────────────────────────────────────────────────────────
 
 export const estatisticasAPI = {
   get: () => apiFetch('/estatisticas'),
 };
 
-// ── Score de Compras ──────────────────────────────────────────────────────────
+// ── Score de Compras ───────────────────────────────────────────────────────────
 
 export const scoreAPI = {
   analisar: ({ item, preco, categoria, uso }) =>
@@ -133,9 +131,7 @@ export const scoreAPI = {
       method: 'POST',
       body: JSON.stringify({ item, preco, categoria, uso }),
     }),
-
   scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
-
   lojasProximas: ({ item, categoria, lat, lng }) =>
     apiFetch('/scoring/lojas-proximas', {
       method: 'POST',
@@ -143,17 +139,23 @@ export const scoreAPI = {
     }),
 };
 
-// ── Impulse Control ───────────────────────────────────────────────────────────
+// ── Playlists (Criar Em) ───────────────────────────────────────────────────────
 
-export const impulseAPI = {
-  analisar: ({ produto, personalidade }) =>
-    apiFetch('/impulse/analisar', {
-      method: 'POST',
-      body: JSON.stringify({ produto, personalidade }),
-    }),
+export const playlistsAPI = {
+  listar:    ()           => apiFetch('/playlists'),
+  criar:     (data)       => apiFetch('/playlists', { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:   (id)         => apiFetch(`/playlists/${id}`),
+  editar:    (id, data)   => apiFetch(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  apagar:    (id)         => apiFetch(`/playlists/${id}`, { method: 'DELETE' }),
+  addFatura: (id, ids)    => apiFetch(`/playlists/${id}/faturas`, { method: 'POST', body: JSON.stringify({ fatura_ids: ids }) }),
+  remFatura: (id, fid)    => apiFetch(`/playlists/${id}/faturas/${fid}`, { method: 'DELETE' }),
+  partilhar: (id)         => apiFetch(`/playlists/${id}/partilhar`, { method: 'POST' }),
+  juntar:    (codigo)     => apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
+  membros:   (id)         => apiFetch(`/playlists/${id}/membros`),
+  sair:      (id)         => apiFetch(`/playlists/${id}/sair`, { method: 'DELETE' }),
 };
 
-// ── Relatório Mensal ──────────────────────────────────────────────────────────
+// ── Relatório Mensal ───────────────────────────────────────────────────────────
 
 export const relatorioAPI = {
   get: (mes = null, ano = null) => {
@@ -165,7 +167,7 @@ export const relatorioAPI = {
   },
 };
 
-// ── Histórico ─────────────────────────────────────────────────────────────────
+// ── Histórico ──────────────────────────────────────────────────────────────────
 
 export const historicoAPI = {
   listar: (params = {}) => {

@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * src/navigation/AppNavigator.js
+ * Navegação principal da app Verly Mobile.
+ * - Bottom tabs: Dashboard, Faturas, Chat IA, Metas, Perfil
+ * - Menu lateral (stack screen): Histórico, Relatório, Score, Criar Em, Estatísticas, Subscrições, Notificações
+ */
+
+import React from 'react';
 import {
   ActivityIndicator, View, Text, StyleSheet,
   TouchableOpacity, ScrollView, SafeAreaView,
@@ -8,7 +15,6 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { useAuth } from '../context/AuthContext';
-import { notificacoesAPI } from '../services/api';
 
 import LoginScreen         from '../screens/auth/LoginScreen';
 import RegisterScreen      from '../screens/auth/RegisterScreen';
@@ -22,7 +28,7 @@ import NotificacoesScreen  from '../screens/NotificacoesScreen';
 import MetasScreen         from '../screens/MetasScreen';
 import EstatisticasScreen  from '../screens/EstatisticasScreen';
 import ScoreScreen         from '../screens/ScoreScreen';
-import ImpulseScreen       from '../screens/ImpulseScreen';
+import CriarEmScreen       from '../screens/CriarEmScreen';   // ← substitui ImpulseScreen
 import RelatorioScreen     from '../screens/RelatorioScreen';
 import HistoricoScreen     from '../screens/HistoricoScreen';
 
@@ -34,18 +40,20 @@ const MainStack = createStackNavigator();
 const Tab       = createBottomTabNavigator();
 
 export const COLORS = {
-  brand:   '#6C5CE7',
-  bg:      '#0C0C14',
-  surface: '#13131F',
-  surface2:'#1C1C2E',
-  border:  '#252540',
-  text:    '#EEEEF8',
-  textSub: '#7070A0',
-  red:     '#FF5370',
-  green:   '#00C896',
-  yellow:  '#FFB300',
-  brandDim:'rgba(108,92,231,0.15)',
+  brand:    '#6C5CE7',
+  bg:       '#0C0C14',
+  surface:  '#13131F',
+  surface2: '#1C1C2E',
+  border:   '#252540',
+  text:     '#EEEEF8',
+  textSub:  '#7070A0',
+  red:      '#FF5370',
+  green:    '#00C896',
+  yellow:   '#FFB300',
+  brandDim: 'rgba(108,92,231,0.15)',
 };
+
+// ── Menu screen ────────────────────────────────────────────────────────────────
 
 function MenuScreen({ navigation }) {
   const { user, logout } = useAuth();
@@ -55,18 +63,19 @@ function MenuScreen({ navigation }) {
     : '?';
 
   const items = [
-    { label: 'Histórico',       screen: 'Historico'    },
-    { label: 'Relatório',       screen: 'Relatorio'    },
-    { label: 'Score',           screen: 'Score'        },
-    { label: 'Impulse Control', screen: 'Impulse'      },
-    { label: 'Estatísticas',    screen: 'Estatisticas' },
-    { label: 'Subscrições',     screen: 'Subscricoes'  },
-    { label: 'Notificações',    screen: 'Notificacoes' },
+    { label: 'Histórico',    icon: '🕐', screen: 'Historico'    },
+    { label: 'Relatório',    icon: '📊', screen: 'Relatorio'    },
+    { label: 'Score de Compra', icon: '⭐', screen: 'Score'     },
+    { label: 'Criar Em',     icon: '📋', screen: 'CriarEm'      }, // ← NOVO (era Impulse)
+    { label: 'Estatísticas', icon: '📈', screen: 'Estatisticas' },
+    { label: 'Subscrições',  icon: '🔁', screen: 'Subscricoes'  },
+    { label: 'Notificações', icon: '🔔', screen: 'Notificacoes' },
   ];
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
       <ScrollView contentContainerStyle={{ padding: 24 }}>
+        {/* Perfil */}
         <View style={mStyles.profileRow}>
           <View style={mStyles.avatar}>
             <Text style={mStyles.avatarText}>{initials}</Text>
@@ -86,8 +95,11 @@ function MenuScreen({ navigation }) {
             onPress={() => navigation.navigate(item.screen)}
             activeOpacity={0.7}
           >
-            <Text style={mStyles.itemText}>{item.label}</Text>
-            <Text style={{ color: COLORS.textSub }}>›</Text>
+            <View style={mStyles.itemLeft}>
+              <Text style={mStyles.itemIcon}>{item.icon}</Text>
+              <Text style={mStyles.itemText}>{item.label}</Text>
+            </View>
+            <Text style={{ color: COLORS.textSub, fontSize: 18 }}>›</Text>
           </TouchableOpacity>
         ))}
 
@@ -108,25 +120,32 @@ const mStyles = StyleSheet.create({
     backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
-  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  email:      { fontSize: 12, color: COLORS.textSub },
-  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  avatarText:  { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:        { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:       { fontSize: 12, color: COLORS.textSub },
+  divider:     { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
   item: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
   },
-  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
-  logout:     { paddingVertical: 14 },
-  logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
+  itemLeft:    { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  itemIcon:    { fontSize: 18, width: 24, textAlign: 'center' },
+  itemText:    { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  logout:      { paddingVertical: 14 },
+  logoutText:  { fontSize: 15, fontWeight: '700', color: COLORS.red },
 });
+
+// ── Bottom Tabs ────────────────────────────────────────────────────────────────
 
 function MainTabs({ navigation }) {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: true,
-        headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+        headerStyle: {
+          backgroundColor: COLORS.bg, shadowColor: 'transparent',
+          elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+        },
         headerTintColor: COLORS.text,
         headerTitleStyle: { fontWeight: '800', fontSize: 18 },
         headerRight: () => (
@@ -134,8 +153,11 @@ function MainTabs({ navigation }) {
             <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
           </TouchableOpacity>
         ),
-        tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
-        tabBarActiveTintColor: COLORS.brand,
+        tabBarStyle: {
+          backgroundColor: COLORS.surface, borderTopColor: COLORS.border,
+          borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68,
+        },
+        tabBarActiveTintColor:   COLORS.brand,
         tabBarInactiveTintColor: COLORS.textSub,
         tabBarLabelStyle: { fontSize: 11, fontWeight: '700', marginTop: 2 },
         tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
@@ -150,10 +172,15 @@ function MainTabs({ navigation }) {
   );
 }
 
+// ── Main Stack ─────────────────────────────────────────────────────────────────
+
 function MainStackNav() {
   const commonHeader = {
     headerShown: true,
-    headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+    headerStyle: {
+      backgroundColor: COLORS.bg, shadowColor: 'transparent',
+      elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+    },
     headerTintColor: COLORS.text,
     headerTitleStyle: { fontWeight: '800', fontSize: 17 },
     headerBackTitleVisible: false,
@@ -168,12 +195,14 @@ function MainStackNav() {
       <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
-      <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
+      <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...commonHeader, headerTitle: 'Criar Em' }} />
       <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...commonHeader, headerTitle: 'Relatório Mensal' }} />
       <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...commonHeader, headerTitle: 'Histórico' }} />
     </MainStack.Navigator>
   );
 }
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
 
 function AuthNavigator() {
   return (
@@ -183,6 +212,8 @@ function AuthNavigator() {
     </AuthStack.Navigator>
   );
 }
+
+// ── Root ───────────────────────────────────────────────────────────────────────
 
 export default function AppNavigator() {
   const { user, loading } = useAuth();

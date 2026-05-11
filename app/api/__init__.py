@@ -1,20 +1,15 @@
 """
-app/api/__init__.py — Blueprint da API REST para o React Native
-
-Todos os endpoints aqui retornam JSON.
-Autenticação via JWT (flask-jwt-extended).
-
-Registar no __init__.py principal:
-    from app.api import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api/v1')
+app/api/__init__.py
+Regista o blueprint da API mobile e importa todas as rotas.
 """
-
 from flask import Blueprint
-from app import csrf
 
-api_bp = Blueprint('api', __name__)
+api_bp = Blueprint('api', __name__, url_prefix='/api/v1')
 
-# Excluir as rotas da API do CSRF protection (usam JWT em vez de CSRF)
-csrf.exempt(api_bp)
-
-from app.api import auth, dashboard, faturas, chat, mobile_extras  # noqa
+# Importa as rotas — a ordem não importa
+from app.api import auth        # noqa: F401, E402
+from app.api import chat        # noqa: F401, E402  ← versão corrigida (Groq direto)
+from app.api import dashboard   # noqa: F401, E402
+from app.api import faturas     # noqa: F401, E402
+from app.api import mobile_extras  # noqa: F401, E402
+from app.api import playlists   # noqa: F401, E402  ← NOVO

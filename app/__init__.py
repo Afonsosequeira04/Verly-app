@@ -3,7 +3,7 @@ app/__init__.py — Factory da aplicação Verly
 
 Melhorias de segurança incluídas:
   - Configuração por ambiente (dev/prod) via config.py
-  - Flask-WTF CSRF protection em todas as rotas
+  - Flask-WTF CSRF protection em todas as rotas WEB (excluídas as /api/v1/*)
   - Headers de segurança HTTP
   - MAX_CONTENT_LENGTH para limitar tamanho de uploads
   - Logging estruturado
@@ -104,7 +104,7 @@ def create_app(config_override=None):
     def load_user(user_id):
         return User.query.get(int(user_id))
 
-    # ── Blueprints ────────────────────────────────────────────────────────────
+    # ── Blueprints web ────────────────────────────────────────────────────────
     from app.auth           import auth_bp
     from app.dashboard      import dashboard_bp
     from app.faturas        import faturas_bp
@@ -125,8 +125,8 @@ def create_app(config_override=None):
     from app.notificacoes   import notificacoes_bp
     from app.email_routes   import email_bp
 
-    # ✅ NOVO: Importar Blueprint da API
-    from app.api            import api_bp
+    # ✅ Blueprint da API mobile (JWT — sem CSRF)
+    from app.api import api_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -148,8 +148,9 @@ def create_app(config_override=None):
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(email_bp)
 
-    # ✅ NOVO: Registar Blueprint da API com o prefixo v1
+    # ✅ API mobile registada e imediatamente isenta de CSRF
     app.register_blueprint(api_bp, url_prefix='/api/v1')
+    csrf.exempt(api_bp)  # ← CORREÇÃO PRINCIPAL: JWT protege, CSRF não é necessário
 
     with app.app_context():
         db.create_all()
