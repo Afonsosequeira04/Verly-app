@@ -6,6 +6,8 @@ POST  /api/v1/auth/register      → {access_token, user}
 GET   /api/v1/auth/me            → {user}
 PATCH /api/v1/auth/me            → atualiza perfil (nome, orcamento, personalidade, ...)
 POST  /api/v1/auth/avatar        → faz upload de foto de perfil (base64)
+POST  /api/v1/auth/onboarding    → marca onboarding como completo
+POST  /api/v1/auth/firebase      → login com Google/Apple via Firebase
 """
 
 import logging
@@ -124,7 +126,6 @@ def upload_avatar():
     """
     Recebe avatar em base64.
     Body JSON: { image_base64: "data:image/jpeg;base64,..." }
-    Guarda no campo avatar_url (URL de dados ou caminho de ficheiro).
     """
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
@@ -134,20 +135,16 @@ def upload_avatar():
     if not image_b64:
         return jsonify({'error': 'Imagem não fornecida.'}), 400
 
-    # Valida formato
     if not image_b64.startswith('data:image/'):
         return jsonify({'error': 'Formato de imagem inválido. Usa data URI.'}), 400
 
-    # Limita a 2MB em base64 (~1.5MB real)
     if len(image_b64) > 2_800_000:
         return jsonify({'error': 'Imagem demasiado grande. Máximo ~2MB.'}), 400
 
-    # Guarda: tenta salvar em disco, fallback para data URI no campo
     try:
         avatars_dir = os.path.join(current_app.static_folder, 'avatars')
         os.makedirs(avatars_dir, exist_ok=True)
 
-        # Extrai bytes
         header, b64data = image_b64.split(',', 1)
         ext = 'jpg' if 'jpeg' in header else ('png' if 'png' in header else 'jpg')
         img_bytes = base64.b64decode(b64data)
@@ -157,21 +154,19 @@ def upload_avatar():
         with open(filepath, 'wb') as f:
             f.write(img_bytes)
 
-        # URL relativa acessível via /static/avatars/
         user.avatar_url = f'/static/avatars/{filename}'
     except Exception as e:
         logger.warning(f'Avatar disk save failed, storing data URI: {e}')
-        # Fallback: guarda data URI diretamente (funciona mas é grande)
-        user.avatar_url = image_b64[:512000]  # limita
+        user.avatar_url = image_b64[:512000]
 
     db.session.commit()
     return jsonify({'success': True, 'avatar_url': user.avatar_url})
+
 
 @api_bp.route('/auth/onboarding', methods=['POST'])
 @jwt_required()
 def complete_onboarding():
     """Marca o onboarding como completo e guarda a personalidade escolhida."""
-    from app.models import User
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
@@ -187,3 +182,64 @@ def complete_onboarding():
     db.session.commit()
 
     return jsonify({'success': True})
+
+
+@api_bp.route('/auth/firebase', methods=['POST'])
+def firebase_login():
+    """
+    Recebe um idToken do Firebase (Google Sign-In, Apple, etc.)
+    Verifica-o e devolve o nosso JWT normal.
+
+    Body: { "idToken": "..." }
+    Returns: { "access_token": "...", "user": {...} }
+    """
+    data     = request.get_json(silent=True) or {}
+    id_token = data.get('idToken', '').strip()
+
+    if not id_token:
+        return jsonify({'error': 'idToken é obrigatório.'}), 400
+
+    try:
+        from firebase_admin import auth as firebase_auth
+        decoded = firebase_auth.verify_id_token(id_token)
+    except Exception as e:
+        logger.warning(f'Firebase token inválido: {e}')
+        return jsonify({'error': 'Token Firebase inválido ou expirado.'}), 401
+
+    uid   = decoded.get('uid', '')
+    email = decoded.get('email', '').lower().strip()
+    nome  = decoded.get('name') or (email.split('@')[0] if email else 'Utilizador')
+    foto  = decoded.get('picture', '')
+
+    user = None
+
+    if uid:
+        user = User.query.filter_by(google_id=uid).first()
+
+    if not user and email:
+        user = User.query.filter_by(email=email).first()
+
+    if not user:
+        user = User(
+            nome=nome[:100],
+            email=email,
+            google_id=uid,
+            password_hash='',
+            onboarding_completo=False,
+            avatar_url=foto or None,
+        )
+        db.session.add(user)
+        db.session.flush()
+    else:
+        if uid and not user.google_id:
+            user.google_id = uid
+        if foto and not user.avatar_url:
+            user.avatar_url = foto
+
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({
+        'access_token': access_token,
+        'user': _user_to_dict(user),
+    })

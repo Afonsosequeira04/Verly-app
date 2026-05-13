@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>667118060597-n41e0frtf4slno15tofa3t83trhfjrdv.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.667118060597-n41e0frtf4slno15tofa3t83trhfjrdv</string>
+	<key>API_KEY</key>
+	<string>AIzaSyCjFSRkp2A2YhBS0rJ-5do4-ipXq2z2OkE</string>
+	<key>GCM_SENDER_ID</key>
+	<string>667118060597</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.verly.app</string>
+	<key>PROJECT_ID</key>
+	<string>verly-app</string>
+	<key>STORAGE_BUCKET</key>
+	<string>verly-app.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:667118060597:ios:93796ce4e20e9d9bb99d7c</string>
+</dict>
+</plist>

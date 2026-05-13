@@ -1,4 +1,4 @@
-// src/screens/auth/LoginScreen.js — Redesign Luxury
+// src/screens/auth/LoginScreen.js — com Google Sign-In
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, Pressable,
@@ -11,13 +11,13 @@ import { COLORS, RADIUS, FONT, SPACE } from '../../constants/theme';
 const C = COLORS;
 
 export default function LoginScreen({ navigation }) {
-  const { login } = useAuth();
-  const [email,    setEmail]    = useState('');
-  const [password, setPassword] = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [focused,  setFocused]  = useState(null);
+  const { login, loginWithGoogle } = useAuth();
+  const [email,         setEmail]         = useState('');
+  const [password,      setPassword]      = useState('');
+  const [loading,       setLoading]       = useState(false);
+  const [loadingGoogle, setLoadingGoogle] = useState(false);
+  const [focused,       setFocused]       = useState(null);
 
-  // Entrada com fade
   const opacity = useRef(new Animated.Value(0)).current;
   const slideY  = useRef(new Animated.Value(24)).current;
   useEffect(() => {
@@ -27,8 +27,10 @@ export default function LoginScreen({ navigation }) {
     ]).start();
   }, []);
 
+  // ── Email + Password ──────────────────────────────────────────────────────
   const handleLogin = async () => {
-    if (!email.trim() || !password) return Alert.alert('Campos obrigatórios', 'Preenche o email e a password.');
+    if (!email.trim() || !password)
+      return Alert.alert('Campos obrigatórios', 'Preenche o email e a password.');
     setLoading(true);
     try {
       await login(email.trim().toLowerCase(), password);
@@ -36,6 +38,21 @@ export default function LoginScreen({ navigation }) {
       Alert.alert('Erro ao entrar', err.message || 'Credenciais inválidas.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Google Sign-In ────────────────────────────────────────────────────────
+  const handleGoogle = async () => {
+    setLoadingGoogle(true);
+    try {
+      await loginWithGoogle();
+      // AuthContext.js já atualiza o user → AppNavigator redireciona automaticamente
+    } catch (err) {
+      if (err.message !== 'LOGIN_CANCELADO') {
+        Alert.alert('Erro ao entrar com Google', err.message || 'Tenta novamente.');
+      }
+    } finally {
+      setLoadingGoogle(false);
     }
   };
 
@@ -59,6 +76,31 @@ export default function LoginScreen({ navigation }) {
           <View style={s.card}>
             <Text style={s.title}>Entrar</Text>
 
+            {/* Google Sign-In — primeiro para dar destaque */}
+            <Pressable
+              style={({ pressed }) => [s.btnGoogle, pressed && { opacity: 0.85 }, loadingGoogle && s.btnDisabled]}
+              onPress={handleGoogle}
+              disabled={loadingGoogle || loading}
+            >
+              {loadingGoogle ? (
+                <ActivityIndicator color={C.text} />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  {/* Ícone Google simples em texto (podes substituir por SVG) */}
+                  <Text style={s.googleIcon}>G</Text>
+                  <Text style={s.btnGoogleText}>Continuar com Google</Text>
+                </View>
+              )}
+            </Pressable>
+
+            {/* Separador */}
+            <View style={s.divider}>
+              <View style={s.dividerLine} />
+              <Text style={s.dividerText}>ou entra com email</Text>
+              <View style={s.dividerLine} />
+            </View>
+
+            {/* Email */}
             <Text style={s.label}>Email</Text>
             <TextInput
               style={inputStyle('email')}
@@ -73,6 +115,7 @@ export default function LoginScreen({ navigation }) {
               onBlur={() => setFocused(null)}
             />
 
+            {/* Password */}
             <Text style={[s.label, { marginTop: 14 }]}>Password</Text>
             <TextInput
               style={inputStyle('password')}
@@ -85,10 +128,11 @@ export default function LoginScreen({ navigation }) {
               onBlur={() => setFocused(null)}
             />
 
+            {/* Botão Entrar */}
             <Pressable
               style={({ pressed }) => [s.btn, loading && s.btnDisabled, pressed && { opacity: 0.85 }]}
               onPress={handleLogin}
-              disabled={loading}
+              disabled={loading || loadingGoogle}
             >
               {loading
                 ? <ActivityIndicator color="#fff" />
@@ -130,6 +174,28 @@ const s = StyleSheet.create({
   title: { fontSize: FONT.xxl, fontWeight: '800', color: C.text, marginBottom: 20 },
   label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 7, letterSpacing: 0.3 },
 
+  // Botão Google
+  btnGoogle: {
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 14,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  googleIcon: {
+    fontSize: 16, fontWeight: '900',
+    color: '#4285F4',  // azul Google
+  },
+  btnGoogleText: { color: C.text, fontSize: FONT.md, fontWeight: '600' },
+
+  // Separador
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18, gap: 10 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
+  dividerText: { fontSize: FONT.xs, color: C.textMid },
+
+  // Inputs
   input: {
     backgroundColor: C.surface2, borderRadius: RADIUS.md,
     borderWidth: 1, borderColor: C.border,
@@ -137,6 +203,7 @@ const s = StyleSheet.create({
   },
   inputFocused: { borderColor: C.brand + '70' },
 
+  // Botão principal
   btn: {
     backgroundColor: C.brand, borderRadius: RADIUS.md,
     padding: 15, alignItems: 'center', marginTop: 24,

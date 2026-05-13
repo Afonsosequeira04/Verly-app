@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "667118060597",
+    "project_id": "verly-app",
+    "storage_bucket": "verly-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:667118060597:android:cbf48c9b0406f6fdb99d7c",
+        "android_client_info": {
+          "package_name": "com.verly.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByQHExT4ClAipZPuNu2zeoE7WEAPPG2go"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

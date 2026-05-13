@@ -1,8 +1,21 @@
 {
   "expo": {
-    "name": "verly-mobile",
+    "name": "Verly",
     "slug": "verly-mobile",
     "version": "1.0.0",
-    "platforms": ["ios", "android", "web"]
+    "platforms": ["ios", "android", "web"],
+    "android": {
+      "package": "com.verly.app",
+      "googleServicesFile": "./google-services.json"
+    },
+    "ios": {
+      "bundleIdentifier": "com.verly.app",
+      "googleServicesFile": "./GoogleService-Info.plist"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "@react-native-google-signin/google-signin"
+    ]
   }
 }

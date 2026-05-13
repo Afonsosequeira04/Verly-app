@@ -13,25 +13,36 @@ const TOKEN_KEY = '@verly_token';
 // ── Token ──────────────────────────────────────────────────────────────────────
 
 export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
-export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
-export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
+export const getToken    = async ()      => AsyncStorage.getItem(TOKEN_KEY);
+export const removeToken = async ()      => AsyncStorage.removeItem(TOKEN_KEY);
 
 // ── Fetch base ─────────────────────────────────────────────────────────────────
 
 export async function apiFetch(path, options = {}) {
   const token = await getToken();
+
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-  const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
   if (response.status === 401) {
     await removeToken();
     throw new Error('UNAUTHORIZED');
   }
+
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+
+  if (!response.ok) {
+    throw new Error(data.error || `Erro ${response.status}`);
+  }
+
   return data;
 }
 
@@ -39,13 +50,21 @@ export async function apiFetch(path, options = {}) {
 
 async function apiUpload(path, formData) {
   const token = await getToken();
+
   const response = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
-    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: formData,
   });
+
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+
+  if (!response.ok) {
+    throw new Error(data.error || `Erro ${response.status}`);
+  }
+
   return data;
 }
 
@@ -54,15 +73,27 @@ async function apiUpload(path, formData) {
 export const authAPI = {
   login:      (email, password) =>
     apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+
   register:   (nome, email, password) =>
     apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
+
   me:         () => apiFetch('/auth/me'),
+
   updateMe:   (updates) =>
     apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
+
   uploadAvatar: (image_base64) =>
     apiFetch('/auth/avatar', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
+
   completeOnboarding: (answers) =>
     apiFetch('/auth/onboarding', { method: 'POST', body: JSON.stringify(answers) }),
+
+  // ✅ Firebase Auth (Google / Apple / SMS)
+  firebaseLogin: (idToken) =>
+    apiFetch('/auth/firebase', {
+      method: 'POST',
+      body: JSON.stringify({ idToken }),
+    }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
@@ -78,11 +109,21 @@ export const faturasAPI = {
     const query = new URLSearchParams(params).toString();
     return apiFetch(`/faturas${query ? `?${query}` : ''}`);
   },
+
   detalhe: (id) => apiFetch(`/faturas/${id}`),
-  apagar:  (id) => apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
-  upload:  (fileUri, fileName, fileType) => {
+
+  apagar: (id) =>
+    apiFetch(`/faturas/${id}`, { method: 'DELETE' }),
+
+  upload: (fileUri, fileName, fileType) => {
     const formData = new FormData();
-    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
+
+    formData.append('file', {
+      uri: fileUri,
+      name: fileName,
+      type: fileType,
+    });
+
     return apiUpload('/faturas/upload', formData);
   },
 };
@@ -96,10 +137,17 @@ export const notificacoesAPI = {
 // ── Chat ───────────────────────────────────────────────────────────────────────
 
 export const chatAPI = {
-  enviar:    (mensagem) =>
-    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
-  historico: (limite = 20) => apiFetch(`/chat/historico?limite=${limite}`),
-  limpar:    () => apiFetch('/chat/limpar', { method: 'POST' }),
+  enviar: (mensagem) =>
+    apiFetch('/chat/mensagem', {
+      method: 'POST',
+      body: JSON.stringify({ mensagem }),
+    }),
+
+  historico: (limite = 20) =>
+    apiFetch(`/chat/historico?limite=${limite}`),
+
+  limpar: () =>
+    apiFetch('/chat/limpar', { method: 'POST' }),
 };
 
 // ── Subscrições ────────────────────────────────────────────────────────────────
@@ -111,10 +159,16 @@ export const subscricoesAPI = {
 // ── Metas ──────────────────────────────────────────────────────────────────────
 
 export const metasAPI = {
-  listar: ()                          => apiFetch('/metas'),
-  criar:  (nome, limite, categoria)   =>
-    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
-  apagar: (id)                        => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+  listar: () => apiFetch('/metas'),
+
+  criar: (nome, limite, categoria) =>
+    apiFetch('/metas', {
+      method: 'POST',
+      body: JSON.stringify({ nome, limite, categoria }),
+    }),
+
+  apagar: (id) =>
+    apiFetch(`/metas/${id}`, { method: 'DELETE' }),
 };
 
 // ── Estatísticas ───────────────────────────────────────────────────────────────
@@ -131,8 +185,11 @@ export const scoreAPI = {
       method: 'POST',
       body: JSON.stringify({ item, preco, categoria, uso }),
     }),
-  scoreFatura:    (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
-  lojasProximas:  ({ item, categoria, lat, lng }) =>
+
+  scoreFatura: (faturaId) =>
+    apiFetch(`/scoring/fatura/${faturaId}`),
+
+  lojasProximas: ({ item, categoria, lat, lng }) =>
     apiFetch('/scoring/lojas-proximas', {
       method: 'POST',
       body: JSON.stringify({ item, categoria, lat, lng }),
@@ -142,29 +199,83 @@ export const scoreAPI = {
 // ── Playlists (Criar Em) ───────────────────────────────────────────────────────
 
 export const playlistsAPI = {
-  listar:    ()           => apiFetch('/playlists'),
-  criar:     (data)       => apiFetch('/playlists', { method: 'POST', body: JSON.stringify(data) }),
-  detalhe:   (id)         => apiFetch(`/playlists/${id}`),
-  editar:    (id, data)   => apiFetch(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  apagar:    (id)         => apiFetch(`/playlists/${id}`, { method: 'DELETE' }),
-  addFatura: (id, ids)    => apiFetch(`/playlists/${id}/faturas`, { method: 'POST', body: JSON.stringify({ fatura_ids: ids }) }),
-  remFatura: (id, fid)    => apiFetch(`/playlists/${id}/faturas/${fid}`, { method: 'DELETE' }),
-  partilhar: (id)         => apiFetch(`/playlists/${id}/partilhar`, { method: 'POST' }),
-  juntar:    (codigo)     => apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
-  membros:   (id)         => apiFetch(`/playlists/${id}/membros`),
-  sair:      (id)         => apiFetch(`/playlists/${id}/sair`, { method: 'DELETE' }),
+  listar: () => apiFetch('/playlists'),
+
+  criar: (data) =>
+    apiFetch('/playlists', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  detalhe: (id) =>
+    apiFetch(`/playlists/${id}`),
+
+  editar: (id, data) =>
+    apiFetch(`/playlists/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  apagar: (id) =>
+    apiFetch(`/playlists/${id}`, {
+      method: 'DELETE',
+    }),
+
+  addFatura: (id, ids) =>
+    apiFetch(`/playlists/${id}/faturas`, {
+      method: 'POST',
+      body: JSON.stringify({ fatura_ids: ids }),
+    }),
+
+  remFatura: (id, fid) =>
+    apiFetch(`/playlists/${id}/faturas/${fid}`, {
+      method: 'DELETE',
+    }),
+
+  partilhar: (id) =>
+    apiFetch(`/playlists/${id}/partilhar`, {
+      method: 'POST',
+    }),
+
+  juntar: (codigo) =>
+    apiFetch(`/playlists/juntar/${codigo}`, {
+      method: 'POST',
+    }),
+
+  membros: (id) =>
+    apiFetch(`/playlists/${id}/membros`),
+
+  sair: (id) =>
+    apiFetch(`/playlists/${id}/sair`, {
+      method: 'DELETE',
+    }),
 };
 
 // ── Amigos / Conexões ──────────────────────────────────────────────────────────
 
 export const amigosAPI = {
-  listar:       ()        => apiFetch('/amigos'),
-  pedidos:      ()        => apiFetch('/amigos/pedidos'),
-  enviarPedido: (email)   =>
-    apiFetch('/amigos/pedido', { method: 'POST', body: JSON.stringify({ email }) }),
-  aceitar:      (id)      => apiFetch(`/amigos/${id}/aceitar`, { method: 'POST' }),
-  rejeitar:     (id)      => apiFetch(`/amigos/${id}/rejeitar`, { method: 'POST' }),
-  buscar:       (q)       => apiFetch(`/utilizadores/buscar?q=${encodeURIComponent(q)}`),
+  listar: () => apiFetch('/amigos'),
+
+  pedidos: () => apiFetch('/amigos/pedidos'),
+
+  enviarPedido: (email) =>
+    apiFetch('/amigos/pedido', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  aceitar: (id) =>
+    apiFetch(`/amigos/${id}/aceitar`, {
+      method: 'POST',
+    }),
+
+  rejeitar: (id) =>
+    apiFetch(`/amigos/${id}/rejeitar`, {
+      method: 'POST',
+    }),
+
+  buscar: (q) =>
+    apiFetch(`/utilizadores/buscar?q=${encodeURIComponent(q)}`),
 };
 
 // ── Relatório Mensal ───────────────────────────────────────────────────────────
@@ -172,9 +283,12 @@ export const amigosAPI = {
 export const relatorioAPI = {
   get: (mes = null, ano = null) => {
     const params = new URLSearchParams();
+
     if (mes) params.set('mes', mes);
     if (ano) params.set('ano', ano);
+
     const query = params.toString();
+
     return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
   },
 };
