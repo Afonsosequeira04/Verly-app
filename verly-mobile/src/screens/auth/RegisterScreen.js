@@ -1,89 +1,148 @@
-import React, { useState } from 'react';
+// src/screens/auth/RegisterScreen.js — Redesign Luxury
+import React, { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, Alert, ScrollView,
+  View, Text, TextInput, Pressable,
+  KeyboardAvoidingView, Platform, ScrollView,
+  ActivityIndicator, Alert, Animated, Easing, StyleSheet,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
-import { COLORS } from '../../constants/theme';
+import { authAPI } from '../../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../../constants/theme';
 
-export default function RegisterScreen({ navigation }) {
+const C = COLORS;
+
+export default function RegisterScreen({ navigation, route }) {
   const { register } = useAuth();
-  const [nome, setNome]       = useState('');
-  const [email, setEmail]     = useState('');
-  const [password, setPass]   = useState('');
-  const [loading, setLoading] = useState(false);
+  const [nome,     setNome]     = useState('');
+  const [email,    setEmail]    = useState('');
+  const [password, setPassword] = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [focused,  setFocused]  = useState(null);
+
+  const opacity = useRef(new Animated.Value(0)).current;
+  const slideY  = useRef(new Animated.Value(24)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity, { toValue: 1, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(slideY,  { toValue: 0, duration: 500, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const onboardingAnswers = route?.params?.onboardingAnswers || null;
 
   const handleRegister = async () => {
-    if (!nome.trim() || !email.trim() || !password) {
-      Alert.alert('Erro', 'Preenche todos os campos.');
-      return;
-    }
-    if (password.length < 8) {
-      Alert.alert('Erro', 'A password deve ter pelo menos 8 caracteres.');
-      return;
-    }
+    if (!nome.trim() || !email.trim() || !password)
+      return Alert.alert('Campos obrigatórios', 'Preenche todos os campos.');
     setLoading(true);
     try {
-      await register(nome.trim(), email.trim().toLowerCase(), password);
+      const user = await register(nome.trim(), email.trim().toLowerCase(), password);
+      // Se veio do onboarding, marca como completo imediatamente após registo
+      if (onboardingAnswers) {
+        try {
+          await authAPI.completeOnboarding(onboardingAnswers);
+        } catch (_) {}
+      }
     } catch (err) {
-      Alert.alert('Erro', err.message || 'Não foi possível criar a conta.');
+      Alert.alert('Erro ao registar', err.message || 'Tenta novamente.');
     } finally {
       setLoading(false);
     }
   };
 
+  const inputStyle = (name) => [s.input, focused === name && s.inputFocused];
+
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.logoWrap}>
-          <Text style={styles.logo}>💰 Verly</Text>
-          <Text style={styles.logoSub}>Começa a verificar as tuas finanças hoje.</Text>
-        </View>
-        <View style={styles.card}>
-          <Text style={styles.title}>Criar conta</Text>
+    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+        <Animated.View style={{ opacity, transform: [{ translateY: slideY }] }}>
 
-          <Text style={styles.label}>Nome</Text>
-          <TextInput style={styles.input} value={nome} onChangeText={setNome}
-            placeholder="O teu nome" placeholderTextColor={COLORS.textSub} autoCapitalize="words" />
+          <View style={s.logoWrap}>
+            <View style={s.logoMark}>
+              <Text style={s.logoMarkText}>V</Text>
+            </View>
+            <Text style={s.logoText}>Verly</Text>
+            <Text style={s.logoSub}>Cria a tua conta gratuitamente</Text>
+          </View>
 
-          <Text style={styles.label}>Email</Text>
-          <TextInput style={styles.input} value={email} onChangeText={setEmail}
-            placeholder="o.teu@email.com" placeholderTextColor={COLORS.textSub}
-            keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
+          <View style={s.card}>
+            <Text style={s.title}>Registo</Text>
 
-          <Text style={styles.label}>Password</Text>
-          <TextInput style={styles.input} value={password} onChangeText={setPass}
-            placeholder="Mínimo 8 caracteres" placeholderTextColor={COLORS.textSub} secureTextEntry />
+            {[
+              { label: 'Nome', key: 'nome', value: nome, set: setNome, placeholder: 'O teu nome', opts: {} },
+              { label: 'Email', key: 'email', value: email, set: setEmail, placeholder: 'o.teu@email.com', opts: { keyboardType: 'email-address', autoCapitalize: 'none' } },
+              { label: 'Password', key: 'password', value: password, set: setPassword, placeholder: '••••••••', opts: { secureTextEntry: true } },
+            ].map(({ label, key, value, set, placeholder, opts }) => (
+              <View key={key}>
+                <Text style={[s.label, key !== 'nome' && { marginTop: 14 }]}>{label}</Text>
+                <TextInput
+                  style={inputStyle(key)}
+                  value={value}
+                  onChangeText={set}
+                  placeholder={placeholder}
+                  placeholderTextColor={C.textMid}
+                  autoCorrect={false}
+                  onFocus={() => setFocused(key)}
+                  onBlur={() => setFocused(null)}
+                  {...opts}
+                />
+              </View>
+            ))}
 
-          <TouchableOpacity style={[styles.btn, loading && styles.btnDisabled]}
-            onPress={handleRegister} disabled={loading}>
-            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Criar conta →</Text>}
-          </TouchableOpacity>
+            <Pressable
+              style={({ pressed }) => [s.btn, loading && s.btnDisabled, pressed && { opacity: 0.85 }]}
+              onPress={handleRegister}
+              disabled={loading}
+            >
+              {loading
+                ? <ActivityIndicator color="#fff" />
+                : <Text style={s.btnText}>Criar Conta</Text>
+              }
+            </Pressable>
 
-          <TouchableOpacity style={styles.linkWrap} onPress={() => navigation.navigate('Login')}>
-            <Text style={styles.link}>Já tens conta? <Text style={styles.linkBold}>Iniciar sessão</Text></Text>
-          </TouchableOpacity>
-        </View>
+            <Pressable style={s.link} onPress={() => navigation.navigate('Login')}>
+              <Text style={s.linkText}>Já tens conta? <Text style={{ color: C.brand, fontWeight: '700' }}>Entrar</Text></Text>
+            </Pressable>
+          </View>
+
+        </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  root:      { flex: 1, backgroundColor: COLORS.bg },
-  scroll:    { flexGrow: 1, justifyContent: 'center', padding: 24 },
-  logoWrap:  { alignItems: 'center', marginBottom: 36 },
-  logo:      { fontSize: 32, fontWeight: '800', color: COLORS.text, letterSpacing: -0.5 },
-  logoSub:   { fontSize: 14, color: COLORS.textSub, marginTop: 6, textAlign: 'center' },
-  card:      { backgroundColor: COLORS.surface, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: COLORS.border },
-  title:     { fontSize: 22, fontWeight: '700', color: COLORS.text, marginBottom: 20 },
-  label:     { fontSize: 13, fontWeight: '600', color: COLORS.textSub, marginBottom: 6, marginTop: 12 },
-  input:     { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
-  btn:       { backgroundColor: COLORS.brand, borderRadius: 12, padding: 15, alignItems: 'center', marginTop: 24 },
+const s = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: C.bg },
+  scroll: { flexGrow: 1, justifyContent: 'center', padding: SPACE.lg },
+
+  logoWrap: { alignItems: 'center', marginBottom: 36 },
+  logoMark: {
+    width: 52, height: 52, borderRadius: 16, backgroundColor: C.brand,
+    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 14,
+  },
+  logoMarkText: { fontSize: 22, fontWeight: '900', color: '#fff' },
+  logoText: { fontSize: 26, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  logoSub:  { fontSize: FONT.sm, color: C.textMid, marginTop: 6 },
+
+  card: { backgroundColor: C.surface, borderRadius: RADIUS.xl, padding: 24, borderWidth: 1, borderColor: C.border },
+  title: { fontSize: FONT.xxl, fontWeight: '800', color: C.text, marginBottom: 20 },
+  label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 7, letterSpacing: 0.3 },
+
+  input: {
+    backgroundColor: C.surface2, borderRadius: RADIUS.md,
+    borderWidth: 1, borderColor: C.border,
+    color: C.text, fontSize: FONT.md, padding: 13,
+  },
+  inputFocused: { borderColor: C.brand + '70' },
+
+  btn: {
+    backgroundColor: C.brand, borderRadius: RADIUS.md,
+    padding: 15, alignItems: 'center', marginTop: 24,
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10,
+  },
   btnDisabled: { opacity: 0.6 },
-  btnText:   { color: '#fff', fontSize: 16, fontWeight: '700' },
-  linkWrap:  { alignItems: 'center', marginTop: 16 },
-  link:      { color: COLORS.textSub, fontSize: 14 },
-  linkBold:  { color: COLORS.brand, fontWeight: '700' },
+  btnText: { color: '#fff', fontSize: FONT.md, fontWeight: '700', letterSpacing: 0.2 },
+
+  link: { alignItems: 'center', marginTop: 18 },
+  linkText: { color: C.textMid, fontSize: FONT.sm },
 });

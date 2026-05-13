@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import base64
+import requests
 from datetime import datetime, timedelta
 from llama_index.core import (
     VectorStoreIndex, SimpleDirectoryReader,
@@ -167,18 +169,11 @@ def _calcular_datas(data_compra_str):
 
 
 def _extrair_items(texto):
-    """
-    Extrai o produto/serviço — o texto está na linha SEGUINTE ao label.
-    Ex:
-        PRODUTO / SERVICO ADQUIRIDO:
-        Pack 3 T-Shirts mais Sweatshirt
-    """
     patterns = [
         r'PRODUTO\s*/\s*SERVICO\s+ADQUIRIDO\s*[:\-]?\s*\n\s*(.+)',
         r'PRODUTO\s*[:\-]\s*\n\s*(.+)',
         r'DESCRI[CÇ][AÃ]O\s*[:\-]\s*\n\s*(.+)',
         r'ARTIGO\s*[:\-]\s*\n\s*(.+)',
-        # Também tenta na mesma linha
         r'PRODUTO\s*/\s*SERVICO\s+ADQUIRIDO\s*[:\-]\s*(.+)',
         r'PRODUTO\s*[:\-]\s*(.+)',
     ]
@@ -191,15 +186,250 @@ def _extrair_items(texto):
     return []
 
 
+def _parse_llm_json(text, filename):
+    """Parse LLM JSON response and return normalized invoice dict."""
+    if '```json' in text:
+        text = text.split('```json')[1].split('```')[0].strip()
+    elif '```' in text:
+        text = text.split('```')[1].split('```')[0].strip()
+
+    start = text.find('{')
+    end = text.rfind('}') + 1
+    if start != -1 and end > start:
+        text = text[start:end]
+
+    data = json.loads(text)
+    data_compra = _normalizar_data(data.get('data_compra'))
+    data_devolucao, data_garantia = _calcular_datas(data_compra)
+
+    categoria = data.get('categoria', 'Outros')
+    if categoria not in CATEGORIAS_VALIDAS:
+        categoria = CATEGORIA_MAP.get(categoria.lower(), 'Outros')
+
+    loja = data.get('loja') or ''
+    if not loja or '@' in loja or 'http' in loja or loja.endswith('.pt') or loja.endswith('.com'):
+        loja = os.path.splitext(filename)[0].replace('_', ' ').title()
+
+    return {
+        'loja': loja,
+        'data_compra': data_compra,
+        'total': float(data.get('total') or 0),
+        'items': json.dumps(data.get('items') or [], ensure_ascii=False),
+        'categoria': categoria,
+        'data_garantia': data_garantia,
+        'data_devolucao': data_devolucao,
+    }
+
+
+def _fallback_result(filename):
+    return {
+        'loja': os.path.splitext(filename)[0].replace('_', ' ').title(),
+        'data_compra': None,
+        'total': 0.0,
+        'items': '[]',
+        'categoria': 'Outros',
+        'data_garantia': None,
+        'data_devolucao': None,
+    }
+
+
+# ─── EXTRAÇÃO COM IA — IMAGEM (VISION) ───────────────────────────────────────
+
+def extract_invoice_info_from_image(file_path, filename):
+    """
+    Extrai informação de uma fatura em imagem (JPG/PNG/JPEG/HEIC)
+    usando Groq Vision (llama-4-scout) diretamente via base64.
+    NÃO usa LlamaIndex — evita o bug de confundir com outras faturas.
+    """
+    groq_key = os.getenv("GROQ_API_KEY")
+    if not groq_key:
+        return _fallback_result(filename)
+
+    # Determinar mime type
+    ext = os.path.splitext(filename)[1].lower()
+    mime_map = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.webp': 'image/webp',
+        '.heic': 'image/jpeg',  # iOS HEIC enviado como JPEG
+        '.heif': 'image/jpeg',
+    }
+    mime_type = mime_map.get(ext, 'image/jpeg')
+
+    # Ler e codificar imagem em base64
+    try:
+        with open(file_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+    except Exception:
+        return _fallback_result(filename)
+
+    prompt = """Analisa esta imagem de fatura/recibo e extrai APENAS dados que estão escritos explicitamente na imagem.
+Não inventes nada. Responde APENAS com JSON válido, sem texto antes ou depois:
+{
+  "loja": "nome exacto da loja/empresa (nunca um email ou URL)",
+  "data_compra": "DD/MM/YYYY ou null",
+  "total": numero decimal ou null,
+  "items": ["produto ou serviço comprado"],
+  "categoria": "Tecnologia|Alimentação|Vestuário|Casa & Decoração|Saúde & Beleza|Desporto|Entretenimento|Transportes|Educação|Outros"
+}"""
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                "max_tokens": 500,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{image_data}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        text = response.json()['choices'][0]['message']['content'].strip()
+        return _parse_llm_json(text, filename)
+    except Exception:
+        return _fallback_result(filename)
+
+
+# ─── EXTRAÇÃO COM IA — PDF ────────────────────────────────────────────────────
+
+def extract_invoice_info_from_pdf(file_path, filename):
+    """
+    Extrai informação de uma fatura PDF:
+    1. Tenta extrair texto com pdfplumber
+    2. Se tiver texto suficiente, usa extract_invoice_info_from_text (regex)
+    3. Se o PDF for uma imagem escaneada (sem texto), usa Vision via primeira página
+    NÃO usa LlamaIndex para evitar confusão com outras faturas.
+    """
+    try:
+        import pdfplumber
+        texto = ""
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    texto += t + "\n"
+
+        if len(texto.strip()) > 50:
+            # PDF com texto — processa directamente
+            return extract_invoice_info_from_text(texto, filename)
+        else:
+            # PDF escaneado — converte primeira página para imagem e usa Vision
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(file_path)
+                page = doc[0]
+                mat = fitz.Matrix(2, 2)  # 2x zoom para melhor qualidade
+                pix = page.get_pixmap(matrix=mat)
+                img_bytes = pix.tobytes("jpeg")
+                img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+                doc.close()
+
+                groq_key = os.getenv("GROQ_API_KEY")
+                prompt = """Analisa esta imagem de fatura/recibo e extrai APENAS dados escritos explicitamente.
+Responde APENAS com JSON válido:
+{
+  "loja": "nome exacto da loja",
+  "data_compra": "DD/MM/YYYY ou null",
+  "total": numero decimal ou null,
+  "items": ["produto ou serviço"],
+  "categoria": "Tecnologia|Alimentação|Vestuário|Casa & Decoração|Saúde & Beleza|Desporto|Entretenimento|Transportes|Educação|Outros"
+}"""
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {groq_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                        "max_tokens": 500,
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                                {"type": "text", "text": prompt}
+                            ]
+                        }]
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                text = response.json()['choices'][0]['message']['content'].strip()
+                return _parse_llm_json(text, filename)
+            except Exception:
+                return _fallback_result(filename)
+    except Exception:
+        return _fallback_result(filename)
+
+
+# ─── EXTRAÇÃO DIRETA DO TEXTO (sem IA) ───────────────────────────────────────
+
 def extract_invoice_info_from_text(texto, filename):
-    """Extrai info da fatura directamente por regex — sem IA."""
+    """Extrai info da fatura directamente por LLM — para ficheiros .txt com texto estruturado."""
+    groq_key = os.getenv("GROQ_API_KEY")
+
+    # Primeiro tenta com LLM para melhor precisão
+    if groq_key and len(texto.strip()) > 20:
+        prompt = f"""Lê o seguinte texto de uma fatura e extrai APENAS dados escritos explicitamente. Não inventes nada.
+Responde APENAS com JSON válido:
+{{
+  "loja": "nome exacto da loja (nunca um email ou URL)",
+  "data_compra": "DD/MM/YYYY ou null",
+  "total": numero decimal ou null,
+  "items": ["produto ou serviço comprado"],
+  "categoria": "Tecnologia|Alimentação|Vestuário|Casa & Decoração|Saúde & Beleza|Desporto|Entretenimento|Transportes|Educação|Outros"
+}}
+
+TEXTO DA FATURA:
+{texto[:3000]}"""
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "max_tokens": 500,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=20
+            )
+            response.raise_for_status()
+            text = response.json()['choices'][0]['message']['content'].strip()
+            return _parse_llm_json(text, filename)
+        except Exception:
+            pass  # Cai para regex
+
+    # Fallback: regex
     loja = _extrair_campo(texto, 'LOJA', 'Loja / Fornecedor', 'Fornecedor', 'Empresa')
     if not loja or '@' in loja or '.pt' in loja or '.com' in loja:
         loja = os.path.splitext(filename)[0].replace('_', ' ').title()
 
     data_raw = _extrair_campo(texto, 'DATA DE COMPRA', 'Data de Compra', 'DATA', 'Data')
     data_compra = _normalizar_data(data_raw)
-
     total = _extrair_total(texto)
 
     cat_raw = _extrair_campo(texto, 'CATEGORIA')
@@ -227,7 +457,7 @@ def extract_invoice_info_from_text(texto, filename):
     }
 
 
-# ─── ÍNDICE ───────────────────────────────────────────────────────────────────
+# ─── ÍNDICE (mantido para o chat) ────────────────────────────────────────────
 
 def get_user_paths(base_upload, base_storage, user_id):
     data_dir = os.path.join(base_upload, str(user_id))
@@ -273,62 +503,27 @@ def chat_with_index(index, user_message, personalidade='calm'):
     return str(response)
 
 
-# ─── EXTRAÇÃO COM IA (PDF / imagem) ──────────────────────────────────────────
+# ─── ENTRADA PRINCIPAL PARA O UPLOAD ─────────────────────────────────────────
 
-def extract_invoice_info(index, filename):
-    prompt = """Lê o documento e extrai APENAS dados escritos explicitamente. Não inventes nada.
-Responde APENAS com JSON válido:
-{
-  "loja": "nome exacto da loja (nunca um email ou URL)",
-  "data_compra": "DD/MM/YYYY ou null",
-  "total": numero decimal ou null,
-  "items": ["produto ou serviço comprado"],
-  "categoria": "Tecnologia|Alimentação|Vestuário|Casa & Decoração|Saúde & Beleza|Desporto|Entretenimento|Transportes|Educação|Outros"
-}"""
+def extract_invoice_info(file_path, filename):
+    """
+    Ponto de entrada único para extração de faturas.
+    Despacha para o método correcto baseado na extensão do ficheiro.
+    NÃO usa LlamaIndex — cada ficheiro é processado individualmente
+    para evitar o bug de confundir faturas diferentes.
+    """
+    ext = os.path.splitext(filename)[1].lower()
 
-    try:
-        query_engine = index.as_query_engine(streaming=False)
-        response = query_engine.query(prompt)
-        text = str(response).strip()
-
-        if '```json' in text:
-            text = text.split('```json')[1].split('```')[0].strip()
-        elif '```' in text:
-            text = text.split('```')[1].split('```')[0].strip()
-
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start != -1 and end > start:
-            text = text[start:end]
-
-        data = json.loads(text)
-        data_compra = _normalizar_data(data.get('data_compra'))
-        data_devolucao, data_garantia = _calcular_datas(data_compra)
-
-        categoria = data.get('categoria', 'Outros')
-        if categoria not in CATEGORIAS_VALIDAS:
-            categoria = CATEGORIA_MAP.get(categoria.lower(), 'Outros')
-
-        loja = data.get('loja') or ''
-        if not loja or '@' in loja or 'http' in loja or loja.endswith('.pt') or loja.endswith('.com'):
-            loja = os.path.splitext(filename)[0].replace('_', ' ').title()
-
-        return {
-            'loja': loja,
-            'data_compra': data_compra,
-            'total': float(data.get('total') or 0),
-            'items': json.dumps(data.get('items') or [], ensure_ascii=False),
-            'categoria': categoria,
-            'data_garantia': data_garantia,
-            'data_devolucao': data_devolucao,
-        }
-    except Exception:
-        return {
-            'loja': os.path.splitext(filename)[0].replace('_', ' ').title(),
-            'data_compra': None,
-            'total': 0.0,
-            'items': '[]',
-            'categoria': 'Outros',
-            'data_garantia': None,
-            'data_devolucao': None,
-        }
+    if ext in ('.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'):
+        return extract_invoice_info_from_image(file_path, filename)
+    elif ext == '.pdf':
+        return extract_invoice_info_from_pdf(file_path, filename)
+    elif ext == '.txt':
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                texto = f.read()
+            return extract_invoice_info_from_text(texto, filename)
+        except Exception:
+            return _fallback_result(filename)
+    else:
+        return _fallback_result(filename)

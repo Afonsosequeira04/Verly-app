@@ -5,8 +5,8 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'http://192.168.1.245:5000/api/v1';
+// ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
+const BASE_URL = 'http://192.168.1.254:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
@@ -16,24 +16,20 @@ export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, toke
 export const getToken    = async ()        => AsyncStorage.getItem(TOKEN_KEY);
 export const removeToken = async ()        => AsyncStorage.removeItem(TOKEN_KEY);
 
-// ── Fetch base (exportado para uso direto) ─────────────────────────────────────
+// ── Fetch base ─────────────────────────────────────────────────────────────────
 
 export async function apiFetch(path, options = {}) {
   const token = await getToken();
-
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
-
   const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
-
   if (response.status === 401) {
     await removeToken();
     throw new Error('UNAUTHORIZED');
   }
-
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
   return data;
@@ -56,13 +52,17 @@ async function apiUpload(path, formData) {
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
 export const authAPI = {
-  login:    (email, password) =>
+  login:      (email, password) =>
     apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  register: (nome, email, password) =>
+  register:   (nome, email, password) =>
     apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
-  me:       () => apiFetch('/auth/me'),
-  updateMe: (updates) =>
+  me:         () => apiFetch('/auth/me'),
+  updateMe:   (updates) =>
     apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
+  uploadAvatar: (image_base64) =>
+    apiFetch('/auth/avatar', { method: 'POST', body: JSON.stringify({ image_base64 }) }),
+  completeOnboarding: (answers) =>
+    apiFetch('/auth/onboarding', { method: 'POST', body: JSON.stringify(answers) }),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
@@ -111,10 +111,10 @@ export const subscricoesAPI = {
 // ── Metas ──────────────────────────────────────────────────────────────────────
 
 export const metasAPI = {
-  listar: () => apiFetch('/metas'),
-  criar:  (nome, limite, categoria) =>
+  listar: ()                          => apiFetch('/metas'),
+  criar:  (nome, limite, categoria)   =>
     apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
-  apagar: (id) => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+  apagar: (id)                        => apiFetch(`/metas/${id}`, { method: 'DELETE' }),
 };
 
 // ── Estatísticas ───────────────────────────────────────────────────────────────
@@ -131,8 +131,8 @@ export const scoreAPI = {
       method: 'POST',
       body: JSON.stringify({ item, preco, categoria, uso }),
     }),
-  scoreFatura: (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
-  lojasProximas: ({ item, categoria, lat, lng }) =>
+  scoreFatura:    (faturaId) => apiFetch(`/scoring/fatura/${faturaId}`),
+  lojasProximas:  ({ item, categoria, lat, lng }) =>
     apiFetch('/scoring/lojas-proximas', {
       method: 'POST',
       body: JSON.stringify({ item, categoria, lat, lng }),
@@ -153,6 +153,18 @@ export const playlistsAPI = {
   juntar:    (codigo)     => apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
   membros:   (id)         => apiFetch(`/playlists/${id}/membros`),
   sair:      (id)         => apiFetch(`/playlists/${id}/sair`, { method: 'DELETE' }),
+};
+
+// ── Amigos / Conexões ──────────────────────────────────────────────────────────
+
+export const amigosAPI = {
+  listar:       ()        => apiFetch('/amigos'),
+  pedidos:      ()        => apiFetch('/amigos/pedidos'),
+  enviarPedido: (email)   =>
+    apiFetch('/amigos/pedido', { method: 'POST', body: JSON.stringify({ email }) }),
+  aceitar:      (id)      => apiFetch(`/amigos/${id}/aceitar`, { method: 'POST' }),
+  rejeitar:     (id)      => apiFetch(`/amigos/${id}/rejeitar`, { method: 'POST' }),
+  buscar:       (q)       => apiFetch(`/utilizadores/buscar?q=${encodeURIComponent(q)}`),
 };
 
 // ── Relatório Mensal ───────────────────────────────────────────────────────────

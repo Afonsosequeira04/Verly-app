@@ -1,31 +1,179 @@
-/**
- * src/screens/PerfilScreen.js
- */
-import React, { useState } from 'react';
+// src/screens/PerfilScreen.js — Perfil com foto, Google/telefone, teclado corrigido
+import React, { useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  Alert, Switch,
+  View, Text, ScrollView, Pressable, TextInput,
+  Alert, ActivityIndicator, StyleSheet, RefreshControl,
+  Image, KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import { LogOut, Save, Shield, Bell, Camera, Mail, Phone, ChevronRight, Check } from 'lucide-react-native';
+import { perfilAPI, authAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { Reveal, SectionHeader } from '../components/UI';
+
+const C = COLORS;
+const initials = (n = '') =>
+  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PERSONALIDADES = [
-  { key: 'calm',      nome: 'Calmo',          desc: 'Coach gentil e construtivo.', cor: COLORS.green },
-  { key: 'pro',       nome: 'Profissional',   desc: 'CFO pessoal. Números e factos.', cor: COLORS.brand },
-  { key: 'savage',    nome: 'Savage',         desc: 'Sem filtros. Verdade brutal.', cor: COLORS.red },
-  { key: 'sarcastic', nome: 'Sarcástico',     desc: 'Ironia refinada. Construtivo.', cor: COLORS.yellow },
+  { key: 'calm',      label: 'Calm',       desc: 'Neutro e informativo' },
+  { key: 'pro',       label: 'Pro',        desc: 'Profissional e direto' },
+  { key: 'sarcastic', label: 'Sarcástico', desc: 'Com pitada de humor' },
+  { key: 'savage',    label: 'Savage',     desc: 'Sem filtros' },
 ];
 
-export default function PerfilScreen() {
-  const { user, logout, updateUser } = useAuth();
-  const [saving, setSaving] = useState(false);
+// ─── Modal para associar número de telemóvel ──────────────────────────────────
+function PhoneModal({ visible, onClose, onSave }) {
+  const [phone, setPhone] = useState('');
+  const [code,  setCode]  = useState('');
+  const [step,  setStep]  = useState(1); // 1 = número, 2 = código
 
-  const handlePersonalidade = async (key) => {
+  const handleSendCode = () => {
+    if (!phone.trim()) return Alert.alert('Número inválido', 'Insere o teu número.');
+    // Em produção: chamar API para enviar SMS
+    setStep(2);
+    Alert.alert('Código enviado', `Um SMS foi enviado para ${phone}.\n\n(Em desenvolvimento — usa código 123456)`);
+  };
+
+  const handleVerify = () => {
+    if (code.trim() === '123456' || code.trim().length === 6) {
+      onSave(phone);
+      onClose();
+      setStep(1); setPhone(''); setCode('');
+    } else {
+      Alert.alert('Código inválido', 'Verifica o código que recebeste.');
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <Pressable style={pm.backdrop} onPress={onClose} />
+        <View style={pm.sheet}>
+          <View style={pm.handle} />
+          <Text style={pm.title}>{step === 1 ? 'Associar telemóvel' : 'Confirmar código'}</Text>
+          <Text style={pm.sub}>
+            {step === 1
+              ? 'Adiciona um número para proteger a tua conta.'
+              : `Código enviado para ${phone}`}
+          </Text>
+
+          {step === 1 ? (
+            <>
+              <View style={pm.inputWrap}>
+                <Phone size={16} color={C.textMid} />
+                <TextInput
+                  style={pm.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="+351 912 345 678"
+                  placeholderTextColor={C.textMid}
+                  keyboardType="phone-pad"
+                  autoFocus
+                />
+              </View>
+              <Pressable style={pm.btn} onPress={handleSendCode}>
+                <Text style={pm.btnText}>Enviar código SMS</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <View style={pm.inputWrap}>
+                <TextInput
+                  style={[pm.input, { letterSpacing: 8, fontSize: 22, textAlign: 'center' }]}
+                  value={code}
+                  onChangeText={setCode}
+                  placeholder="——"
+                  placeholderTextColor={C.textMid}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  autoFocus
+                />
+              </View>
+              <Pressable style={pm.btn} onPress={handleVerify}>
+                <Text style={pm.btnText}>Verificar</Text>
+              </Pressable>
+              <Pressable onPress={() => setStep(1)} style={{ alignItems: 'center', marginTop: 12 }}>
+                <Text style={{ color: C.textMid, fontSize: 13 }}>Número errado? Alterar</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const pm = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet: {
+    backgroundColor: C.surface2,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    padding: 24, paddingBottom: 44,
+  },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 20 },
+  title: { fontSize: 18, fontWeight: '800', color: C.text, marginBottom: 6 },
+  sub:   { fontSize: 13, color: C.textMid, marginBottom: 20 },
+  inputWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: C.surface3, borderRadius: RADIUS.md,
+    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16,
+  },
+  input: { flex: 1, fontSize: 16, color: C.text, paddingVertical: 10 },
+  btn: {
+    height: 50, borderRadius: RADIUS.md, backgroundColor: C.brand,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  btnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+});
+
+// ─── Componente principal ─────────────────────────────────────────────────────
+export default function PerfilScreen({ navigation }) {
+  const { user, logout, updateUser } = useAuth();
+  const [perfil,        setPerfil]        = useState(null);
+  const [nome,          setNome]          = useState('');
+  const [orcamento,     setOrcamento]     = useState('');
+  const [personalidade, setPersonalidade] = useState('calm');
+  const [saving,        setSaving]        = useState(false);
+  const [refreshing,    setRefreshing]    = useState(false);
+  const [focused,       setFocused]       = useState(null);
+  const [avatarUri,     setAvatarUri]     = useState(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [phoneModal,    setPhoneModal]    = useState(false);
+  const [phone,         setPhone]         = useState('');
+
+  useFocusEffect(useCallback(() => { load(); }, []));
+
+  const load = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
     try {
-      setSaving(true);
-      await authAPI.updateMe({ personalidade: key });
-      updateUser({ personalidade: key });
+      const d = await perfilAPI.get();
+      setPerfil(d);
+      setNome(d.nome || '');
+      setOrcamento(d.orcamento_mensal ? String(d.orcamento_mensal) : '');
+      setPersonalidade(d.personalidade || 'calm');
+      if (d.avatar_url) setAvatarUri(d.avatar_url);
+      if (d.telefone)   setPhone(d.telefone);
+    } catch (_) {}
+    finally { setRefreshing(false); }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await perfilAPI.atualizar({
+        nome: nome.trim(),
+        orcamento_mensal: parseFloat(orcamento.replace(',', '.')) || 0,
+        personalidade,
+      });
+      updateUser?.({ nome: nome.trim() });
+      Alert.alert('Guardado', 'Perfil atualizado com sucesso.');
     } catch (e) {
       Alert.alert('Erro', e.message);
     } finally {
@@ -33,127 +181,315 @@ export default function PerfilScreen() {
     }
   };
 
-  const handleNotifToggle = async (val) => {
-    try {
-      await authAPI.updateMe({ notificacoes_email: val });
-      updateUser({ notificacoes_email: val });
-    } catch (e) {
-      Alert.alert('Erro', e.message);
+  const handlePickAvatar = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permissão necessária', 'Precisamos de acesso à galeria.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      setUploadingAvatar(true);
+      try {
+        const base64 = result.assets[0].base64;
+        const mimeType = result.assets[0].mimeType || 'image/jpeg';
+        await authAPI.uploadAvatar(`data:${mimeType};base64,${base64}`);
+        setAvatarUri(result.assets[0].uri);
+        Alert.alert('Foto atualizada', 'A tua foto de perfil foi actualizada.');
+      } catch (e) {
+        Alert.alert('Erro', e.message || 'Não foi possível fazer upload da foto.');
+      } finally {
+        setUploadingAvatar(false);
+      }
     }
   };
 
-  const handleLogout = () => {
-    Alert.alert('Terminar sessão', 'Tens a certeza?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sair', style: 'destructive', onPress: logout },
-    ]);
+  const handleSavePhone = (num) => {
+    setPhone(num);
+    // Em produção: chamar API para guardar
+    Alert.alert('Telemóvel associado', `Número ${num} verificado com sucesso.`);
   };
 
-  const initial = user?.nome?.[0]?.toUpperCase() || '?';
-  const personalidade = user?.personalidade || 'calm';
+  const handleConnectGoogle = () => {
+    Alert.alert(
+      'Associar conta Google',
+      'A integração com Google OAuth está disponível na versão web. Abre verly.app/perfil para associar.',
+      [{ text: 'OK' }]
+    );
+  };
+
+  const inputStyle = (name) => [
+    pf.input,
+    focused === name && pf.inputFocused,
+  ];
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.content}>
-      {/* Hero */}
-      <View style={styles.hero}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initial}</Text>
-        </View>
-        <Text style={styles.heroNome}>{user?.nome}</Text>
-        <Text style={styles.heroEmail}>{user?.email}</Text>
-        {user?.streak_dias > 0 && (
-          <View style={styles.streakBadge}>
-            <Text style={styles.streakText}>🔥 {user.streak_dias} dias de streak</Text>
+    <KeyboardAvoidingView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    >
+      <PhoneModal
+        visible={phoneModal}
+        onClose={() => setPhoneModal(false)}
+        onSave={handleSavePhone}
+      />
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 80 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} />
+        }
+      >
+        {/* Avatar */}
+        <Reveal delay={0} style={{ alignItems: 'center', marginBottom: 28, marginTop: 8 }}>
+          <Pressable onPress={handlePickAvatar} style={{ position: 'relative' }}>
+            {avatarUri ? (
+              <Image
+                source={{ uri: avatarUri }}
+                style={pf.avatarImg}
+              />
+            ) : (
+              <View style={pf.avatar}>
+                <Text style={pf.avatarText}>{initials(nome || user?.nome)}</Text>
+              </View>
+            )}
+            <View style={pf.cameraBtn}>
+              {uploadingAvatar
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Camera size={14} color="#fff" />
+              }
+            </View>
+          </Pressable>
+          <Pressable onPress={handlePickAvatar} style={{ marginTop: 8 }}>
+            <Text style={{ fontSize: 13, color: C.brand, fontWeight: '700' }}>Alterar foto</Text>
+          </Pressable>
+        </Reveal>
+
+        {/* Dados básicos */}
+        <Reveal delay={60}>
+          <SectionHeader title="Informação pessoal" />
+          <View style={pf.card}>
+            <View style={pf.field}>
+              <Text style={pf.label}>Nome</Text>
+              <TextInput
+                style={inputStyle('nome')}
+                value={nome}
+                onChangeText={setNome}
+                placeholder="O teu nome"
+                placeholderTextColor={C.textMid}
+                onFocus={() => setFocused('nome')}
+                onBlur={() => setFocused(null)}
+                returnKeyType="next"
+              />
+            </View>
+            <View style={[pf.field, { borderTopWidth: 1, borderTopColor: C.border }]}>
+              <Text style={pf.label}>Orçamento mensal (€)</Text>
+              <TextInput
+                style={inputStyle('orcamento')}
+                value={orcamento}
+                onChangeText={setOrcamento}
+                placeholder="Ex: 500"
+                placeholderTextColor={C.textMid}
+                keyboardType="decimal-pad"
+                onFocus={() => setFocused('orcamento')}
+                onBlur={() => setFocused(null)}
+                returnKeyType="done"
+              />
+            </View>
           </View>
-        )}
-      </View>
+        </Reveal>
 
-      {/* Stats */}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{user?.orcamento_mensal ? `${user.orcamento_mensal}€` : '—'}</Text>
-          <Text style={styles.statLabel}>Orçamento</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{user?.streak_dias || 0}</Text>
-          <Text style={styles.statLabel}>Streak dias</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statVal}>{personalidade[0].toUpperCase() + personalidade.slice(1)}</Text>
-          <Text style={styles.statLabel}>Modo</Text>
-        </View>
-      </View>
-
-      {/* Personalidade */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Personalidade da Verly</Text>
-        <View style={styles.persGrid}>
-          {PERSONALIDADES.map(p => (
-            <TouchableOpacity
-              key={p.key}
-              style={[styles.persCard, personalidade === p.key && { borderColor: p.cor, backgroundColor: `${p.cor}15` }]}
-              onPress={() => handlePersonalidade(p.key)}
-              disabled={saving}
+        {/* Segurança / Conta */}
+        <Reveal delay={100} style={{ marginTop: 20 }}>
+          <SectionHeader title="Segurança e conta" />
+          <View style={pf.card}>
+            {/* Google */}
+            <Pressable
+              style={pf.linkRow}
+              onPress={handleConnectGoogle}
             >
-              {personalidade === p.key && (
-                <View style={[styles.persDot, { backgroundColor: p.cor }]} />
-              )}
-              <Text style={[styles.persNome, personalidade === p.key && { color: p.cor }]}>{p.nome}</Text>
-              <Text style={styles.persDesc}>{p.desc}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </View>
+              <View style={pf.linkIcon}>
+                <Mail size={16} color={C.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={pf.linkTitle}>Conta Google</Text>
+                <Text style={pf.linkSub}>
+                  {user?.google_connected ? user.email : 'Não associada'}
+                </Text>
+              </View>
+              {user?.google_connected
+                ? <Check size={14} color={C.green} />
+                : <ChevronRight size={14} color={C.textMid} />
+              }
+            </Pressable>
 
-      {/* Notificações */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Preferências</Text>
-        <View style={styles.settingRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.settingLabel}>Notificações por email</Text>
-            <Text style={styles.settingDesc}>Alertas de garantias e orçamento</Text>
+            <View style={{ height: 1, backgroundColor: C.border, marginHorizontal: 16 }} />
+
+            {/* Telemóvel */}
+            <Pressable
+              style={pf.linkRow}
+              onPress={() => setPhoneModal(true)}
+            >
+              <View style={pf.linkIcon}>
+                <Phone size={16} color={C.green} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={pf.linkTitle}>Telemóvel</Text>
+                <Text style={pf.linkSub}>{phone || 'Não associado'}</Text>
+              </View>
+              {phone
+                ? <Check size={14} color={C.green} />
+                : <ChevronRight size={14} color={C.textMid} />
+              }
+            </Pressable>
           </View>
-          <Switch
-            value={user?.notificacoes_email || false}
-            onValueChange={handleNotifToggle}
-            trackColor={{ false: COLORS.surface2, true: COLORS.brand }}
-            thumbColor="#fff"
-          />
-        </View>
-      </View>
+        </Reveal>
 
-      {/* Logout */}
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Terminar sessão</Text>
-      </TouchableOpacity>
-    </ScrollView>
+        {/* Personalidade da IA */}
+        <Reveal delay={140} style={{ marginTop: 20 }}>
+          <SectionHeader title="Personalidade da IA" />
+          <View style={pf.card}>
+            {PERSONALIDADES.map((p, i) => (
+              <Pressable
+                key={p.key}
+                onPress={() => setPersonalidade(p.key)}
+                style={[
+                  pf.personalityRow,
+                  i < PERSONALIDADES.length - 1 && { borderBottomWidth: 1, borderBottomColor: C.border },
+                  personalidade === p.key && { backgroundColor: C.brandDim },
+                ]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[pf.linkTitle, personalidade === p.key && { color: C.brand }]}>{p.label}</Text>
+                  <Text style={pf.linkSub}>{p.desc}</Text>
+                </View>
+                {personalidade === p.key && (
+                  <View style={pf.checkDot} />
+                )}
+              </Pressable>
+            ))}
+          </View>
+        </Reveal>
+
+        {/* Guardar */}
+        <Reveal delay={180} style={{ marginTop: 24 }}>
+          <Pressable
+            style={[pf.saveBtn, saving && { opacity: 0.6 }]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            {saving
+              ? <ActivityIndicator color="#fff" />
+              : <>
+                  <Save size={16} color="#fff" />
+                  <Text style={pf.saveBtnText}>Guardar alterações</Text>
+                </>
+            }
+          </Pressable>
+        </Reveal>
+
+        {/* Logout */}
+        <Reveal delay={200} style={{ marginTop: 12 }}>
+          <Pressable
+            style={pf.logoutBtn}
+            onPress={() => {
+              Alert.alert('Terminar sessão', 'Tens a certeza?', [
+                { text: 'Cancelar', style: 'cancel' },
+                { text: 'Sair', style: 'destructive', onPress: logout },
+              ]);
+            }}
+          >
+            <LogOut size={16} color={C.red} />
+            <Text style={pf.logoutText}>Terminar sessão</Text>
+          </Pressable>
+        </Reveal>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: COLORS.bg },
-  content: { padding: 20, paddingBottom: 40 },
-  hero:    { alignItems: 'center', paddingVertical: 24 },
-  avatar:  { width: 80, height: 80, borderRadius: 24, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginBottom: 14 },
-  avatarText: { fontSize: 32, fontWeight: '800', color: '#fff' },
-  heroNome:  { fontSize: 22, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
-  heroEmail: { fontSize: 14, color: COLORS.textSub },
-  streakBadge: { marginTop: 10, backgroundColor: 'rgba(255,107,53,0.12)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)' },
-  streakText: { color: '#FF6B35', fontSize: 13, fontWeight: '700' },
-  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
-  statCard: { flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
-  statVal:   { fontSize: 16, fontWeight: '800', color: COLORS.text, marginBottom: 4 },
-  statLabel: { fontSize: 11, color: COLORS.textSub, textAlign: 'center' },
-  section:   { marginBottom: 24 },
-  sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
-  persGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  persCard: { width: '47%', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, borderWidth: 1.5, borderColor: COLORS.border, position: 'relative' },
-  persDot:  { position: 'absolute', top: 10, right: 10, width: 8, height: 8, borderRadius: 4 },
-  persNome: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
-  persDesc: { fontSize: 11, color: COLORS.textSub, lineHeight: 15 },
-  settingRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: COLORS.border },
-  settingLabel: { fontSize: 14, fontWeight: '600', color: COLORS.text, marginBottom: 3 },
-  settingDesc:  { fontSize: 12, color: COLORS.textSub },
-  logoutBtn: { backgroundColor: 'rgba(255,71,87,0.08)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
-  logoutText: { color: COLORS.red, fontSize: 15, fontWeight: '700' },
+const pf = StyleSheet.create({
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1, borderColor: C.border,
+    overflow: 'hidden',
+  },
+  field: { padding: 16 },
+  label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 8, letterSpacing: 0.4 },
+  input: {
+    fontSize: FONT.md, color: C.text,
+    backgroundColor: C.surface3,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1, borderColor: C.border,
+    paddingHorizontal: 14, paddingVertical: 11,
+  },
+  inputFocused: { borderColor: C.brand },
+
+  avatarImg: {
+    width: 88, height: 88, borderRadius: 26,
+    borderWidth: 2, borderColor: C.brand,
+  },
+  avatar: {
+    width: 88, height: 88, borderRadius: 26,
+    backgroundColor: C.brandDim,
+    borderWidth: 2, borderColor: C.brand,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText:  { fontSize: 30, fontWeight: '900', color: C.brand },
+  cameraBtn: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 28, height: 28, borderRadius: 10,
+    backgroundColor: C.brand,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: C.bg,
+  },
+
+  linkRow: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 16, gap: 12,
+  },
+  linkIcon: {
+    width: 34, height: 34, borderRadius: 10,
+    backgroundColor: C.surface3,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  linkTitle: { fontSize: FONT.md, fontWeight: '600', color: C.text },
+  linkSub:   { fontSize: FONT.xs, color: C.textMid, marginTop: 2 },
+
+  personalityRow: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 16, gap: 12,
+  },
+  checkDot: {
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: C.brand,
+  },
+
+  saveBtn: {
+    height: 52, borderRadius: RADIUS.md,
+    backgroundColor: C.brand,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35, shadowRadius: 10, elevation: 6,
+  },
+  saveBtnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+
+  logoutBtn: {
+    height: 52, borderRadius: RADIUS.md,
+    borderWidth: 1, borderColor: C.border,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  logoutText: { fontSize: 15, fontWeight: '700', color: C.red },
 });

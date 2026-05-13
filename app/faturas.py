@@ -16,7 +16,7 @@ from flask import Blueprint, render_template, request, jsonify, current_app
 from flask_login import login_required, current_user
 from app import db
 from app.models import Fatura, CATEGORIAS
-from app.ai import get_user_paths, rebuild_index, extract_invoice_info, extract_invoice_info_from_text
+from app.ai import get_user_paths, rebuild_index, extract_invoice_info
 from security import validate_upload, sanitize_filename, sanitize_text_input, check_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -136,18 +136,15 @@ def upload():
         return jsonify({'success': False, 'message': 'Erro ao guardar o ficheiro.'})
 
     try:
-        ext = os.path.splitext(safe_name)[1].lower()
+        # Despacha por extensão: imagens → Vision, PDF → pdfplumber+LLM, txt → LLM/regex
+        # NÃO usa LlamaIndex — evita confundir faturas diferentes.
+        info = extract_invoice_info(file_path, final_name)
 
-        if ext == '.txt':
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f_txt:
-                texto = f_txt.read()
-            info = extract_invoice_info_from_text(texto, final_name)
-        else:
-            index = rebuild_index(data_dir, storage_dir)
-            info = extract_invoice_info(index, final_name)
-
-        # Atualizar índice para o chat
-        rebuild_index(data_dir, storage_dir)
+        # Actualiza índice do chat em background (falha silenciosa)
+        try:
+            rebuild_index(data_dir, storage_dir)
+        except Exception:
+            pass
 
         fatura = Fatura(
             user_id=current_user.id,
@@ -258,34 +255,19 @@ def delete_fatura(fatura_id):
 
     # Reconstruir índice após remoção
     try:
-        if os.path.exists(data_dir) and os.listdir(data_dir):
-            rebuild_index(data_dir, storage_dir)
-        elif os.path.exists(storage_dir):
-            import shutil
-            shutil.rmtree(storage_dir)
+        rebuild_index(data_dir, storage_dir)
     except Exception:
-        logger.warning('Não foi possível reconstruir índice após remoção de fatura')
+        pass
 
-    logger.info(f'Fatura eliminada — user_id={current_user.id} fatura_id={fatura_id}')
     return jsonify({'success': True})
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _unique_path(directory: str, filename: str) -> str:
-    """
-    Gera um path único — adiciona sufixo _2, _3, etc. se o ficheiro já existir.
-    Evita sobrescrever uploads anteriores com o mesmo nome.
-    """
-    path = os.path.join(directory, filename)
-    if not os.path.exists(path):
-        return path
-
-    name, ext = os.path.splitext(filename)
-    counter = 2
-    while True:
-        new_name = f'{name}_{counter}{ext}'
-        path = os.path.join(directory, new_name)
-        if not os.path.exists(path):
-            return path
+def _unique_path(directory, filename):
+    """Devolve um path único — adiciona sufixo numérico se o ficheiro já existir."""
+    base, ext = os.path.splitext(filename)
+    candidate = os.path.join(directory, filename)
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(directory, f"{base}_{counter}{ext}")
         counter += 1
+    return candidate

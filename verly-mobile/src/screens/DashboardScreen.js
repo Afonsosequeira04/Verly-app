@@ -1,700 +1,986 @@
-/**
- * src/screens/DashboardScreen.js
- * Dashboard principal — FAB upload, badge de notificações, pesquisa global,
- * saudação dinâmica, mood, métricas, quick actions com ícones Lucide.
- */
-
-import React, { useState, useCallback, useRef } from 'react';
+// src/screens/DashboardScreen.js — Dashboard com gráficos interativos
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  RefreshControl, ActivityIndicator, TextInput, FlatList,
-  Animated, Keyboard, Alert, Modal,
+  View, Text, ScrollView, Pressable, TouchableOpacity,
+  Animated, Easing, StatusBar, RefreshControl,
+  Modal, TextInput, Alert, StyleSheet, Dimensions,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import * as ImagePicker  from 'expo-image-picker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as ImagePicker    from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import {
-  Bell, Search, X, Upload, Camera, Image, FileText,
-  History, BarChart2, Star, Brain, TrendingUp, Shield,
-  ChevronRight, TrendingDown, Plus, Zap,
+  Bell, Plus, Search, X, TrendingUp, TrendingDown,
+  Receipt, Camera, Upload, FileText, Zap,
+  ChevronRight, AlertCircle, Target, BarChart2,
 } from 'lucide-react-native';
-import { useAuth }       from '../context/AuthContext';
-import { dashboardAPI, faturasAPI, historicoAPI } from '../services/api';
+import { dashboardAPI, faturasAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { Reveal, Card, Skeleton, SectionHeader, useScalePress } from '../components/UI';
 
-const C = {
-  brand:    '#6C5CE7',
-  brandDim: 'rgba(108,92,231,0.15)',
-  bg:       '#0C0C14',
-  surface:  '#13131F',
-  surface2: '#1C1C2E',
-  border:   '#252540',
-  text:     '#EEEEF8',
-  textSub:  '#7070A0',
-  green:    '#00C896',
-  red:      '#FF5370',
-  yellow:   '#FFB300',
-  orange:   '#FF7043',
-};
+const C   = COLORS;
+const W   = Dimensions.get('window').width;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const initials = (name = '') =>
+  name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
-const QUICK_ACTIONS = [
-  { key: 'Historico',    label: 'Histórico',    Icon: History,    color: '#6C5CE7' },
-  { key: 'Relatorio',   label: 'Relatório',    Icon: BarChart2,  color: '#00C896' },
-  { key: 'Score',       label: 'Score',        Icon: Star,       color: '#FFB300' },
-  { key: 'Impulse',     label: 'Impulse',      Icon: Brain,      color: '#FF5370' },
-  { key: 'Estatisticas',label: 'Estatísticas', Icon: TrendingUp, color: '#FF7043' },
-  { key: 'Subscricoes', label: 'Subscrições',  Icon: Shield,     color: '#A855F7' },
+const CHART_COLORS = [
+  '#7C6FE0', '#00D68F', '#FFB300', '#FF4D6D',
+  '#22D4FD', '#EC4899', '#FF7340', '#4ECDC4',
 ];
 
-// ── Saudação dinâmica ─────────────────────────────────────────────────────────
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Bom dia';
-  if (h < 19) return 'Boa tarde';
-  return 'Boa noite';
+// ─── Normaliza dados do backend para o formato esperado pelos gráficos ─────────
+// Backend retorna:
+//   categorias: [{ nome, total }]
+//   evolucao:   { labels: ['2025-01', ...], values: [123, ...] }
+//
+// Os gráficos esperam:
+//   porCategoria: [{ categoria, total }]
+//   porMes:       [{ mes: '2025-01', total, num_faturas? }]
+
+function normalizeDashboardData(data) {
+  if (!data) return { porCategoria: [], porMes: [] };
+
+  // Categorias: backend usa "nome", gráfico usa "categoria"
+  const porCategoria = Array.isArray(data.categorias)
+    ? data.categorias.map(c => ({
+        categoria: c.nome || c.categoria || 'Outros',
+        total:     c.total || 0,
+      }))
+    : [];
+
+  // Evolução mensal: backend devolve { labels, values }
+  // Precisamos de [{ mes, total }]
+  let porMes = [];
+  if (data.evolucao?.labels && data.evolucao?.values) {
+    porMes = data.evolucao.labels.map((label, i) => ({
+      mes:   label,
+      total: data.evolucao.values[i] || 0,
+    }));
+  }
+
+  return { porCategoria, porMes };
 }
 
-// ── Metric card com linha de acento ──────────────────────────────────────────
-function MetricCard({ label, value, sub, subColor, accent }) {
+// ─── Animated Budget Bar ──────────────────────────────────────────────────────
+function BudgetBar({ pct = 0, color = C.brand }) {
+  const width = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(width, {
+      toValue: Math.min(pct, 100),
+      duration: 900, delay: 300,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [pct]);
+  const widthInterp = width.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
   return (
-    <View style={[styles.metricCard, { borderTopColor: accent || C.brand, borderTopWidth: 2 }]}>
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={styles.metricValue}>{value}</Text>
-      {sub ? <Text style={[styles.metricSub, { color: subColor || C.textSub }]}>{sub}</Text> : null}
+    <View style={{ height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' }}>
+      <Animated.View style={{ height: '100%', width: widthInterp, backgroundColor: color, borderRadius: 2 }} />
     </View>
   );
 }
 
-// ── Upload FAB modal ──────────────────────────────────────────────────────────
-function UploadModal({ visible, onClose, onUploaded, navigation }) {
+// ─── Barras horizontais animadas com toque ────────────────────────────────────
+function InteractiveBarChart({ items = [], onSelect, selectedIdx }) {
+  const max = Math.max(...items.map(i => i.valor || i.total || 0), 1);
+  const BAR_W = W - 80 - (SPACE.lg || 20) * 2;
+
+  return (
+    <View style={{ gap: 10 }}>
+      {items.slice(0, 6).map((item, idx) => {
+        const val   = item.valor || item.total || 0;
+        const pct   = val / max;
+        const color = CHART_COLORS[idx % CHART_COLORS.length];
+        const isSelected = selectedIdx === idx;
+        const anim  = useRef(new Animated.Value(0)).current;
+
+        useEffect(() => {
+          Animated.timing(anim, {
+            toValue: pct,
+            duration: 600 + idx * 80,
+            delay: 100,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: false,
+          }).start();
+        }, [pct]);
+
+        const animW = anim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [4, Math.max(BAR_W * pct, 4)],
+        });
+
+        return (
+          <Pressable
+            key={idx}
+            onPress={() => onSelect?.(isSelected ? null : idx)}
+            style={[
+              {
+                borderRadius: 10,
+                padding: 8,
+                backgroundColor: isSelected ? color + '12' : 'transparent',
+              },
+            ]}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+              <Text style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]} numberOfLines={1}>
+                {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
+              </Text>
+              <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
+            </View>
+            <View style={{ height: isSelected ? 7 : 5, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+              <Animated.View style={{
+                height: '100%',
+                width: animW,
+                backgroundColor: color,
+                borderRadius: 4,
+              }} />
+            </View>
+            {isSelected && (
+              <Text style={[s.microText, { marginTop: 5, color: color }]}>
+                {Math.round(pct * 100)}% do total gasto
+              </Text>
+            )}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ─── Gráfico mensal interativo ────────────────────────────────────────────────
+function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
+  if (!data.length) return null;
+  const max = Math.max(...data.map(d => d.total || 0), 1);
+  const CHART_H = 72;
+  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  return (
+    <View>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: CHART_H + 30 }}>
+        {data.slice(-6).map((item, idx) => {
+          const pct   = (item.total || 0) / max;
+          const h     = Math.max(pct * CHART_H, 4);
+          const m     = parseInt((item.mes || '').split('-')[1], 10) - 1;
+          const label = meses[m] ?? item.mes?.slice(-2) ?? '';
+          const isSelected = selectedMonth === idx;
+          const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '60';
+          const anim  = useRef(new Animated.Value(0)).current;
+
+          useEffect(() => {
+            Animated.timing(anim, {
+              toValue: h,
+              duration: 500 + idx * 60,
+              delay: 150,
+              easing: Easing.out(Easing.cubic),
+              useNativeDriver: false,
+            }).start();
+          }, [h]);
+
+          return (
+            <Pressable
+              key={idx}
+              style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 30 }}
+              onPress={() => onMonthSelect?.(isSelected ? null : idx)}
+            >
+              {isSelected && (
+                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, color: CHART_COLORS[0], fontWeight: '800' }]}>
+                  {(item.total || 0) >= 1000
+                    ? `${((item.total) / 1000).toFixed(1)}k`
+                    : fmt(item.total || 0)}€
+                </Text>
+              )}
+              {!isSelected && (
+                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, opacity: 0 }]}>-</Text>
+              )}
+              <Animated.View style={{
+                width: '80%',
+                height: anim,
+                backgroundColor: color,
+                borderRadius: 4,
+                marginBottom: 5,
+              }} />
+              <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
+                {label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {selectedMonth != null && data[data.length - 6 + selectedMonth] && (() => {
+        const item = data[data.length - 6 + selectedMonth];
+        const m    = parseInt((item.mes || '').split('-')[1], 10) - 1;
+        return (
+          <View style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
+            <Text style={[s.microText, { color: C.text, fontWeight: '800' }]}>
+              {meses[m] || item.mes} — {fmt(item.total)} €
+            </Text>
+            {item.num_faturas != null && (
+              <Text style={[s.microText, { marginTop: 3 }]}>
+                {item.num_faturas} fatura(s) registada(s)
+              </Text>
+            )}
+          </View>
+        );
+      })()}
+    </View>
+  );
+}
+
+// ─── Secção de gráficos interativos (substitui QuickActions) ──────────────────
+function ChartsSection({ porCategoria, porMes, navigation }) {
+  const [tab, setTab]              = useState('categorias');
+  const [selectedBar, setSelectedBar]     = useState(null);
+  const [selectedMonth, setSelectedMonth] = useState(null);
+
+  const hasCats  = Array.isArray(porCategoria) && porCategoria.length > 0;
+  const hasMeses = Array.isArray(porMes)        && porMes.length > 0;
+
+  if (!hasCats && !hasMeses) {
+    return (
+      <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+        <SectionHeader title="Os teus gastos" />
+        <View style={[s.card, { padding: 24, alignItems: 'center', gap: 12 }]}>
+          <BarChart2 size={32} color={C.textMid} />
+          <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>
+            Ainda sem dados suficientes
+          </Text>
+          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>
+            Adiciona as tuas primeiras faturas para ver gráficos aqui
+          </Text>
+          <Pressable
+            onPress={() => navigation?.navigate?.('Faturas')}
+            style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}
+          >
+            <Text style={{ fontSize: 13, fontWeight: '700', color: C.brand }}>+ Adicionar fatura</Text>
+          </Pressable>
+        </View>
+      </Reveal>
+    );
+  }
+
+  const topCat = hasCats
+    ? porCategoria.reduce((a, b) => ((b.valor || b.total || 0) > (a.valor || a.total || 0) ? b : a), porCategoria[0])
+    : null;
+
+  let tendencia = null;
+  if (hasMeses && porMes.length >= 2) {
+    const last  = porMes[porMes.length - 1]?.total || 0;
+    const prev  = porMes[porMes.length - 2]?.total || 0;
+    const diff  = last - prev;
+    const pct   = prev > 0 ? Math.abs(diff / prev * 100) : 0;
+    tendencia = { diff, pct: Math.round(pct), subiu: diff > 0 };
+  }
+
+  return (
+    <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <SectionHeader title="Os teus gastos" />
+      <View style={s.card}>
+
+        {/* Tabs */}
+        <View style={{ flexDirection: 'row', padding: 12, gap: 8 }}>
+          {hasCats && (
+            <Pressable
+              onPress={() => { setTab('categorias'); setSelectedBar(null); }}
+              style={[s.tab, tab === 'categorias' && s.tabActive]}
+            >
+              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>
+                Por categoria
+              </Text>
+            </Pressable>
+          )}
+          {hasMeses && (
+            <Pressable
+              onPress={() => { setTab('mensal'); setSelectedMonth(null); }}
+              style={[s.tab, tab === 'mensal' && s.tabActive]}
+            >
+              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>
+                Evolução
+              </Text>
+            </Pressable>
+          )}
+        </View>
+
+        {/* Tab: Categorias */}
+        {tab === 'categorias' && hasCats && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+            {topCat && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: CHART_COLORS[0] }} />
+                <Text style={[s.microText, { flex: 1 }]}>
+                  A tua categoria principal é{' '}
+                  <Text style={{ color: C.text, fontWeight: '800' }}>
+                    {topCat.categoria || topCat.label}
+                  </Text>{' '}
+                  com{' '}
+                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>
+                    {fmt(topCat.valor || topCat.total)} €
+                  </Text>
+                </Text>
+              </View>
+            )}
+
+            <InteractiveBarChart
+              items={porCategoria}
+              onSelect={setSelectedBar}
+              selectedIdx={selectedBar}
+            />
+
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
+              Toca numa categoria para ver detalhes
+            </Text>
+          </View>
+        )}
+
+        {/* Tab: Mensal */}
+        {tab === 'mensal' && hasMeses && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+            {tendencia && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+                {tendencia.subiu
+                  ? <TrendingUp size={14} color={C.red} />
+                  : <TrendingDown size={14} color={C.green} />
+                }
+                <Text style={[s.microText, { flex: 1 }]}>
+                  Este mês gastaste{' '}
+                  <Text style={{ color: tendencia.subiu ? C.red : C.green, fontWeight: '800' }}>
+                    {tendencia.subiu ? '+' : '-'}{tendencia.pct}%
+                  </Text>{' '}
+                  {tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
+                </Text>
+              </View>
+            )}
+
+            <MonthlyChart
+              data={porMes}
+              onMonthSelect={setSelectedMonth}
+              selectedMonth={selectedMonth}
+            />
+
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
+              Toca num mês para ver o valor
+            </Text>
+          </View>
+        )}
+      </View>
+    </Reveal>
+  );
+}
+
+// ─── Hero Card ────────────────────────────────────────────────────────────────
+function HeroCard({ data, onSearchPress }) {
+  const spent    = data?.total_gasto || 0;
+  const budget   = data?.orcamento   || 0;
+  const pct      = budget > 0 ? (spent / budget) * 100 : 0;
+  const barColor = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
+
+  return (
+    <Reveal delay={60} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}>
+      <View style={[s.card, { padding: 20 }]}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <View>
+            <Text style={s.label}>Gasto este mês</Text>
+            <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
+            {budget > 0 && (
+              <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>
+            )}
+          </View>
+          <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
+            <Search size={17} color={C.textMid} />
+          </Pressable>
+        </View>
+
+        {budget > 0 && (
+          <View style={{ marginTop: 18 }}>
+            <BudgetBar pct={pct} color={barColor} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
+              <Text style={s.microText}>{Math.round(pct)}% utilizado</Text>
+              <Text style={[s.microText, { color: barColor }]}>
+                {pct > 100 ? `+${fmt(spent - budget)} € acima` : `${fmt(budget - spent)} € restante`}
+              </Text>
+            </View>
+          </View>
+        )}
+      </View>
+    </Reveal>
+  );
+}
+
+// ─── Metrics Row ──────────────────────────────────────────────────────────────
+function MetricsRow({ data }) {
+  const comparacao = data?.comparacao || {};
+  const variacao   = comparacao.variacao_pct;
+  const subiu      = comparacao.subiu;
+
+  const metrics = [
+    {
+      label: 'Faturas',
+      value: data?.num_faturas ?? '—',
+      icon:  <Receipt size={14} color={C.brand} />,
+      color: C.brand,
+    },
+    {
+      label: 'Alertas',
+      value: data?.alertas?.length ?? 0,
+      icon:  <AlertCircle size={14} color={data?.alertas?.length ? C.red : C.green} />,
+      color: data?.alertas?.length ? C.red : C.green,
+    },
+    {
+      label: 'Vs. mês ant.',
+      value: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—',
+      icon:  subiu
+        ? <TrendingUp size={14} color={C.red} />
+        : <TrendingDown size={14} color={C.green} />,
+      color: subiu ? C.red : C.green,
+    },
+  ];
+
+  return (
+    <Reveal delay={100} style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      {metrics.map((m, i) => (
+        <View key={i} style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}>
+          {m.icon}
+          <Text style={[s.metricVal, { color: m.color }]}>{m.value}</Text>
+          <Text style={s.label}>{m.label}</Text>
+        </View>
+      ))}
+    </Reveal>
+  );
+}
+
+// ─── Insights Verly (texto + mood) ───────────────────────────────────────────
+function InsightsSection({ mood, feed }) {
+  const hasMood     = !!mood?.frase;
+  const feedItems   = Array.isArray(feed)
+    ? feed.map(item => typeof item === 'object' ? (item.texto || '') : String(item)).filter(Boolean)
+    : [];
+
+  if (!hasMood && !feedItems.length) return null;
+
+  return (
+    <Reveal delay={175} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <SectionHeader title="Insights da Verly" />
+      <View style={s.card}>
+        {hasMood && (
+          <View style={{ padding: 16, borderBottomWidth: feedItems.length ? 1 : 0, borderBottomColor: C.border }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Zap size={13} color={C.brand} />
+              <Text style={[s.label, { color: C.brand }]}>Verly diz</Text>
+            </View>
+            <Text style={[s.bodyText, { fontStyle: 'italic', color: C.textMid, lineHeight: 20 }]}>
+              "{mood.frase}"
+            </Text>
+          </View>
+        )}
+
+        {feedItems.length > 0 && (
+          <View style={{ padding: 16, gap: 10 }}>
+            {feedItems.slice(0, 3).map((item, i) => (
+              <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 6 }} />
+                <Text style={[s.bodyText, { flex: 1, color: C.textMid, lineHeight: 20, fontWeight: '500' }]}>
+                  {item}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+    </Reveal>
+  );
+}
+
+// ─── Alertas accordion ────────────────────────────────────────────────────────
+function AlertsPanel({ visible, alertas = [] }) {
+  const maxH = useRef(new Animated.Value(0)).current;
+  const opac = useRef(new Animated.Value(0)).current;
+  const ITEM_H = 64;
+
+  useEffect(() => {
+    const target = visible ? alertas.length * ITEM_H + 16 : 0;
+    Animated.parallel([
+      Animated.timing(maxH, { toValue: target, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
+      Animated.timing(opac, { toValue: visible ? 1 : 0, duration: 220, useNativeDriver: false }),
+    ]).start();
+  }, [visible]);
+
+  if (!alertas.length) return null;
+
+  return (
+    <Animated.View style={{ overflow: 'hidden', maxHeight: maxH, opacity: opac, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <View style={s.card}>
+        {alertas.map((a, i) => (
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: i < alertas.length - 1 ? 1 : 0, borderBottomColor: C.border }}>
+            <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: a.urgencia === 'alta' ? C.red : C.yellow }} />
+            <View style={{ flex: 1 }}>
+              <Text style={s.bodyText} numberOfLines={1}>{a.loja}</Text>
+              <Text style={[s.microText, { marginTop: 2 }]}>{a.tipo} · {a.dias} dia(s)</Text>
+            </View>
+            <Text style={[s.microText, { color: a.urgencia === 'alta' ? C.red : C.yellow }]}>
+              {a.urgencia?.toUpperCase()}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Faturas recentes ─────────────────────────────────────────────────────────
+function RecentFaturas({ faturas = [], navigation }) {
+  if (!faturas.length) return null;
+  return (
+    <Reveal delay={220} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <SectionHeader title="Últimas faturas" action="Ver todas" onAction={() => navigation.navigate('Faturas')} />
+      <View style={s.card}>
+        {faturas.map((f, i) => (
+          <Pressable
+            key={f.id}
+            onPress={() => navigation.navigate('FaturaDetalhe', { faturaId: f.id })}
+            style={({ pressed }) => [{
+              flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
+              borderBottomWidth: i < faturas.length - 1 ? 1 : 0, borderBottomColor: C.border,
+              opacity: pressed ? 0.75 : 1,
+            }]}
+          >
+            <View style={[s.iconBox, { backgroundColor: C.brandDim }]}>
+              <Receipt size={15} color={C.brand} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.bodyText} numberOfLines={1}>{f.loja}</Text>
+              <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+            </View>
+            <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+            <ChevronRight size={13} color={C.textMid} />
+          </Pressable>
+        ))}
+      </View>
+    </Reveal>
+  );
+}
+
+// ─── Upload Sheet ─────────────────────────────────────────────────────────────
+// CORRIGIDO: usa faturasAPI.upload em vez de fetch direto, e chama onUploaded após sucesso
+function UploadSheet({ visible, onClose, onUploaded }) {
+  const slideY  = useRef(new Animated.Value(400)).current;
+  const overlay = useRef(new Animated.Value(0)).current;
   const [uploading, setUploading] = useState(false);
 
-  const _upload = async (uri, name, type) => {
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.spring(slideY,  { toValue: 0, damping: 26, stiffness: 180, useNativeDriver: true }),
+        Animated.timing(overlay, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(slideY,  { toValue: 400, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        Animated.timing(overlay, { toValue: 0,   duration: 200, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const upload = async (uri, name, type) => {
     setUploading(true);
     try {
       await faturasAPI.upload(uri, name, type);
       onClose();
-      Alert.alert('Fatura enviada!', 'Será processada em segundos.', [
-        { text: 'Ver faturas', onPress: () => navigation.navigate('Faturas') },
-        { text: 'OK' },
-      ]);
-      onUploaded();
-    } catch (e) {
-      Alert.alert('Erro no upload', e.message);
+      // Pequeno delay para dar tempo ao backend de processar antes do reload
+      setTimeout(() => { onUploaded(); }, 500);
+    } catch (err) {
+      Alert.alert('Erro no upload', err.message || 'Não foi possível fazer upload');
     } finally {
       setUploading(false);
     }
   };
 
-  const fromCamera = async () => {
+  const pickCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permissão negada'); return; }
+    if (status !== 'granted') return Alert.alert('Permissão', 'Câmara necessária');
     const r = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-    if (!r.canceled) {
+    if (!r.canceled && r.assets?.[0]) {
       const a = r.assets[0];
-      await _upload(a.uri, a.fileName || 'fatura.jpg', 'image/jpeg');
+      await upload(a.uri, a.fileName || 'foto.jpg', 'image/jpeg');
     }
   };
 
-  const fromGallery = async () => {
+  const pickGallery = async () => {
     const r = await ImagePicker.launchImageLibraryAsync({ quality: 0.85 });
-    if (!r.canceled) {
+    if (!r.canceled && r.assets?.[0]) {
       const a = r.assets[0];
-      await _upload(a.uri, a.fileName || 'fatura.jpg', 'image/jpeg');
+      await upload(a.uri, a.fileName || 'galeria.jpg', 'image/jpeg');
     }
   };
 
-  const fromPDF = async () => {
-    const r = await DocumentPicker.getDocumentAsync({ type: 'application/pdf' });
-    if (!r.canceled) {
+  const pickFile = async () => {
+    const r = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'text/plain', 'image/*'] });
+    if (!r.canceled && r.assets?.[0]) {
       const f = r.assets[0];
-      await _upload(f.uri, f.name, 'application/pdf');
+      await upload(f.uri, f.name, f.mimeType || 'application/octet-stream');
     }
   };
+
+  const OPTIONS = [
+    { label: 'Câmara',   sub: 'Tirar foto',  Icon: Camera,   color: C.brand,  fn: pickCamera  },
+    { label: 'Galeria',  sub: 'Da galeria',   Icon: Upload,   color: C.green,  fn: pickGallery },
+    { label: 'Ficheiro', sub: 'PDF ou texto', Icon: FileText, color: C.yellow, fn: pickFile    },
+  ];
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text style={styles.modalTitle}>Carregar Fatura</Text>
-          <Text style={styles.modalSub}>Escolhe a origem do ficheiro</Text>
-
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', opacity: overlay, justifyContent: 'flex-end' }}>
+        <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
+        <Animated.View style={[s.sheet, { transform: [{ translateY: slideY }] }]}>
+          <View style={s.sheetHandle} />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+            <Text style={s.sheetTitle}>Adicionar fatura</Text>
+            <Pressable onPress={onClose} hitSlop={10}><X size={18} color={C.textMid} /></Pressable>
+          </View>
           {uploading ? (
-            <View style={styles.modalLoading}>
-              <ActivityIndicator color={C.brand} size="large" />
-              <Text style={styles.modalLoadingText}>A enviar fatura...</Text>
+            <View style={{ alignItems: 'center', paddingVertical: 36, gap: 12 }}>
+              <Zap size={26} color={C.brand} />
+              <Text style={[s.label, { textAlign: 'center' }]}>A processar com IA…</Text>
             </View>
           ) : (
-            <View style={styles.modalOptions}>
-              <TouchableOpacity style={styles.modalOption} onPress={fromCamera}>
-                <View style={[styles.modalOptionIcon, { backgroundColor: 'rgba(108,92,231,0.15)' }]}>
-                  <Camera size={24} color={C.brand} />
-                </View>
-                <Text style={styles.modalOptionLabel}>Câmara</Text>
-                <Text style={styles.modalOptionSub}>Fotografar fatura</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.modalOption} onPress={fromGallery}>
-                <View style={[styles.modalOptionIcon, { backgroundColor: 'rgba(0,200,150,0.15)' }]}>
-                  <Image size={24} color={C.green} />
-                </View>
-                <Text style={styles.modalOptionLabel}>Galeria</Text>
-                <Text style={styles.modalOptionSub}>Escolher imagem</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.modalOption} onPress={fromPDF}>
-                <View style={[styles.modalOptionIcon, { backgroundColor: 'rgba(255,112,67,0.15)' }]}>
-                  <FileText size={24} color={C.orange} />
-                </View>
-                <Text style={styles.modalOptionLabel}>PDF</Text>
-                <Text style={styles.modalOptionSub}>Seleccionar PDF</Text>
-              </TouchableOpacity>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              {OPTIONS.map(({ label, sub, Icon, color, fn }) => (
+                <Pressable
+                  key={label}
+                  onPress={fn}
+                  style={({ pressed }) => [s.uploadOption, { opacity: pressed ? 0.75 : 1 }]}
+                >
+                  <View style={{ width: 48, height: 48, borderRadius: RADIUS.md, backgroundColor: color + '20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                    <Icon size={22} color={color} />
+                  </View>
+                  <Text style={[s.bodyText, { fontSize: 13 }]}>{label}</Text>
+                  <Text style={[s.microText, { fontSize: 11, marginTop: 2 }]}>{sub}</Text>
+                </Pressable>
+              ))}
             </View>
           )}
-
-          <TouchableOpacity style={styles.modalCancel} onPress={onClose}>
-            <Text style={styles.modalCancelText}>Cancelar</Text>
-          </TouchableOpacity>
-        </View>
-      </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
     </Modal>
   );
 }
 
-// ── Pesquisa global ───────────────────────────────────────────────────────────
-function GlobalSearch({ visible, onClose, navigation }) {
-  const [query,   setQuery]   = useState('');
+// ─── Search Overlay ───────────────────────────────────────────────────────────
+function SearchOverlay({ visible, onClose, navigation }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const [q, setQ]             = useState('');
   const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const timer = useRef(null);
 
-  const search = async (text) => {
-    setQuery(text);
-    if (text.length < 2) { setResults([]); return; }
-    setLoading(true);
-    try {
-      const data = await historicoAPI.listar({ q: text, limite: 8 });
-      setResults(data.faturas || []);
-    } catch (_) {}
-    finally { setLoading(false); }
-  };
+  useEffect(() => {
+    Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+    if (!visible) { setQ(''); setResults([]); }
+  }, [visible]);
 
-  const handleClose = () => {
-    setQuery('');
-    setResults([]);
-    Keyboard.dismiss();
-    onClose();
+  const search = (text) => {
+    setQ(text);
+    clearTimeout(timer.current);
+    if (!text.trim()) return setResults([]);
+    timer.current = setTimeout(async () => {
+      try {
+        const d = await faturasAPI.listar({ q: text });
+        setResults(d.faturas || []);
+      } catch (_) {}
+    }, 320);
   };
 
   if (!visible) return null;
 
   return (
-    <View style={styles.searchOverlay}>
-      <View style={styles.searchBar}>
-        <Search size={18} color={C.textSub} />
-        <TextInput
-          style={styles.searchInput}
-          value={query}
-          onChangeText={search}
-          placeholder="Pesquisar faturas, lojas..."
-          placeholderTextColor={C.textSub}
-          autoFocus
-          returnKeyType="search"
-        />
-        <TouchableOpacity onPress={handleClose}>
-          <X size={18} color={C.textSub} />
-        </TouchableOpacity>
+    <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: C.bg, zIndex: 9999, opacity }]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+        <View style={{ flex: 1, padding: SPACE.lg, paddingTop: 56 }}>
+          <View style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16 }]}>
+            <Search size={16} color={C.textMid} />
+            <TextInput
+              autoFocus value={q} onChangeText={search}
+              placeholder="Pesquisar faturas…" placeholderTextColor={C.textMid}
+              style={{ flex: 1, fontSize: FONT.md, color: C.text, paddingVertical: 10 }}
+            />
+            <Pressable onPress={onClose} hitSlop={8}><X size={16} color={C.textMid} /></Pressable>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+            {results.map(f => (
+              <Pressable
+                key={f.id}
+                onPress={() => { onClose(); navigation.navigate('FaturaDetalhe', { faturaId: f.id }); }}
+                style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, opacity: pressed ? 0.7 : 1 }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={s.bodyText}>{f.loja}</Text>
+                  <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+                </View>
+                <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+              </Pressable>
+            ))}
+            {!results.length && q.length > 1 && (
+              <Text style={[s.label, { textAlign: 'center', marginTop: 40 }]}>Sem resultados para "{q}"</Text>
+            )}
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Animated.View>
+  );
+}
+
+// ─── FAB ──────────────────────────────────────────────────────────────────────
+function FAB({ onPress }) {
+  const scale = useRef(new Animated.Value(0)).current;
+  const { onPressIn, onPressOut, scale: pressScale } = useScalePress(0.92);
+
+  useEffect(() => {
+    setTimeout(() => {
+      Animated.spring(scale, { toValue: 1, speed: 12, bounciness: 14, useNativeDriver: true }).start();
+    }, 400);
+  }, []);
+
+  return (
+    <Animated.View style={[s.fab, { transform: [{ scale: Animated.multiply(scale, pressScale) }] }]}>
+      <Pressable
+        onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress}
+        style={{ width: '100%', height: '100%', borderRadius: RADIUS.lg, justifyContent: 'center', alignItems: 'center' }}
+      >
+        <Plus size={22} color="#fff" strokeWidth={2.5} />
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// ─── Header ───────────────────────────────────────────────────────────────────
+function Header({ user, alertas, showAlerts, onBellPress, insets }) {
+  const dotScale = useRef(new Animated.Value(0)).current;
+  const hasAlerts = alertas?.length > 0;
+
+  useEffect(() => {
+    if (hasAlerts) {
+      setTimeout(() => {
+        Animated.spring(dotScale, { toValue: 1, speed: 14, bounciness: 14, useNativeDriver: true }).start();
+      }, 500);
+    }
+  }, [hasAlerts]);
+
+  return (
+    <Reveal delay={0} style={{
+      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+      paddingHorizontal: SPACE.lg,
+      paddingTop: SPACE.sm,
+      paddingBottom: 6,
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={s.avatar}>
+          <Text style={s.avatarText}>{initials(user?.nome)}</Text>
+        </View>
+        <View>
+          <Text style={s.microText}>Olá,</Text>
+          <Text style={[s.bodyText, { fontWeight: '800', fontSize: FONT.lg }]}>
+            {(user?.nome || '').split(' ')[0] || 'Utilizador'}
+          </Text>
+        </View>
       </View>
 
-      {loading && (
-        <ActivityIndicator color={C.brand} style={{ marginTop: 20 }} />
-      )}
+      <Pressable
+        onPress={onBellPress}
+        style={[s.iconBtn, showAlerts && { backgroundColor: C.brandDim, borderColor: C.brand }]}
+      >
+        <Bell size={17} color={hasAlerts ? C.red : C.textMid} />
+        {hasAlerts && (
+          <Animated.View style={[s.dot, { transform: [{ scale: dotScale }] }]} />
+        )}
+      </Pressable>
+    </Reveal>
+  );
+}
 
-      {results.length > 0 && (
-        <FlatList
-          data={results}
-          keyExtractor={item => String(item.id)}
-          style={styles.searchResults}
-          keyboardShouldPersistTaps="handled"
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.searchResultItem}
-              onPress={() => {
-                handleClose();
-                navigation.navigate('FaturaDetalhe', { id: item.id });
-              }}
-            >
-              <View style={styles.searchResultLeft}>
-                <Text style={styles.searchResultLoja} numberOfLines={1}>{item.loja}</Text>
-                <Text style={styles.searchResultMeta}>{item.categoria} · {item.data_compra || '—'}</Text>
-              </View>
-              <Text style={styles.searchResultTotal}>{(item.total || 0).toFixed(2)}€</Text>
-            </TouchableOpacity>
-          )}
-          ListEmptyComponent={
-            query.length >= 2 && !loading
-              ? <Text style={styles.searchEmpty}>Sem resultados para "{query}"</Text>
-              : null
-          }
-        />
-      )}
-
-      {results.length === 0 && query.length >= 2 && !loading && (
-        <Text style={styles.searchEmpty}>Sem resultados para "{query}"</Text>
-      )}
+// ─── Loading ──────────────────────────────────────────────────────────────────
+function LoadingSkeleton() {
+  return (
+    <View style={{ gap: 14, paddingHorizontal: SPACE.lg, marginTop: 12 }}>
+      <Skeleton height={130} radius={RADIUS.lg} />
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        {[1, 2, 3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
+      </View>
+      <Skeleton height={200} radius={RADIUS.lg} />
+      <Skeleton height={140} radius={RADIUS.lg} />
     </View>
   );
 }
 
-// ── Ecrã principal ────────────────────────────────────────────────────────────
+// ─── Ecrã principal ───────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
-  const { user } = useAuth();
-  const [data,         setData]         = useState(null);
-  const [loading,      setLoading]      = useState(true);
-  const [refreshing,   setRefreshing]   = useState(false);
-  const [error,        setError]        = useState(null);
-  const [uploadModal,  setUploadModal]  = useState(false);
-  const [searchVisible,setSearchVisible]= useState(false);
+  const { user }  = useAuth();
+  const insets    = useSafeAreaInsets();
+  const [data,       setData]   = useState(null);
+  const [loading,    setLoading] = useState(true);
+  const [refreshing, setRefresh] = useState(false);
+  const [showUpload, setUpload]  = useState(false);
+  const [showSearch, setSearch]  = useState(false);
+  const [showAlerts, setAlerts]  = useState(false);
 
-  const fabAnim = useRef(new Animated.Value(1)).current;
-
-  const fetchData = async (isRefresh = false) => {
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefresh(true); else setLoading(true);
     try {
-      if (isRefresh) setRefreshing(true);
-      const result = await dashboardAPI.get();
-      setData(result);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+      const d = await dashboardAPI.get();
+      setData(d);
+    } catch (e) { console.warn('Dashboard:', e.message); }
+    finally { setLoading(false); setRefresh(false); }
+  }, []);
 
-  useFocusEffect(useCallback(() => { fetchData(); }, []));
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const openUpload = () => {
-    Animated.sequence([
-      Animated.timing(fabAnim, { toValue: 0.88, duration: 80, useNativeDriver: true }),
-      Animated.timing(fabAnim, { toValue: 1,    duration: 80, useNativeDriver: true }),
-    ]).start();
-    setUploadModal(true);
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  if (error) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.errorText}>Erro: {error}</Text>
-        <TouchableOpacity style={styles.retryBtn} onPress={() => fetchData()}>
-          <Text style={styles.retryText}>Tentar novamente</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  const mood = data?.mood;
-  const pct = (data?.orcamento > 0)
-    ? Math.min((data.total_gasto / data.orcamento) * 100, 100)
-    : 0;
+  // Normaliza os dados do backend para o formato esperado pelos gráficos
+  const { porCategoria, porMes } = normalizeDashboardData(data);
 
   return (
-    <View style={styles.root}>
-      {/* Pesquisa global — sobrepõe tudo quando activa */}
-      <GlobalSearch
-        visible={searchVisible}
-        onClose={() => setSearchVisible(false)}
-        navigation={navigation}
-      />
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {showSearch && (
+        <SearchOverlay visible={showSearch} onClose={() => setSearch(false)} navigation={navigation} />
+      )}
+
+      <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} />
 
       <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.content}
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 130 }}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => fetchData(true)}
+            onRefresh={() => load(true)}
             tintColor={C.brand}
+            colors={[C.brand]}
           />
         }
-        keyboardShouldPersistTaps="handled"
       >
-        {/* ── Saudação + ações topo ─────────────────────────────────────── */}
-        <View style={styles.topRow}>
-          <View>
-            <Text style={styles.greeting}>{greeting()},</Text>
-            <Text style={styles.userName}>{user?.nome?.split(' ')[0] || 'Utilizador'}</Text>
-          </View>
-          <View style={styles.topActions}>
-            {/* Pesquisa */}
-            <TouchableOpacity
-              style={styles.topIconBtn}
-              onPress={() => setSearchVisible(true)}
-            >
-              <Search size={20} color={C.text} strokeWidth={1.8} />
-            </TouchableOpacity>
-            {/* Notificações */}
-            <TouchableOpacity
-              style={styles.topIconBtn}
-              onPress={() => navigation.navigate('Notificacoes')}
-            >
-              <Bell size={20} color={C.text} strokeWidth={1.8} />
-              {data?.notificacoes?.length > 0 && <View style={styles.bellDot} />}
-            </TouchableOpacity>
-          </View>
-        </View>
+        <Header
+          user={user}
+          alertas={data?.alertas}
+          showAlerts={showAlerts}
+          onBellPress={() => setAlerts(v => !v)}
+          insets={insets}
+        />
+        <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
 
-        {/* ── Mood card ──────────────────────────────────────────────────── */}
-        {mood && (
-          <View style={styles.moodCard}>
-            <View style={styles.moodLeft}>
-              <Text style={[styles.moodNivel, { color: mood.cor }]}>
-                {mood.nivel?.toUpperCase()}
-              </Text>
-              <Text style={styles.moodFrase}>"{mood.frase}"</Text>
-              {data.orcamento > 0 && (
-                <View style={styles.progressWrap}>
-                  <View style={styles.progressBg}>
-                    <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: mood.cor }]} />
-                  </View>
-                  <Text style={styles.progressLabel}>{Math.round(pct)}% do orçamento</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.streakBox}>
-              <Zap size={18} color={C.yellow} />
-              <Text style={styles.streakNum}>{data?.streak || 0}</Text>
-              <Text style={styles.streakLabel}>dias</Text>
-            </View>
-          </View>
-        )}
+        {loading ? <LoadingSkeleton /> : (
+          <>
+            <HeroCard data={data} onSearchPress={() => setSearch(true)} />
+            <MetricsRow data={data} />
 
-        {/* ── Alertas urgentes ───────────────────────────────────────────── */}
-        {data?.alertas?.slice(0, 2).map((a, i) => (
-          <View key={i} style={[styles.alertBanner, { borderLeftColor: a.urgencia === 'critico' ? C.red : C.yellow }]}>
-            <TrendingDown size={16} color={a.urgencia === 'critico' ? C.red : C.yellow} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.alertTitle}>
-                {a.tipo === 'devolucao' ? 'Devolução expira' : 'Garantia expira'} em {a.dias} dia(s)
-              </Text>
-              <Text style={styles.alertSub}>{a.loja} · até {a.data}</Text>
-            </View>
-          </View>
-        ))}
+            {/* Gráficos interativos com dados normalizados do backend */}
+            <ChartsSection
+              porCategoria={porCategoria}
+              porMes={porMes}
+              navigation={navigation}
+            />
 
-        {/* ── Métricas ───────────────────────────────────────────────────── */}
-        <View style={styles.metricsRow}>
-          <MetricCard
-            label="Total Gasto"
-            value={`${(data?.total_gasto || 0).toFixed(2)}€`}
-            sub={
-              data?.comparacao?.variacao_pct != null
-                ? `${data.comparacao.variacao_pct > 0 ? '+' : ''}${data.comparacao.variacao_pct}% vs mês anterior`
-                : 'primeiro mês'
-            }
-            subColor={data?.comparacao?.subiu ? C.red : C.green}
-            accent={C.brand}
-          />
-          <MetricCard
-            label="Faturas"
-            value={data?.num_faturas || 0}
-            sub="registadas"
-            accent={C.green}
-          />
-          <MetricCard
-            label="Desperdício"
-            value={`${(data?.desperdicado_mes || 0).toFixed(0)}€`}
-            sub="este mês"
-            subColor={(data?.desperdicado_mes || 0) > 100 ? C.red : C.textSub}
-            accent={(data?.desperdicado_mes || 0) > 100 ? C.red : C.yellow}
-          />
-        </View>
+            <InsightsSection mood={data?.mood} feed={data?.feed} />
 
-        {/* ── Quick actions ──────────────────────────────────────────────── */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Ferramentas</Text>
-          <View style={styles.quickGrid}>
-            {QUICK_ACTIONS.map(({ key, label, Icon, color }) => (
-              <TouchableOpacity
-                key={key}
-                style={styles.quickBtn}
-                onPress={() => navigation.navigate(key)}
-                activeOpacity={0.75}
-              >
-                <View style={[styles.quickIconBox, { backgroundColor: color + '1A', borderColor: color + '33' }]}>
-                  <Icon size={22} color={color} strokeWidth={1.8} />
-                </View>
-                <Text style={styles.quickLabel}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* ── Subscrições leak ───────────────────────────────────────────── */}
-        {data?.subscricoes?.total_mensal > 0 && (
-          <TouchableOpacity
-            style={styles.subsCard}
-            onPress={() => navigation.navigate('Subscricoes')}
-            activeOpacity={0.8}
-          >
-            <Shield size={18} color={C.red} strokeWidth={1.8} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.subsLabel}>Leak de subscrições</Text>
-              <Text style={styles.subsSub}>≈ {Math.round(data.subscricoes.total_mensal * 12)}€/ano</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.subsValue}>{data.subscricoes.total_mensal.toFixed(2)}€/mês</Text>
-            </View>
-            <ChevronRight size={16} color={C.textSub} />
-          </TouchableOpacity>
-        )}
-
-        {/* ── Últimas faturas ────────────────────────────────────────────── */}
-        <View style={[styles.card, { marginBottom: 100 }]}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>Últimas faturas</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Historico')}>
-              <Text style={styles.cardLink}>Ver tudo</Text>
-            </TouchableOpacity>
-          </View>
-          {data?.ultimas_faturas?.length > 0
-            ? data.ultimas_faturas.map(f => (
-                <TouchableOpacity
-                  key={f.id}
-                  style={styles.faturaRow}
-                  onPress={() => navigation.navigate('FaturaDetalhe', { id: f.id })}
-                  activeOpacity={0.7}
+            {data?.subscricoes?.count_danger > 0 && (
+              <Reveal delay={200} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+                <Card
+                  onPress={() => navigation.navigate('Subscricoes')}
+                  style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
                 >
-                  <View style={styles.faturaDot} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.faturaLoja} numberOfLines={1}>{f.loja}</Text>
-                    <Text style={styles.faturaData}>{f.data_compra || f.data_upload?.slice(0, 10) || '—'}</Text>
+                  <View style={[s.iconBox, { backgroundColor: C.red + '18' }]}>
+                    <TrendingUp size={16} color={C.red} />
                   </View>
-                  <Text style={styles.faturaTotal}>{(f.total || 0).toFixed(2)}€</Text>
-                  <ChevronRight size={14} color={C.textSub} />
-                </TouchableOpacity>
-              ))
-            : (
-              <View style={styles.emptyFaturas}>
-                <FileText size={32} color={C.textSub} strokeWidth={1.2} />
-                <Text style={styles.emptyText}>Ainda sem faturas</Text>
-                <TouchableOpacity style={styles.emptyUploadBtn} onPress={openUpload}>
-                  <Text style={styles.emptyUploadText}>Carregar primeira fatura</Text>
-                </TouchableOpacity>
-              </View>
-            )
-          }
-        </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.bodyText}>{data.subscricoes.count_danger} subscrição(ões) a desperdiçar</Text>
+                    <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mês</Text>
+                  </View>
+                  <ChevronRight size={14} color={C.red} />
+                </Card>
+              </Reveal>
+            )}
 
-        {/* ── Feed Verly ─────────────────────────────────────────────────── */}
-        {data?.feed?.length > 0 && (
-          <View style={[styles.card, { marginBottom: 32 }]}>
-            <Text style={styles.cardTitle}>Verly diz</Text>
-            {data.feed.map((item, i) => (
-              <View key={i} style={styles.feedItem}>
-                <View style={styles.feedDot} />
-                <Text style={styles.feedText}>{item.texto}</Text>
-              </View>
-            ))}
-          </View>
+            <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
+          </>
         )}
       </ScrollView>
 
-      {/* ── FAB upload ─────────────────────────────────────────────────────── */}
-      <Animated.View style={[styles.fab, { transform: [{ scale: fabAnim }] }]}>
-        <TouchableOpacity style={styles.fabBtn} onPress={openUpload} activeOpacity={0.85}>
-          <Plus size={26} color="#fff" strokeWidth={2.5} />
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* ── Upload modal ────────────────────────────────────────────────────── */}
-      <UploadModal
-        visible={uploadModal}
-        onClose={() => setUploadModal(false)}
-        onUploaded={() => fetchData()}
-        navigation={navigation}
-      />
+      <FAB onPress={() => setUpload(true)} />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: C.bg },
-  scroll: { flex: 1 },
-  content:{ padding: 20 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  // Topo
-  topRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
-  greeting:    { fontSize: 14, color: C.textSub, fontWeight: '500' },
-  userName:    { fontSize: 28, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
-  topActions:  { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  topIconBtn:  {
-    width: 40, height: 40, borderRadius: 12,
+// ─── Estilos ──────────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1, borderColor: C.border,
+  },
+  label:    { fontSize: FONT.xs, fontWeight: '600', color: C.textMid, letterSpacing: 0.3 },
+  bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },
+  microText:{ fontSize: FONT.xs, color: C.textMid },
+  bigNum:   { fontSize: FONT.h1, fontWeight: '900', color: C.text, letterSpacing: -0.8 },
+  subText:  { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+  metricVal:{ fontSize: FONT.xl, fontWeight: '900', letterSpacing: -0.5 },
+  iconBtn: {
+    width: 40, height: 40, borderRadius: RADIUS.sm,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
     justifyContent: 'center', alignItems: 'center',
   },
-  bellDot: {
-    position: 'absolute', top: 8, right: 8,
-    width: 8, height: 8, borderRadius: 4, backgroundColor: C.red,
-  },
-
-  // Mood
-  moodCard: {
-    backgroundColor: C.surface, borderRadius: 18, padding: 18, marginBottom: 14,
-    borderWidth: 1, borderColor: C.border,
-    flexDirection: 'row', alignItems: 'center', gap: 16,
-  },
-  moodLeft:   { flex: 1 },
-  moodNivel:  { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginBottom: 4 },
-  moodFrase:  { fontSize: 13, color: C.textSub, fontStyle: 'italic', lineHeight: 19 },
-  progressWrap: { marginTop: 12 },
-  progressBg:   { height: 5, backgroundColor: C.surface2, borderRadius: 3, overflow: 'hidden' },
-  progressFill: { height: 5, borderRadius: 3 },
-  progressLabel:{ fontSize: 11, color: C.textSub, marginTop: 5 },
-  streakBox: {
-    alignItems: 'center', backgroundColor: C.surface2,
-    borderRadius: 14, padding: 12, borderWidth: 1, borderColor: C.border,
-  },
-  streakNum:   { fontSize: 22, fontWeight: '900', color: C.text, lineHeight: 28 },
-  streakLabel: { fontSize: 10, color: C.textSub, fontWeight: '600' },
-
-  // Alertas
-  alertBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: C.surface, borderRadius: 12, borderLeftWidth: 3,
-    padding: 14, marginBottom: 10,
-    borderWidth: 1, borderColor: C.border,
-  },
-  alertTitle: { fontSize: 13, fontWeight: '700', color: C.text },
-  alertSub:   { fontSize: 12, color: C.textSub, marginTop: 2 },
-
-  // Métricas
-  metricsRow: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  metricCard: {
-    flex: 1, backgroundColor: C.surface, borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: C.border,
-  },
-  metricLabel: { fontSize: 10, color: C.textSub, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
-  metricValue: { fontSize: 18, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
-  metricSub:   { fontSize: 11, marginTop: 4 },
-
-  // Card genérico
-  card: {
-    backgroundColor: C.surface, borderRadius: 18, padding: 18, marginBottom: 14,
-    borderWidth: 1, borderColor: C.border,
-  },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cardTitle:  { fontSize: 15, fontWeight: '800', color: C.text },
-  cardLink:   { fontSize: 13, color: C.brand, fontWeight: '600' },
-
-  // Quick actions
-  quickGrid:    { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
-  quickBtn:     { width: '30%', alignItems: 'center', gap: 7 },
-  quickIconBox: {
-    width: 52, height: 52, borderRadius: 16,
-    justifyContent: 'center', alignItems: 'center', borderWidth: 1,
-  },
-  quickLabel: { fontSize: 11, fontWeight: '700', color: C.textSub, textAlign: 'center' },
-
-  // Subscrições
-  subsCard: {
-    backgroundColor: 'rgba(255,83,112,0.06)', borderRadius: 16, padding: 16, marginBottom: 14,
-    borderWidth: 1, borderColor: 'rgba(255,83,112,0.2)',
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-  },
-  subsLabel: { fontSize: 13, color: C.text, fontWeight: '700' },
-  subsSub:   { fontSize: 12, color: C.textSub, marginTop: 2 },
-  subsValue: { fontSize: 16, fontWeight: '900', color: C.red },
-
-  // Faturas mini
-  faturaRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 12, borderTopWidth: 1, borderTopColor: C.border,
-  },
-  faturaDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: C.brand },
-  faturaLoja:  { fontSize: 14, fontWeight: '600', color: C.text },
-  faturaData:  { fontSize: 12, color: C.textSub, marginTop: 2 },
-  faturaTotal: { fontSize: 14, fontWeight: '800', color: C.text },
-  emptyFaturas:   { alignItems: 'center', padding: 24, gap: 12 },
-  emptyText:      { fontSize: 14, color: C.textSub },
-  emptyUploadBtn: { backgroundColor: C.brandDim, borderRadius: 12, paddingHorizontal: 18, paddingVertical: 10, borderWidth: 1, borderColor: C.brand },
-  emptyUploadText:{ color: C.brand, fontWeight: '700', fontSize: 13 },
-
-  // Feed
-  feedItem: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.border },
-  feedDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: C.brand, marginTop: 7 },
-  feedText: { flex: 1, fontSize: 13, color: C.textSub, lineHeight: 20 },
-
-  // FAB
-  fab: {
-    position: 'absolute', bottom: 90, right: 20,
-    shadowColor: C.brand, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12,
-    elevation: 10,
-  },
-  fabBtn: {
-    width: 58, height: 58, borderRadius: 18,
-    backgroundColor: C.brand,
+  iconBox: {
+    width: 38, height: 38, borderRadius: RADIUS.sm,
     justifyContent: 'center', alignItems: 'center',
   },
-
-  // Upload modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalSheet: {
-    backgroundColor: C.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    padding: 24, paddingBottom: 40,
+  avatar: {
+    width: 40, height: 40, borderRadius: 13,
+    backgroundColor: C.brandDim, borderWidth: 1.5, borderColor: C.brand,
+    justifyContent: 'center', alignItems: 'center',
   },
-  modalHandle: {
-    width: 40, height: 4, borderRadius: 2, backgroundColor: C.border,
-    alignSelf: 'center', marginBottom: 20,
+  avatarText: { fontSize: 14, fontWeight: '900', color: C.brand },
+  dot: {
+    position: 'absolute', top: 8, right: 8,
+    width: 7, height: 7, borderRadius: 4,
+    backgroundColor: C.red, borderWidth: 1.5, borderColor: C.bg,
   },
-  modalTitle:   { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 4 },
-  modalSub:     { fontSize: 13, color: C.textSub, marginBottom: 24 },
-  modalLoading: { alignItems: 'center', paddingVertical: 24, gap: 12 },
-  modalLoadingText: { color: C.textSub, fontSize: 14 },
-  modalOptions: { flexDirection: 'row', gap: 12 },
-  modalOption:  {
-    flex: 1, alignItems: 'center', gap: 8,
-    backgroundColor: C.surface2, borderRadius: 16, padding: 16,
-    borderWidth: 1, borderColor: C.border,
+  fab: {
+    position: 'absolute', bottom: 96, right: SPACE.lg,
+    width: 56, height: 56, borderRadius: RADIUS.lg,
+    backgroundColor: C.brand,
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4, shadowRadius: 14, elevation: 10,
   },
-  modalOptionIcon:  { width: 52, height: 52, borderRadius: 16, justifyContent: 'center', alignItems: 'center' },
-  modalOptionLabel: { fontSize: 14, fontWeight: '700', color: C.text },
-  modalOptionSub:   { fontSize: 11, color: C.textSub, textAlign: 'center' },
-  modalCancel:  { marginTop: 16, alignItems: 'center', padding: 14 },
-  modalCancelText: { fontSize: 14, color: C.textSub, fontWeight: '600' },
-
-  // Pesquisa global
-  searchOverlay: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: C.bg, zIndex: 999, padding: 16, paddingTop: 20,
+  sheet: {
+    backgroundColor: C.surface2,
+    borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    padding: 24, paddingBottom: 44,
   },
-  searchBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: C.surface, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 12,
-    borderWidth: 1, borderColor: C.border, marginBottom: 16,
+  sheetHandle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: C.border, alignSelf: 'center', marginBottom: 20,
   },
-  searchInput: { flex: 1, color: C.text, fontSize: 15 },
-  searchResults: { flex: 1 },
-  searchResultItem: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border,
+  sheetTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  uploadOption: {
+    flex: 1,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    paddingVertical: 18,
+    paddingHorizontal: 8,
   },
-  searchResultLeft:  { flex: 1 },
-  searchResultLoja:  { fontSize: 14, fontWeight: '700', color: C.text },
-  searchResultMeta:  { fontSize: 12, color: C.textSub, marginTop: 2 },
-  searchResultTotal: { fontSize: 14, fontWeight: '800', color: C.text },
-  searchEmpty: { textAlign: 'center', color: C.textSub, marginTop: 40, fontSize: 14 },
-
-  // Erros
-  errorText: { color: C.red, fontSize: 14, marginBottom: 16 },
-  retryBtn:  { backgroundColor: C.brand, borderRadius: 10, paddingHorizontal: 20, paddingVertical: 12 },
-  retryText: { color: '#fff', fontWeight: '700' },
+  tab: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 10, borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  tabActive: {
+    backgroundColor: C.brandDim,
+    borderColor: C.brand + '40',
+  },
+  tabText: { fontSize: 12, fontWeight: '700', color: C.textMid },
+  tabTextActive: { color: C.brand },
 });

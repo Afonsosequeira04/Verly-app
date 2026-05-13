@@ -1,179 +1,254 @@
-/**
- * src/screens/ChatScreen.js
- */
-import React, { useState, useRef, useEffect } from 'react';
+// src/screens/ChatScreen.js — Redesign
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Alert,
+  View, Text, TextInput, Pressable, FlatList,
+  KeyboardAvoidingView, Platform, ActivityIndicator,
+  StyleSheet, Animated, Easing,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { Send, Zap } from 'lucide-react-native';
 import { chatAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
 import { useAuth } from '../context/AuthContext';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const initials = (name = '') => name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const SUGESTOES = [
   'Quanto gastei este mês?',
   'Qual a minha categoria mais cara?',
   'Tenho garantias a expirar?',
-  'Onde gasto mais dinheiro?',
+  'Estou a cumprir as minhas metas?',
 ];
 
-function Bubble({ msg }) {
-  const isUser = msg.role === 'user';
+function Bubble({ item, userInitials }) {
+  const isUser = item.role === 'user';
+  const opacity  = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(8)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(opacity,    { toValue: 1, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(translateY, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, []);
+
   return (
-    <View style={[styles.bubbleWrap, isUser && styles.bubbleWrapUser]}>
-      {!isUser && <View style={styles.avatar}><Text style={styles.avatarText}>✦</Text></View>}
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleBot]}>
-        <Text style={[styles.bubbleText, isUser && styles.bubbleTextUser]}>{msg.text}</Text>
+    <Animated.View style={[
+      s.bubbleRow,
+      isUser ? s.bubbleRowUser : s.bubbleRowAI,
+      { opacity, transform: [{ translateY }] },
+    ]}>
+      {!isUser && (
+        <View style={s.aiAvatar}>
+          <Zap size={13} color={C.brand} />
+        </View>
+      )}
+
+      <View style={[s.bubble, isUser ? s.bubbleUser : s.bubbleAI]}>
+        <Text style={[s.bubbleText, isUser && { color: '#fff' }]}>{item.content}</Text>
       </View>
-    </View>
+
+      {isUser && (
+        <View style={s.userAvatar}>
+          <Text style={s.userAvatarText}>{userInitials}</Text>
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
 export default function ChatScreen() {
   const { user } = useAuth();
-  const [messages, setMessages] = useState([]);
-  const [input, setInput]       = useState('');
-  const [loading, setLoading]   = useState(false);
-  const [histLoading, setHistLoading] = useState(true);
-  const flatRef = useRef(null);
+  const [messages,  setMessages]  = useState([]);
+  const [input,     setInput]     = useState('');
+  const [sending,   setSending]   = useState(false);
+  const [focused,   setFocused]   = useState(false);
+  const listRef = useRef(null);
 
-  useEffect(() => {
-    chatAPI.historico(20).then(data => {
-      const msgs = [];
-      (data.historico || []).forEach(c => {
-        msgs.push({ id: `u-${c.id}`, role: 'user', text: c.pergunta });
-        msgs.push({ id: `b-${c.id}`, role: 'bot',  text: c.resposta });
-      });
-      setMessages(msgs);
-    }).catch(() => {}).finally(() => setHistLoading(false));
-  }, []);
+  useFocusEffect(useCallback(() => {
+    loadHistory();
+  }, []));
 
-  const sendMessage = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput('');
-    const userMsg = { id: Date.now().toString(), role: 'user', text };
-    setMessages(prev => [...prev, userMsg]);
-    setLoading(true);
+  const loadHistory = async () => {
     try {
-      const data = await chatAPI.enviar(text);
-      setMessages(prev => [...prev, { id: Date.now().toString() + 'b', role: 'bot', text: data.resposta }]);
+      const d = await chatAPI.historico();
+      const msgs = (d.conversas || []).flatMap(c => [
+        { id: `u-${c.id}`, role: 'user',      content: c.pergunta },
+        { id: `a-${c.id}`, role: 'assistant', content: c.resposta },
+      ]);
+      setMessages(msgs);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 100);
+    } catch (_) {}
+  };
+
+  const send = async (text) => {
+    const msg = (text || input).trim();
+    if (!msg) return;
+    setInput('');
+
+    const userMsg = { id: `u-${Date.now()}`, role: 'user', content: msg };
+    setMessages(prev => [...prev, userMsg]);
+    setSending(true);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+
+    try {
+      const d = await chatAPI.enviar(msg);
+      const aiMsg = { id: `a-${Date.now()}`, role: 'assistant', content: d.resposta || d.response || '—' };
+      setMessages(prev => [...prev, aiMsg]);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     } catch (e) {
-      Alert.alert('Erro', e.message);
+      setMessages(prev => [...prev, { id: `err-${Date.now()}`, role: 'assistant', content: 'Erro ao responder. Tenta novamente.' }]);
     } finally {
-      setLoading(false);
+      setSending(false);
     }
   };
 
-  const clearChat = () => {
-    Alert.alert('Limpar histórico', 'Tens a certeza?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Limpar', style: 'destructive', onPress: async () => {
-        await chatAPI.limpar();
-        setMessages([]);
-      }},
-    ]);
-  };
-
-  const allMessages = loading
-    ? [...messages, { id: 'loading', role: 'bot', text: '...' }]
-    : messages;
+  const userInitials = initials(user?.nome);
 
   return (
-    <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.statusDot} />
-          <Text style={styles.headerTitle}>Assistente Verly</Text>
-        </View>
-        <TouchableOpacity onPress={clearChat}>
-          <Text style={styles.clearBtn}>Limpar</Text>
-        </TouchableOpacity>
-      </View>
+    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={88}>
 
-      {/* Messages */}
-      {histLoading ? (
-        <View style={styles.center}><ActivityIndicator color={COLORS.brand} /></View>
-      ) : (
-        <FlatList
-          ref={flatRef}
-          data={allMessages}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.messageList}
-          onContentSizeChange={() => flatRef.current?.scrollToEnd({ animated: true })}
-          ListEmptyComponent={
-            <View style={styles.emptyChat}>
-              <Text style={styles.emptyChatIcon}>✦</Text>
-              <Text style={styles.emptyChatTitle}>Assistente Verly</Text>
-              <Text style={styles.emptyChatSub}>Faz perguntas sobre as tuas faturas e gastos.</Text>
-              <View style={styles.sugestoesWrap}>
-                {SUGESTOES.map((s, i) => (
-                  <TouchableOpacity key={i} style={styles.sugestao} onPress={() => { setInput(s); }}>
-                    <Text style={styles.sugestaoText}>{s}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+      {/* Mensagens */}
+      <FlatList
+        ref={listRef}
+        data={messages}
+        keyExtractor={item => item.id}
+        contentContainerStyle={{ padding: SPACE.md, paddingBottom: 16 }}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={() => (
+          <View style={s.emptyWrap}>
+            <View style={s.emptyIcon}>
+              <Zap size={24} color={C.brand} />
             </View>
-          }
-          renderItem={({ item }) => (
-            item.id === 'loading'
-              ? <View style={styles.bubbleWrap}><View style={styles.avatar}><Text style={styles.avatarText}>✦</Text></View><View style={styles.bubbleBot}><Text style={styles.bubbleText}>...</Text></View></View>
-              : <Bubble msg={item} />
-          )}
-        />
+            <Text style={s.emptyTitle}>Verly IA</Text>
+            <Text style={s.emptySub}>Faz qualquer pergunta sobre as tuas finanças.</Text>
+          </View>
+        )}
+        ListFooterComponent={sending ? (
+          <View style={s.typingRow}>
+            <View style={s.aiAvatar}>
+              <Zap size={13} color={C.brand} />
+            </View>
+            <View style={[s.bubble, s.bubbleAI, { paddingVertical: 14, paddingHorizontal: 18 }]}>
+              <ActivityIndicator size="small" color={C.brand} />
+            </View>
+          </View>
+        ) : null}
+        renderItem={({ item }) => <Bubble item={item} userInitials={userInitials} />}
+      />
+
+      {/* Sugestões (só quando vazio) */}
+      {messages.length === 0 && (
+        <View style={s.sugestoesWrap}>
+          {SUGESTOES.map(s2 => (
+            <Pressable key={s2} onPress={() => send(s2)}
+              style={({ pressed }) => [s.sugestao, pressed && { opacity: 0.75 }]}>
+              <Text style={s.sugestaoText}>{s2}</Text>
+            </Pressable>
+          ))}
+        </View>
       )}
 
       {/* Input */}
-      <View style={styles.inputArea}>
+      <View style={[s.inputBar, focused && { borderTopColor: C.brand + '40' }]}>
         <TextInput
-          style={styles.input}
+          style={s.textInput}
           value={input}
           onChangeText={setInput}
-          placeholder="Pergunta algo..."
-          placeholderTextColor={COLORS.textSub}
+          placeholder="Escreve uma mensagem…"
+          placeholderTextColor={C.textMid}
           multiline
-          maxLength={500}
-          onSubmitEditing={sendMessage}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onSubmitEditing={() => send()}
+          blurOnSubmit
         />
-        <TouchableOpacity style={[styles.sendBtn, (!input.trim() || loading) && styles.sendBtnDisabled]}
-          onPress={sendMessage} disabled={!input.trim() || loading}>
-          <Text style={styles.sendBtnText}>↑</Text>
-        </TouchableOpacity>
+        <Pressable
+          onPress={() => send()}
+          disabled={!input.trim() || sending}
+          style={({ pressed }) => [s.sendBtn, (!input.trim() || sending) && s.sendBtnDisabled, pressed && { opacity: 0.8 }]}
+        >
+          <Send size={16} color="#fff" />
+        </Pressable>
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: COLORS.bg },
-  center:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingTop: 20, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: COLORS.surface },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.green },
-  headerTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
-  clearBtn: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
-  messageList: { padding: 16, paddingBottom: 8, flexGrow: 1 },
-  bubbleWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12, maxWidth: '82%' },
-  bubbleWrapUser: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
-  avatar: { width: 30, height: 30, borderRadius: 8, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', flexShrink: 0 },
-  avatarText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-  bubble: { borderRadius: 14, padding: 12 },
-  bubbleBot: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderBottomLeftRadius: 4 },
-  bubbleUser: { backgroundColor: COLORS.brand, borderBottomRightRadius: 4 },
-  bubbleText: { fontSize: 14, color: COLORS.text, lineHeight: 20 },
-  bubbleTextUser: { color: '#fff' },
-  emptyChat: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
-  emptyChatIcon: { fontSize: 40, color: COLORS.brand, marginBottom: 12, opacity: 0.4 },
-  emptyChatTitle: { fontSize: 18, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
-  emptyChatSub: { fontSize: 13, color: COLORS.textSub, marginBottom: 24, textAlign: 'center' },
-  sugestoesWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', paddingHorizontal: 20 },
-  sugestao: { backgroundColor: COLORS.surface, borderWidth: 1, borderColor: COLORS.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
-  sugestaoText: { fontSize: 12, color: COLORS.textSub, fontWeight: '600' },
-  inputArea: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, padding: 12, borderTopWidth: 1, borderTopColor: COLORS.border, backgroundColor: COLORS.surface },
-  input: { flex: 1, backgroundColor: COLORS.surface2, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 14, padding: 12, maxHeight: 100 },
-  sendBtn: { width: 42, height: 42, backgroundColor: COLORS.brand, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  sendBtnDisabled: { opacity: 0.4 },
-  sendBtnText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+
+  bubbleRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
+  bubbleRowUser: { justifyContent: 'flex-end' },
+  bubbleRowAI:   { justifyContent: 'flex-start' },
+
+  bubble: {
+    maxWidth: '78%', borderRadius: RADIUS.lg,
+    paddingHorizontal: 14, paddingVertical: 10,
+  },
+  bubbleUser: {
+    backgroundColor: C.brand,
+    borderBottomRightRadius: 4,
+  },
+  bubbleAI: {
+    backgroundColor: C.surface,
+    borderWidth: 1, borderColor: C.border,
+    borderBottomLeftRadius: 4,
+  },
+  bubbleText: { fontSize: FONT.md, color: C.text, lineHeight: 21 },
+
+  aiAvatar: {
+    width: 30, height: 30, borderRadius: 10,
+    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  userAvatar: {
+    width: 30, height: 30, borderRadius: 10,
+    backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  userAvatarText: { fontSize: 11, fontWeight: '800', color: C.textMid },
+
+  typingRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
+
+  emptyWrap:  { alignItems: 'center', paddingTop: 60, gap: 12 },
+  emptyIcon: {
+    width: 52, height: 52, borderRadius: 16,
+    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  emptyTitle: { fontSize: FONT.xl, fontWeight: '800', color: C.text },
+  emptySub:   { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', maxWidth: 240 },
+
+  sugestoesWrap: {
+    padding: SPACE.md, paddingTop: 0, gap: 8,
+    flexDirection: 'row', flexWrap: 'wrap',
+  },
+  sugestao: {
+    backgroundColor: C.surface, borderRadius: RADIUS.pill,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderWidth: 1, borderColor: C.border,
+  },
+  sugestaoText: { fontSize: FONT.sm, color: C.textMid, fontWeight: '600' },
+
+  inputBar: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: 10,
+    padding: SPACE.md, paddingBottom: 24,
+    borderTopWidth: 1, borderTopColor: C.border,
+    backgroundColor: C.bg,
+  },
+  textInput: {
+    flex: 1,
+    backgroundColor: C.surface, borderRadius: RADIUS.md,
+    borderWidth: 1, borderColor: C.border,
+    color: C.text, fontSize: FONT.md,
+    paddingHorizontal: 14, paddingVertical: 10,
+    maxHeight: 120,
+  },
+  sendBtn: {
+    width: 42, height: 42, borderRadius: RADIUS.md,
+    backgroundColor: C.brand, justifyContent: 'center', alignItems: 'center',
+  },
+  sendBtnDisabled: { backgroundColor: C.surface2 },
 });

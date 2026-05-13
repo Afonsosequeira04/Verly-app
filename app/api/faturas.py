@@ -102,7 +102,7 @@ def upload_fatura():
     Upload de fatura via multipart/form-data.
     O processamento é igual ao da web app.
     """
-    from app.ai import get_user_paths, rebuild_index, extract_invoice_info, extract_invoice_info_from_text
+    from app.ai import get_user_paths, rebuild_index, extract_invoice_info
     from security import validate_upload, sanitize_filename, check_rate_limit
 
     user_id = int(get_jwt_identity())
@@ -145,16 +145,15 @@ def upload_fatura():
         return jsonify({'error': 'Erro ao guardar o ficheiro.'}), 500
 
     try:
-        ext = os.path.splitext(safe_name)[1].lower()
-        if ext == '.txt':
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f_txt:
-                texto = f_txt.read()
-            info = extract_invoice_info_from_text(texto, final_name)
-        else:
-            index = rebuild_index(data_dir, storage_dir)
-            info  = extract_invoice_info(index, final_name)
+        # Despacha por extensão: imagens → Vision, PDF → pdfplumber+LLM, txt → LLM/regex
+        # NÃO usa LlamaIndex para evitar confundir faturas diferentes.
+        info = extract_invoice_info(file_path, final_name)
 
-        rebuild_index(data_dir, storage_dir)
+        # Actualiza índice do chat em background (falha silenciosa)
+        try:
+            rebuild_index(data_dir, storage_dir)
+        except Exception:
+            pass
 
         fatura = Fatura(
             user_id=user_id,

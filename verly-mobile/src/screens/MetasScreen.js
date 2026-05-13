@@ -1,308 +1,231 @@
-/**
- * src/screens/MetasScreen.js
- * Gestão de orçamentos por categoria — equivalente à página /metas da web.
- */
-import React, { useState, useCallback } from 'react';
+// src/screens/MetasScreen.js — Redesign
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity,
-  TextInput, Modal, Alert, ActivityIndicator, RefreshControl,
-  KeyboardAvoidingView, Platform, ScrollView,
+  View, Text, ScrollView, Pressable, TextInput,
+  Modal, Alert, ActivityIndicator, StyleSheet,
+  Animated, Easing, RefreshControl,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { Plus, X, Target, ChevronRight, Trash2 } from 'lucide-react-native';
 import { metasAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { Reveal, Card, Skeleton, SectionHeader, useScalePress } from '../components/UI';
 
-const CATEGORIAS = [
-  'Alimentação', 'Vestuário', 'Tecnologia', 'Casa & Decoração',
+const C = COLORS;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const CATS = [
+  'Alimentação', 'Tecnologia', 'Vestuário', 'Casa & Decoração',
   'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes',
-  'Educação', 'Outros',
+  'Educação', 'Subscrições', 'Outros',
 ];
 
-const CAT_ICONS = {
-  'Tecnologia': '💻', 'Alimentação': '🍽️', 'Vestuário': '👕',
-  'Casa & Decoração': '🏠', 'Saúde & Beleza': '💊', 'Desporto': '🏋️',
-  'Entretenimento': '🎬', 'Transportes': '🚗', 'Educação': '📚', 'Outros': '📦',
-};
-
-function MetaCard({ meta, onDelete }) {
-  const pct = meta.limite > 0 ? Math.min((meta.gasto / meta.limite) * 100, 100) : 0;
-  const cor = pct >= 100 ? COLORS.red : pct >= 80 ? COLORS.yellow : COLORS.green;
-  const restante = meta.limite - meta.gasto;
-
+function MetaBar({ pct = 0, color = C.brand }) {
+  const width = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(width, { toValue: Math.min(pct, 100), duration: 700, delay: 200, easing: Easing.out(Easing.cubic), useNativeDriver: false }).start();
+  }, [pct]);
+  const w = width.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
   return (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.cardLeft}>
-          <Text style={styles.cardIcon}>{CAT_ICONS[meta.categoria] || '📦'}</Text>
-          <View>
-            <Text style={styles.cardNome}>{meta.nome || meta.categoria}</Text>
-            <Text style={styles.cardCat}>{meta.categoria}</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(meta.id)}>
-          <Text style={styles.deleteBtnText}>✕</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Barra de progresso */}
-      <View style={styles.progressWrap}>
-        <View style={styles.progressBg}>
-          <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: cor }]} />
-        </View>
-        <View style={styles.progressLabels}>
-          <Text style={[styles.progressPct, { color: cor }]}>{Math.round(pct)}%</Text>
-          <Text style={styles.progressNum}>
-            {meta.gasto.toFixed(0)}€ / {meta.limite.toFixed(0)}€
-          </Text>
-        </View>
-      </View>
-
-      {/* Restante */}
-      <View style={[styles.restanteBox, { backgroundColor: `${cor}15` }]}>
-        <Text style={[styles.restanteLabel, { color: cor }]}>
-          {restante >= 0
-            ? `${restante.toFixed(2)}€ disponível`
-            : `${Math.abs(restante).toFixed(2)}€ acima do limite`}
-        </Text>
-      </View>
+    <View style={{ height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' }}>
+      <Animated.View style={{ height: '100%', width: w, backgroundColor: color, borderRadius: 2 }} />
     </View>
   );
 }
 
+function MetaCard({ meta, onDelete }) {
+  const pct = meta.valor_limite > 0 ? (meta.gasto_atual / meta.valor_limite) * 100 : 0;
+  const color = pct > 100 ? C.red : pct > 80 ? C.yellow : C.green;
+  const restante = meta.valor_limite - meta.gasto_atual;
+
+  return (
+    <Reveal delay={0}>
+      <View style={s.card}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 16 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.bodyText}>{meta.categoria}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginTop: 2 }}>
+              <Text style={[s.bigNum, { color }]}>{fmt(meta.gasto_atual)} €</Text>
+              <Text style={s.microText}>/ {fmt(meta.valor_limite)} €</Text>
+            </View>
+          </View>
+          <Pressable onPress={() => onDelete(meta.id)} hitSlop={10} style={s.deleteBtn}>
+            <Trash2 size={14} color={C.textMid} />
+          </Pressable>
+        </View>
+
+        <View style={{ paddingHorizontal: 16, paddingBottom: 16, gap: 8 }}>
+          <MetaBar pct={pct} color={color} />
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Text style={[s.microText, { color }]}>{Math.round(pct)}% usado</Text>
+            <Text style={s.microText}>
+              {restante >= 0 ? `${fmt(restante)} € restante` : `+${fmt(-restante)} € excesso`}
+            </Text>
+          </View>
+        </View>
+      </View>
+    </Reveal>
+  );
+}
+
 export default function MetasScreen() {
-  const [metas, setMetas]         = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefresh]  = useState(false);
-  const [modalVisible, setModal]  = useState(false);
+  const [metas,      setMetas]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [showModal,  setShowModal]  = useState(false);
+  const [catSel,     setCatSel]     = useState(CATS[0]);
+  const [valor,      setValor]      = useState('');
+  const [saving,     setSaving]     = useState(false);
 
-  // Formulário nova meta
-  const [nome, setNome]           = useState('');
-  const [limite, setLimite]       = useState('');
-  const [categoria, setCategoria] = useState('Alimentação');
-  const [saving, setSaving]       = useState(false);
+  const load = useCallback(async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    try { const d = await metasAPI.listar(); setMetas(d.metas || []); }
+    catch (_) {}
+    finally { setLoading(false); setRefreshing(false); }
+  }, []);
 
-  const fetchMetas = async () => {
-    try {
-      const data = await metasAPI.listar();
-      setMetas(data.metas || []);
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setLoading(false);
-      setRefresh(false);
-    }
-  };
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  useFocusEffect(useCallback(() => { fetchMetas(); }, []));
-
-  const handleCriar = async () => {
-    if (!nome.trim() || !limite || isNaN(Number(limite))) {
-      Alert.alert('Erro', 'Preenche o nome e um limite válido.');
-      return;
-    }
+  const handleSave = async () => {
+    const v = parseFloat(valor.replace(',', '.'));
+    if (!v || v <= 0) return Alert.alert('Valor inválido', 'Introduz um limite válido.');
     setSaving(true);
     try {
-      await metasAPI.criar(nome.trim(), parseFloat(limite), categoria);
-      setNome('');
-      setLimite('');
-      setCategoria('Alimentação');
-      setModal(false);
-      fetchMetas();
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setSaving(false);
-    }
+      await metasAPI.criar({ categoria: catSel, valor_limite: v });
+      setShowModal(false); setValor('');
+      load();
+    } catch (e) { Alert.alert('Erro', e.message); }
+    finally { setSaving(false); }
   };
 
   const handleDelete = (id) => {
     Alert.alert('Eliminar meta', 'Tens a certeza?', [
       { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar', style: 'destructive',
-        onPress: async () => {
-          try {
-            await metasAPI.apagar(id);
-            setMetas(prev => prev.filter(m => m.id !== id));
-          } catch (e) {
-            Alert.alert('Erro', e.message);
-          }
-        },
-      },
+      { text: 'Eliminar', style: 'destructive', onPress: async () => {
+        try { await metasAPI.eliminar(id); load(); }
+        catch (_) {}
+      }},
     ]);
   };
 
-  if (loading) {
-    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
-  }
+  const totalGasto  = metas.reduce((a, m) => a + (m.gasto_atual || 0), 0);
+  const totalLimite = metas.reduce((a, m) => a + (m.valor_limite || 0), 0);
 
   return (
-    <View style={styles.root}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Metas</Text>
-          <Text style={styles.sub}>Orçamentos por categoria</Text>
-        </View>
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModal(true)}>
-          <Text style={styles.addBtnText}>+ Nova</Text>
-        </TouchableOpacity>
-      </View>
+    <View style={s.root}>
+      <ScrollView
+        contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 120 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} />}
+      >
+        {/* Summary */}
+        {!loading && metas.length > 0 && (
+          <Reveal delay={0} style={[s.card, { padding: 20, marginBottom: 20, flexDirection: 'row', gap: 20 }]}>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={s.microText}>Total gasto</Text>
+              <Text style={[s.bigNum, { color: C.red, marginTop: 4 }]}>{fmt(totalGasto)} €</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: C.border }} />
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={s.microText}>Total orçado</Text>
+              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(totalLimite)} €</Text>
+            </View>
+          </Reveal>
+        )}
 
-      <FlatList
-        data={metas}
-        keyExtractor={item => String(item.id)}
-        contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => { setRefresh(true); fetchMetas(); }}
-            tintColor={COLORS.brand}
-          />
-        }
-        renderItem={({ item }) => <MetaCard meta={item} onDelete={handleDelete} />}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>🎯</Text>
-            <Text style={styles.emptyTitle}>Sem metas definidas</Text>
-            <Text style={styles.emptySub}>
-              Cria orçamentos por categoria para controlar os teus gastos.
-            </Text>
-            <TouchableOpacity style={styles.emptyBtn} onPress={() => setModal(true)}>
-              <Text style={styles.emptyBtnText}>Criar primeira meta</Text>
-            </TouchableOpacity>
+        <SectionHeader title="As tuas metas" action="Nova meta" onAction={() => setShowModal(true)} style={{ marginBottom: 14 }} />
+
+        {loading ? (
+          <View style={{ gap: 12 }}>
+            {[1, 2, 3].map(i => <Skeleton key={i} height={96} radius={RADIUS.lg} />)}
           </View>
-        }
-      />
+        ) : metas.length === 0 ? (
+          <View style={s.empty}>
+            <View style={s.emptyIcon}><Target size={24} color={C.brand} /></View>
+            <Text style={s.emptyTitle}>Sem metas definidas</Text>
+            <Text style={s.emptySub}>Define limites de gasto por categoria.</Text>
+          </View>
+        ) : (
+          <View style={{ gap: 12 }}>
+            {metas.map(m => <MetaCard key={m.id} meta={m} onDelete={handleDelete} />)}
+          </View>
+        )}
+      </ScrollView>
 
       {/* Modal nova meta */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
-        <KeyboardAvoidingView
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Nova Meta</Text>
-              <TouchableOpacity onPress={() => setModal(false)}>
-                <Text style={styles.modalClose}>✕</Text>
-              </TouchableOpacity>
+      <Modal visible={showModal} transparent animationType="slide" onRequestClose={() => setShowModal(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalSheet}>
+            <View style={s.sheetHandle} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
+              <Text style={s.sheetTitle}>Nova meta</Text>
+              <Pressable onPress={() => setShowModal(false)} hitSlop={10}>
+                <X size={18} color={C.textMid} />
+              </Pressable>
             </View>
 
-            <ScrollView>
-              <Text style={styles.formLabel}>Nome</Text>
-              <TextInput
-                style={styles.formInput}
-                value={nome}
-                onChangeText={setNome}
-                placeholder="ex: Alimentação mensal"
-                placeholderTextColor={COLORS.textSub}
-              />
-
-              <Text style={styles.formLabel}>Limite (€)</Text>
-              <TextInput
-                style={styles.formInput}
-                value={limite}
-                onChangeText={setLimite}
-                placeholder="ex: 300"
-                placeholderTextColor={COLORS.textSub}
-                keyboardType="decimal-pad"
-              />
-
-              <Text style={styles.formLabel}>Categoria</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.catScroll}
-                contentContainerStyle={styles.catScrollContent}
-              >
-                {CATEGORIAS.map(cat => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.catChip, categoria === cat && styles.catChipActive]}
-                    onPress={() => setCategoria(cat)}
-                  >
-                    <Text style={styles.catChipIcon}>{CAT_ICONS[cat]}</Text>
-                    <Text style={[styles.catChipText, categoria === cat && styles.catChipTextActive]}>
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
+            <Text style={s.label}>Categoria</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+              <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+                {CATS.map(c => (
+                  <Pressable key={c} onPress={() => setCatSel(c)}
+                    style={[s.chip, catSel === c && s.chipActive]}>
+                    <Text style={[s.chipText, catSel === c && { color: C.brand }]}>{c}</Text>
+                  </Pressable>
                 ))}
-              </ScrollView>
-
-              <TouchableOpacity
-                style={[styles.formBtn, saving && styles.formBtnDisabled]}
-                onPress={handleCriar}
-                disabled={saving}
-              >
-                {saving
-                  ? <ActivityIndicator color="#fff" />
-                  : <Text style={styles.formBtnText}>Criar Meta →</Text>
-                }
-              </TouchableOpacity>
+              </View>
             </ScrollView>
+
+            <Text style={s.label}>Limite mensal (€)</Text>
+            <TextInput
+              style={s.input}
+              value={valor}
+              onChangeText={setValor}
+              placeholder="0.00"
+              placeholderTextColor={C.textMid}
+              keyboardType="decimal-pad"
+            />
+
+            <Pressable onPress={handleSave} disabled={saving}
+              style={({ pressed }) => [s.btn, saving && { opacity: 0.6 }, pressed && { opacity: 0.85 }]}>
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Guardar meta</Text>}
+            </Pressable>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </Modal>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: COLORS.bg },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 20, paddingBottom: 12 },
-  title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
-  sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
-  addBtn: { backgroundColor: COLORS.brand, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, marginTop: 4 },
-  addBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  card: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border },
+  bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },
+  bigNum:   { fontSize: FONT.xxl, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  microText: { fontSize: FONT.xs, color: C.textMid },
+  label:    { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 8, letterSpacing: 0.3 },
 
-  list: { paddingHorizontal: 20, paddingBottom: 32 },
+  deleteBtn: {
+    width: 32, height: 32, borderRadius: RADIUS.sm,
+    backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center',
+  },
 
-  // Card
-  card:        { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: COLORS.border },
-  cardHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  cardLeft:    { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  cardIcon:    { fontSize: 26 },
-  cardNome:    { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  cardCat:     { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
-  deleteBtn:   { padding: 4 },
-  deleteBtnText: { fontSize: 14, color: COLORS.textSub },
+  empty:     { alignItems: 'center', paddingTop: 60, gap: 12 },
+  emptyIcon: { width: 52, height: 52, borderRadius: 16, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand, justifyContent: 'center', alignItems: 'center' },
+  emptyTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  emptySub:  { fontSize: FONT.sm, color: C.textMid, textAlign: 'center' },
 
-  progressWrap:   { marginBottom: 10 },
-  progressBg:     { height: 8, backgroundColor: COLORS.surface2, borderRadius: 4, overflow: 'hidden' },
-  progressFill:   { height: 8, borderRadius: 4 },
-  progressLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 },
-  progressPct:    { fontSize: 12, fontWeight: '700' },
-  progressNum:    { fontSize: 12, color: COLORS.textSub },
-  restanteBox:    { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' },
-  restanteLabel:  { fontSize: 12, fontWeight: '700' },
-
-  // Empty
-  empty:      { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
-  emptyIcon:  { fontSize: 48, marginBottom: 12, opacity: 0.4 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
-  emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
-  emptyBtn:   { backgroundColor: COLORS.brand, borderRadius: 12, paddingHorizontal: 20, paddingVertical: 12 },
-  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-
-  // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalCard:    { backgroundColor: COLORS.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '80%' },
-  modalHeader:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  modalTitle:   { fontSize: 20, fontWeight: '800', color: COLORS.text },
-  modalClose:   { fontSize: 18, color: COLORS.textSub, padding: 4 },
+  modalSheet:   { backgroundColor: C.surface2, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 44 },
+  sheetHandle:  { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 20 },
+  sheetTitle:   { fontSize: FONT.lg, fontWeight: '800', color: C.text },
 
-  formLabel:  { fontSize: 13, fontWeight: '600', color: COLORS.textSub, marginBottom: 6, marginTop: 14 },
-  formInput:  { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
-  catScroll:  { marginTop: 8 },
-  catScrollContent: { paddingBottom: 4, gap: 8, flexDirection: 'row' },
-  catChip:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.surface2, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: COLORS.border },
-  catChipActive: { borderColor: COLORS.brand, backgroundColor: 'rgba(83,74,183,0.15)' },
-  catChipIcon: { fontSize: 14 },
-  catChipText: { fontSize: 12, color: COLORS.textSub, fontWeight: '600' },
-  catChipTextActive: { color: COLORS.brand },
-  formBtn:     { backgroundColor: COLORS.brand, borderRadius: 12, padding: 15, alignItems: 'center', marginTop: 24, marginBottom: 8 },
-  formBtnDisabled: { opacity: 0.6 },
-  formBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  input: { backgroundColor: C.surface3, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, color: C.text, fontSize: FONT.md, padding: 13, marginBottom: 20 },
+
+  chip:       { paddingHorizontal: 14, paddingVertical: 8, borderRadius: RADIUS.pill, backgroundColor: C.surface3, borderWidth: 1, borderColor: C.border },
+  chipActive: { borderColor: C.brand, backgroundColor: C.brandDim },
+  chipText:   { fontSize: FONT.sm, fontWeight: '600', color: C.textMid },
+
+  btn: { backgroundColor: C.brand, borderRadius: RADIUS.md, padding: 15, alignItems: 'center' },
+  btnText: { color: '#fff', fontSize: FONT.md, fontWeight: '700' },
 });
