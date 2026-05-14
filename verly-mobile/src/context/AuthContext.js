@@ -60,7 +60,6 @@ export function AuthProvider({ children }) {
   // ── Registo — NÃO faz login automático, envia email de confirmação ────────
   const register = async (nome, email, password) => {
     const data = await authAPI.register(nome, email, password);
-    // Não guarda token nem atualiza user — utilizador precisa de confirmar email
     return { email, message: data.message };
   };
 
@@ -73,8 +72,14 @@ export function AuthProvider({ children }) {
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
-      const googleUser = await GoogleSignin.signIn();
-      const { idToken } = googleUser;
+      const result = await GoogleSignin.signIn();
+
+      // Compatibilidade com v12+ (retorna { data: { idToken } }) e versões anteriores
+      const idToken = result?.data?.idToken ?? result?.idToken;
+
+      if (!idToken) {
+        throw new Error('Não foi possível obter o token do Google.');
+      }
 
       const googleCredential = GoogleAuthProvider.credential(idToken);
       const firebaseUserCred = await firebaseAuth().signInWithCredential(googleCredential);
