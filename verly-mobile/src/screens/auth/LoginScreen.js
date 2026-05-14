@@ -34,8 +34,14 @@ export default function LoginScreen({ navigation }) {
     setLoading(true);
     try {
       await login(email.trim().toLowerCase(), password);
+      // AuthContext atualiza o user → AppNavigator redireciona automaticamente
     } catch (err) {
-      Alert.alert('Erro ao entrar', err.message || 'Credenciais inválidas.');
+      if (err.code === 'EMAIL_NOT_CONFIRMED') {
+        // Redireciona para o ecrã de confirmação de email
+        navigation.navigate('ConfirmEmail', { email: email.trim().toLowerCase() });
+      } else {
+        Alert.alert('Erro ao entrar', err.message || 'Credenciais inválidas.');
+      }
     } finally {
       setLoading(false);
     }
@@ -46,7 +52,6 @@ export default function LoginScreen({ navigation }) {
     setLoadingGoogle(true);
     try {
       await loginWithGoogle();
-      // AuthContext.js já atualiza o user → AppNavigator redireciona automaticamente
     } catch (err) {
       if (err.message !== 'LOGIN_CANCELADO') {
         Alert.alert('Erro ao entrar com Google', err.message || 'Tenta novamente.');
@@ -76,7 +81,7 @@ export default function LoginScreen({ navigation }) {
           <View style={s.card}>
             <Text style={s.title}>Entrar</Text>
 
-            {/* Google Sign-In — primeiro para dar destaque */}
+            {/* Google Sign-In */}
             <Pressable
               style={({ pressed }) => [s.btnGoogle, pressed && { opacity: 0.85 }, loadingGoogle && s.btnDisabled]}
               onPress={handleGoogle}
@@ -86,7 +91,6 @@ export default function LoginScreen({ navigation }) {
                 <ActivityIndicator color={C.text} />
               ) : (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {/* Ícone Google simples em texto (podes substituir por SVG) */}
                   <Text style={s.googleIcon}>G</Text>
                   <Text style={s.btnGoogleText}>Continuar com Google</Text>
                 </View>
@@ -174,7 +178,6 @@ const s = StyleSheet.create({
   title: { fontSize: FONT.xxl, fontWeight: '800', color: C.text, marginBottom: 20 },
   label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 7, letterSpacing: 0.3 },
 
-  // Botão Google
   btnGoogle: {
     backgroundColor: C.surface2,
     borderRadius: RADIUS.md,
@@ -184,18 +187,13 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  googleIcon: {
-    fontSize: 16, fontWeight: '900',
-    color: '#4285F4',  // azul Google
-  },
+  googleIcon:    { fontSize: 16, fontWeight: '900', color: '#4285F4' },
   btnGoogleText: { color: C.text, fontSize: FONT.md, fontWeight: '600' },
 
-  // Separador
-  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 18, gap: 10 },
+  divider:     { flexDirection: 'row', alignItems: 'center', marginVertical: 18, gap: 10 },
   dividerLine: { flex: 1, height: 1, backgroundColor: C.border },
   dividerText: { fontSize: FONT.xs, color: C.textMid },
 
-  // Inputs
   input: {
     backgroundColor: C.surface2, borderRadius: RADIUS.md,
     borderWidth: 1, borderColor: C.border,
@@ -203,7 +201,6 @@ const s = StyleSheet.create({
   },
   inputFocused: { borderColor: C.brand + '70' },
 
-  // Botão principal
   btn: {
     backgroundColor: C.brand, borderRadius: RADIUS.md,
     padding: 15, alignItems: 'center', marginTop: 24,
@@ -212,6 +209,6 @@ const s = StyleSheet.create({
   btnDisabled: { opacity: 0.6 },
   btnText: { color: '#fff', fontSize: FONT.md, fontWeight: '700', letterSpacing: 0.2 },
 
-  link: { alignItems: 'center', marginTop: 18 },
+  link:     { alignItems: 'center', marginTop: 18 },
   linkText: { color: C.textMid, fontSize: FONT.sm },
 });

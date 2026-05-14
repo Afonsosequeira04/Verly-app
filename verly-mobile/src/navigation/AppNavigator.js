@@ -14,8 +14,10 @@ import Svg, {
 } from 'react-native-svg';
 
 import { useAuth }             from '../context/AuthContext';
+import WelcomeScreen           from '../screens/auth/WelcomeScreen';
 import LoginScreen             from '../screens/auth/LoginScreen';
 import RegisterScreen          from '../screens/auth/RegisterScreen';
+import ConfirmEmailScreen      from '../screens/auth/ConfirmEmailScreen';
 import OnboardingScreen        from '../screens/OnboardingScreen';
 import DashboardScreen         from '../screens/DashboardScreen';
 import FaturasScreen           from '../screens/FaturasScreen';
@@ -500,9 +502,11 @@ function MainStackNav() {
 function AuthNavigator() {
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Onboarding" component={OnboardingScreen} />
-      <AuthStack.Screen name="Login"      component={LoginScreen} />
-      <AuthStack.Screen name="Register"   component={RegisterScreen} />
+      <AuthStack.Screen name="Welcome"      component={WelcomeScreen} />
+      <AuthStack.Screen name="Login"        component={LoginScreen} />
+      <AuthStack.Screen name="Register"     component={RegisterScreen} />
+      <AuthStack.Screen name="ConfirmEmail" component={ConfirmEmailScreen} />
+      <AuthStack.Screen name="Onboarding"   component={OnboardingScreen} />
     </AuthStack.Navigator>
   );
 }

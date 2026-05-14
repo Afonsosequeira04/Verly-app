@@ -6,7 +6,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'http://192.168.1.254:5000/api/v1';
+const BASE_URL = 'http://192.168.1.246:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
@@ -40,7 +40,9 @@ export async function apiFetch(path, options = {}) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data.error || `Erro ${response.status}`);
+    const err = new Error(data.error || `Erro ${response.status}`);
+    err.code = data.code; // propaga o código de erro do backend
+    throw err;
   }
 
   return data;
@@ -87,6 +89,9 @@ export const authAPI = {
 
   completeOnboarding: (answers) =>
     apiFetch('/auth/onboarding', { method: 'POST', body: JSON.stringify(answers) }),
+
+  resendConfirm: (email) =>
+    apiFetch('/auth/resend-confirm', { method: 'POST', body: JSON.stringify({ email }) }),
 
   // ✅ Firebase Auth (Google / Apple / SMS)
   firebaseLogin: (idToken) =>

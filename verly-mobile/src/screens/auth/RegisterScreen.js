@@ -6,7 +6,6 @@ import {
   ActivityIndicator, Alert, Animated, Easing, StyleSheet,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
-import { authAPI } from '../../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../../constants/theme';
 
 const C = COLORS;
@@ -28,20 +27,14 @@ export default function RegisterScreen({ navigation, route }) {
     ]).start();
   }, []);
 
-  const onboardingAnswers = route?.params?.onboardingAnswers || null;
-
   const handleRegister = async () => {
     if (!nome.trim() || !email.trim() || !password)
       return Alert.alert('Campos obrigatórios', 'Preenche todos os campos.');
     setLoading(true);
     try {
-      const user = await register(nome.trim(), email.trim().toLowerCase(), password);
-      // Se veio do onboarding, marca como completo imediatamente após registo
-      if (onboardingAnswers) {
-        try {
-          await authAPI.completeOnboarding(onboardingAnswers);
-        } catch (_) {}
-      }
+      const result = await register(nome.trim(), email.trim().toLowerCase(), password);
+      // Navega para o ecrã de confirmação de email
+      navigation.replace('ConfirmEmail', { email: result.email });
     } catch (err) {
       Alert.alert('Erro ao registar', err.message || 'Tenta novamente.');
     } finally {
@@ -121,10 +114,13 @@ const s = StyleSheet.create({
     shadowColor: C.brand, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 14,
   },
   logoMarkText: { fontSize: 22, fontWeight: '900', color: '#fff' },
-  logoText: { fontSize: 26, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
-  logoSub:  { fontSize: FONT.sm, color: C.textMid, marginTop: 6 },
+  logoText:     { fontSize: 26, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  logoSub:      { fontSize: FONT.sm, color: C.textMid, marginTop: 6 },
 
-  card: { backgroundColor: C.surface, borderRadius: RADIUS.xl, padding: 24, borderWidth: 1, borderColor: C.border },
+  card: {
+    backgroundColor: C.surface, borderRadius: RADIUS.xl,
+    padding: 24, borderWidth: 1, borderColor: C.border,
+  },
   title: { fontSize: FONT.xxl, fontWeight: '800', color: C.text, marginBottom: 20 },
   label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 7, letterSpacing: 0.3 },
 
@@ -141,8 +137,8 @@ const s = StyleSheet.create({
     shadowColor: C.brand, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.35, shadowRadius: 10,
   },
   btnDisabled: { opacity: 0.6 },
-  btnText: { color: '#fff', fontSize: FONT.md, fontWeight: '700', letterSpacing: 0.2 },
+  btnText:     { color: '#fff', fontSize: FONT.md, fontWeight: '700', letterSpacing: 0.2 },
 
-  link: { alignItems: 'center', marginTop: 18 },
+  link:     { alignItems: 'center', marginTop: 18 },
   linkText: { color: C.textMid, fontSize: FONT.sm },
 });

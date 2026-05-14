@@ -24,6 +24,11 @@ class User(UserMixin, db.Model):
     streak_ultima_atualizacao = db.Column(db.DateTime)
     lingua = db.Column(db.String(10), default='pt')
 
+    # ── Confirmação de email ────────────────────────────────────────────────────
+    email_confirmado     = db.Column(db.Boolean, default=False)
+    email_confirm_token  = db.Column(db.String(100))
+    email_confirm_expiry = db.Column(db.DateTime)
+
     faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
     conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
     metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')

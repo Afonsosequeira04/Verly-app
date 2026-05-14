@@ -1,19 +1,23 @@
 """
 app/api/auth.py — Endpoints de autenticação para o mobile
 
-POST  /api/v1/auth/login         → {access_token, user}
-POST  /api/v1/auth/register      → {access_token, user}
-GET   /api/v1/auth/me            → {user}
-PATCH /api/v1/auth/me            → atualiza perfil (nome, orcamento, personalidade, ...)
-POST  /api/v1/auth/avatar        → faz upload de foto de perfil (base64)
-POST  /api/v1/auth/onboarding    → marca onboarding como completo
-POST  /api/v1/auth/firebase      → login com Google/Apple via Firebase
+POST  /api/v1/auth/login              → {access_token, user}
+POST  /api/v1/auth/register           → {message} (envia email de confirmação)
+POST  /api/v1/auth/confirm/<token>    → {access_token, user}
+POST  /api/v1/auth/resend-confirm     → reenvia email de confirmação
+GET   /api/v1/auth/me                 → {user}
+PATCH /api/v1/auth/me                 → atualiza perfil
+POST  /api/v1/auth/avatar             → upload de foto de perfil
+POST  /api/v1/auth/onboarding         → marca onboarding como completo
+POST  /api/v1/auth/firebase           → login com Google/Apple via Firebase
 """
 
 import logging
 import re
 import base64
 import os
+import secrets
+from datetime import datetime, timedelta
 from flask import request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token, jwt_required, get_jwt_identity,
@@ -36,7 +40,50 @@ def _user_to_dict(user):
         'notificacoes_email':  getattr(user, 'notificacoes_email', False),
         'onboarding_completo': getattr(user, 'onboarding_completo', False),
         'streak_dias':         getattr(user, 'streak_dias', 0) or 0,
+        'email_confirmado':    getattr(user, 'email_confirmado', False),
     }
+
+
+def _enviar_email_confirmacao(user):
+    """Envia email de confirmação via Resend."""
+    try:
+        import resend
+        resend.api_key = os.getenv('RESEND_API_KEY', '')
+        if not resend.api_key:
+            logger.warning('RESEND_API_KEY não definida — email de confirmação não enviado.')
+            return False
+
+        app_url    = os.getenv('APP_URL', 'https://verly.app')
+        from_email = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
+        confirm_url = f"{app_url}/api/v1/auth/confirm-web/{user.email_confirm_token}"
+
+        html = f"""
+        <div style="font-family:'Outfit',sans-serif;max-width:480px;margin:0 auto;background:#080810;color:#EEEEF8;border-radius:16px;padding:40px;">
+          <div style="text-align:center;margin-bottom:32px;">
+            <div style="width:52px;height:52px;background:#7C6FE0;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff;margin-bottom:16px;">V</div>
+            <h1 style="font-size:22px;font-weight:700;margin:0;color:#EEEEF8;">Confirma o teu email</h1>
+            <p style="color:#8888B0;margin-top:8px;">Olá {user.nome}! Só mais um passo.</p>
+          </div>
+          <p style="color:#EEEEF8;line-height:1.6;">Para ativares a tua conta Verly, clica no botão abaixo:</p>
+          <div style="text-align:center;margin:32px 0;">
+            <a href="{confirm_url}" style="background:#7C6FE0;color:#fff;padding:14px 32px;border-radius:12px;font-weight:700;font-size:16px;text-decoration:none;display:inline-block;">
+              Confirmar Email
+            </a>
+          </div>
+          <p style="color:#8888B0;font-size:13px;">Este link expira em 24 horas. Se não criaste uma conta, ignora este email.</p>
+        </div>
+        """
+
+        resend.Emails.send({
+            'from':    from_email,
+            'to':      [user.email],
+            'subject': 'Confirma o teu email — Verly',
+            'html':    html,
+        })
+        return True
+    except Exception as e:
+        logger.error(f'Erro ao enviar email de confirmação: {e}')
+        return False
 
 
 @api_bp.route('/auth/login', methods=['POST'])
@@ -51,6 +98,12 @@ def login():
     user = User.query.filter_by(email=email).first()
     if not user or not user.check_password(password):
         return jsonify({'error': 'Credenciais inválidas.'}), 401
+
+    if not getattr(user, 'email_confirmado', True):
+        return jsonify({
+            'error': 'Confirma o teu email antes de entrar.',
+            'code':  'EMAIL_NOT_CONFIRMED',
+        }), 403
 
     access_token = create_access_token(identity=str(user.id))
     return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
@@ -78,13 +131,96 @@ def register():
     if User.query.filter_by(email=email).first():
         return jsonify({'error': 'Este email já está registado.'}), 409
 
-    user = User(nome=nome, email=email, onboarding_completo=False)
+    token = secrets.token_urlsafe(32)
+    user = User(
+        nome=nome,
+        email=email,
+        onboarding_completo=False,
+        email_confirmado=False,
+        email_confirm_token=token,
+        email_confirm_expiry=datetime.utcnow() + timedelta(hours=24),
+    )
     user.set_password(password)
     db.session.add(user)
     db.session.commit()
 
+    _enviar_email_confirmacao(user)
+
+    return jsonify({
+        'message': 'Conta criada! Verifica o teu email para confirmar.',
+        'email':   email,
+    }), 201
+
+
+@api_bp.route('/auth/confirm/<token>', methods=['POST'])
+def confirm_email(token):
+    """Confirma o email via token (chamado pela app após deep link)."""
+    user = User.query.filter_by(email_confirm_token=token).first()
+
+    if not user:
+        return jsonify({'error': 'Token inválido.'}), 400
+
+    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
+        return jsonify({'error': 'Link expirado.', 'code': 'TOKEN_EXPIRED'}), 400
+
+    user.email_confirmado     = True
+    user.email_confirm_token  = None
+    user.email_confirm_expiry = None
+    db.session.commit()
+
     access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)}), 201
+    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/confirm-web/<token>', methods=['GET'])
+def confirm_email_web(token):
+    """Confirma o email via link no browser — redireciona para a app."""
+    user = User.query.filter_by(email_confirm_token=token).first()
+
+    if not user:
+        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link inválido ou já utilizado.</h2>', 400
+
+    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
+        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link expirado. Abre a app e pede um novo email.</h2>', 400
+
+    user.email_confirmado     = True
+    user.email_confirm_token  = None
+    user.email_confirm_expiry = None
+    db.session.commit()
+
+    deep_link = f"verly://confirm/{token}"
+    return f"""
+    <html>
+    <head><meta http-equiv="refresh" content="1;url={deep_link}"></head>
+    <body style="font-family:sans-serif;text-align:center;padding:40px;background:#080810;color:#EEEEF8;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h2>Email confirmado!</h2>
+      <p style="color:#8888B0;">A abrir a app Verly...</p>
+      <a href="{deep_link}" style="color:#7C6FE0;">Clica aqui se não abrir automaticamente</a>
+    </body>
+    </html>
+    """
+
+
+@api_bp.route('/auth/resend-confirm', methods=['POST'])
+def resend_confirm():
+    """Reenvia email de confirmação."""
+    data  = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({'message': 'Se o email existir, receberás um novo link.'}), 200
+
+    if getattr(user, 'email_confirmado', True):
+        return jsonify({'message': 'Este email já está confirmado.'}), 200
+
+    user.email_confirm_token  = secrets.token_urlsafe(32)
+    user.email_confirm_expiry = datetime.utcnow() + timedelta(hours=24)
+    db.session.commit()
+
+    _enviar_email_confirmacao(user)
+    return jsonify({'message': 'Email de confirmação reenviado!'}), 200
 
 
 @api_bp.route('/auth/me', methods=['GET'])
@@ -123,10 +259,6 @@ def update_me():
 @api_bp.route('/auth/avatar', methods=['POST'])
 @jwt_required()
 def upload_avatar():
-    """
-    Recebe avatar em base64.
-    Body JSON: { image_base64: "data:image/jpeg;base64,..." }
-    """
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
     data = request.get_json(silent=True) or {}
@@ -156,7 +288,7 @@ def upload_avatar():
 
         user.avatar_url = f'/static/avatars/{filename}'
     except Exception as e:
-        logger.warning(f'Avatar disk save failed, storing data URI: {e}')
+        logger.warning(f'Avatar disk save failed: {e}')
         user.avatar_url = image_b64[:512000]
 
     db.session.commit()
@@ -166,7 +298,6 @@ def upload_avatar():
 @api_bp.route('/auth/onboarding', methods=['POST'])
 @jwt_required()
 def complete_onboarding():
-    """Marca o onboarding como completo e guarda a personalidade escolhida."""
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
     if not user:
@@ -186,13 +317,7 @@ def complete_onboarding():
 
 @api_bp.route('/auth/firebase', methods=['POST'])
 def firebase_login():
-    """
-    Recebe um idToken do Firebase (Google Sign-In, Apple, etc.)
-    Verifica-o e devolve o nosso JWT normal.
-
-    Body: { "idToken": "..." }
-    Returns: { "access_token": "...", "user": {...} }
-    """
+    """Login com Google/Apple via Firebase — email confirmado pelo Google."""
     data     = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '').strip()
 
@@ -212,10 +337,8 @@ def firebase_login():
     foto  = decoded.get('picture', '')
 
     user = None
-
     if uid:
         user = User.query.filter_by(google_id=uid).first()
-
     if not user and email:
         user = User.query.filter_by(email=email).first()
 
@@ -227,6 +350,7 @@ def firebase_login():
             password_hash='',
             onboarding_completo=False,
             avatar_url=foto or None,
+            email_confirmado=True,
         )
         db.session.add(user)
         db.session.flush()
@@ -235,11 +359,9 @@ def firebase_login():
             user.google_id = uid
         if foto and not user.avatar_url:
             user.avatar_url = foto
+        user.email_confirmado = True
 
     db.session.commit()
 
     access_token = create_access_token(identity=str(user.id))
-    return jsonify({
-        'access_token': access_token,
-        'user': _user_to_dict(user),
-    })
+    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
