@@ -52,6 +52,7 @@ app/api/faturas.py
 app/api/metas.py
 app/api/mobile_extras.py
 app/api/playlists.py
+app/api/subscricoes.py
 app/auth.py
 app/chat.py
 app/configuracoes.py
@@ -187,6 +188,7 @@ verly-mobile/src/components/TabIcon.js
 verly-mobile/src/components/UI.js
 verly-mobile/src/constants/theme.js
 verly-mobile/src/context/AuthContext.js
+verly-mobile/src/context/RevenueCatContext.js
 verly-mobile/src/navigation/AppNavigator.js
 verly-mobile/src/screens/AmigosScreen.js
 verly-mobile/src/screens/auth/ConfirmEmailScreen.js
@@ -212,6 +214,357 @@ verly-mobile/src/services/api.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/subscricoes.py">
+"""
+app/api/subscricoes.py
+Endpoint mobile para Leak Detector + verificação Pro via RevenueCat.
+
+Adicionar em app/api/__init__.py:
+    from app.api import subscricoes  # noqa
+"""
+
+import os
+import requests
+from flask import jsonify, request
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Subscricao, User, Fatura
+from app import db
+
+# ── Config RevenueCat ─────────────────────────────────────────────────────────
+
+REVENUECAT_SECRET_KEY = os.getenv('REVENUECAT_SECRET_KEY', 'sk_qVKmtGGXRNsBISJeGndavzeKUkFKg')
+REVENUECAT_BASE       = 'https://api.revenuecat.com/v2'
+PRO_ENTITLEMENT       = 'Verly Pro'
+
+
+def _is_pro(user_id: int) -> bool:
+    """Verifica no RevenueCat se o utilizador tem entitlement Pro ativo."""
+    try:
+        url = f'{REVENUECAT_BASE}/projects/customers/{user_id}/active_entitlements'
+        headers = {
+            'Authorization': f'Bearer {REVENUECAT_SECRET_KEY}',
+            'Content-Type': 'application/json',
+        }
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            entitlements = data.get('items', [])
+            return any(e.get('entitlement', {}).get('identifier') == PRO_ENTITLEMENT for e in entitlements)
+    except Exception as e:
+        print(f'[RevenueCat] Erro ao verificar Pro: {e}')
+    return False
+
+
+# ── GET /api/v1/subscricoes ───────────────────────────────────────────────────
+
+@api_bp.route('/subscricoes', methods=['GET'])
+@jwt_required()
+def listar_subscricoes():
+    """
+    Devolve as subscrições do utilizador.
+    Se for Pro, inclui análise completa. Se não for, devolve lista limitada.
+    """
+    user_id = int(get_jwt_identity())
+
+    subs = Subscricao.query.filter_by(user_id=user_id, ativa=True).order_by(
+        Subscricao.preco_mensal.desc()
+    ).all()
+
+    subs_list = [
+        {
+            'id':           s.id,
+            'nome':         s.nome,
+            'categoria':    s.categoria,
+            'icone':        s.icone,
+            'preco_mensal': s.preco_mensal,
+            'meses_pago':   s.meses_pago,
+            'risk':         s.risk,
+            'fonte':        s.fonte,
+        }
+        for s in subs
+    ]
+
+    total_mensal   = sum(s.preco_mensal for s in subs)
+    total_anual    = total_mensal * 12
+    total_pago     = sum(s.preco_mensal * s.meses_pago for s in subs)
+    high_risk      = [s for s in subs_list if s['risk'] == 'high']
+
+    is_pro = _is_pro(user_id)
+
+    return jsonify({
+        'success':      True,
+        'is_pro':       is_pro,
+        'subscricoes':  subs_list,
+        'resumo': {
+            'total_mensal':  round(total_mensal, 2),
+            'total_anual':   round(total_anual, 2),
+            'total_pago':    round(total_pago, 2),
+            'count':         len(subs_list),
+            'high_risk':     len(high_risk),
+        },
+    })
+
+
+# ── POST /api/v1/subscricoes/detetar ─────────────────────────────────────────
+
+SUBSCRIPTION_KEYWORDS = [
+    'netflix', 'spotify', 'amazon prime', 'disney', 'hbo', 'apple music',
+    'youtube premium', 'google one', 'icloud', 'dropbox', 'adobe',
+    'microsoft 365', 'microsoft', 'office 365', 'linkedin', 'canva', 'notion',
+    'slack', 'zoom', 'gym', 'ginásio', 'fitness', 'nespresso',
+    'nos ', 'meo', 'vodafone', 'seguro', 'antivirus', 'vpn',
+    'github', 'figma', 'duolingo', 'coursera', 'udemy', 'apple tv',
+    'playstation', 'twitch', 'xbox', 'nintendo', 'prime video',
+]
+
+SUB_ICONS = {
+    'streaming': '📺', 'musica': '🎵', 'cloud': '☁️',
+    'fitness': '💪', 'software': '💻', 'telco': '📡',
+    'educacao': '📚', 'jogos': '🎮', 'seguro': '🛡️', 'outro': '📦',
+}
+
+
+def _classify(name: str) -> tuple[str, str]:
+    n = name.lower()
+    if any(k in n for k in ['netflix', 'disney', 'hbo', 'youtube', 'apple tv', 'prime video']):
+        cat = 'streaming'
+    elif any(k in n for k in ['spotify', 'apple music', 'deezer']):
+        cat = 'musica'
+    elif any(k in n for k in ['icloud', 'google one', 'dropbox', 'onedrive']):
+        cat = 'cloud'
+    elif any(k in n for k in ['gym', 'ginásio', 'fitness']):
+        cat = 'fitness'
+    elif any(k in n for k in ['adobe', 'microsoft', 'github', 'figma', 'notion', 'slack', 'zoom', 'canva']):
+        cat = 'software'
+    elif any(k in n for k in ['nos ', 'meo', 'vodafone', 'nospresso']):
+        cat = 'telco'
+    elif any(k in n for k in ['duolingo', 'coursera', 'udemy']):
+        cat = 'educacao'
+    elif any(k in n for k in ['playstation', 'xbox', 'nintendo', 'twitch']):
+        cat = 'jogos'
+    elif 'seguro' in n:
+        cat = 'seguro'
+    else:
+        cat = 'outro'
+    return cat, SUB_ICONS.get(cat, '📦')
+
+
+@api_bp.route('/subscricoes/detetar', methods=['POST'])
+@jwt_required()
+def detetar_subscricoes():
+    """
+    Analisa as faturas do utilizador e deteta subscrições automáticas.
+    Guarda na BD e devolve o resultado.
+    Requer Pro para deteção completa (mais de 3 resultados).
+    """
+    user_id = int(get_jwt_identity())
+    is_pro  = _is_pro(user_id)
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    detetadas = {}
+
+    for f in faturas:
+        nome = (f.loja or f.nome_ficheiro or '').lower()
+        for kw in SUBSCRIPTION_KEYWORDS:
+            if kw in nome:
+                chave = kw.strip()
+                if chave not in detetadas:
+                    detetadas[chave] = {
+                        'nome':   f.loja or f.nome_ficheiro or kw.title(),
+                        'preco':  float(f.total or 0),
+                        'count':  1,
+                    }
+                else:
+                    detetadas[chave]['count'] += 1
+                    detetadas[chave]['preco'] = max(
+                        detetadas[chave]['preco'], float(f.total or 0)
+                    )
+                break
+
+    # Limitar a 3 para utilizadores Free
+    items = list(detetadas.values())
+    if not is_pro:
+        items = items[:3]
+
+    # Guardar/atualizar na BD
+    for item in items:
+        nome_display = item['nome'].title()
+        cat, icone   = _classify(nome_display)
+        preco        = round(item['preco'], 2)
+        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
+
+        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
+        if existing:
+            existing.preco_mensal = preco
+            existing.meses_pago   = item['count']
+            existing.risk         = risk
+        else:
+            db.session.add(Subscricao(
+                user_id=user_id,
+                nome=nome_display,
+                categoria=cat,
+                icone=icone,
+                preco_mensal=preco,
+                meses_pago=item['count'],
+                risk=risk,
+                fonte='faturas',
+            ))
+
+    db.session.commit()
+
+    return jsonify({
+        'success':    True,
+        'is_pro':     is_pro,
+        'detetadas':  len(items),
+        'limitado':   not is_pro and len(detetadas) > 3,
+    })
+
+
+# ── DELETE /api/v1/subscricoes/<id> ──────────────────────────────────────────
+
+@api_bp.route('/subscricoes/<int:sub_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_subscricao(sub_id):
+    user_id = int(get_jwt_identity())
+    sub = Subscricao.query.filter_by(id=sub_id, user_id=user_id).first()
+    if not sub:
+        return jsonify({'success': False, 'message': 'Não encontrada'}), 404
+    sub.ativa = False
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ── GET /api/v1/subscricoes/pro-status ───────────────────────────────────────
+
+@api_bp.route('/subscricoes/pro-status', methods=['GET'])
+@jwt_required()
+def pro_status():
+    """Verifica se o utilizador tem Pro ativo via RevenueCat."""
+    user_id = int(get_jwt_identity())
+    is_pro  = _is_pro(user_id)
+    return jsonify({'success': True, 'is_pro': is_pro})
+</file>
+
+<file path="verly-mobile/src/context/RevenueCatContext.js">
+/**
+ * src/context/RevenueCatContext.js
+ * Contexto global do RevenueCat — gere estado de subscrição Pro
+ *
+ * SETUP:
+ *  1. npx expo install react-native-purchases react-native-purchases-ui
+ *  2. Substitui REVENUECAT_API_KEY pela tua chave do dashboard RevenueCat
+ *  3. Faz rebuild: npx expo run:android
+ */
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { Platform } from 'react-native';
+
+// ─── Chave da API RevenueCat ──────────────────────────────────────────────────
+const REVENUECAT_API_KEY = 'test_PaPHjphKtBySNVRyxQMJMumfHtR';
+const PRO_ENTITLEMENT = 'Verly Pro';
+
+// ─── Import condicional (não quebra sem rebuild) ──────────────────────────────
+let Purchases = null;
+try {
+  Purchases = require('react-native-purchases').default;
+} catch (_) {
+  console.warn('[RevenueCat] react-native-purchases não instalado — faz: npx expo install react-native-purchases react-native-purchases-ui && npx expo run:android');
+}
+
+// ─── Context ──────────────────────────────────────────────────────────────────
+const RevenueCatContext = createContext({
+  isPro:        false,
+  offerings:    null,
+  customerInfo: null,
+  loading:      true,
+  purchase:     async () => {},
+  restore:      async () => {},
+  refresh:      async () => {},
+});
+
+export function RevenueCatProvider({ children, userId }) {
+  const [isPro,        setIsPro]        = useState(false);
+  const [offerings,    setOfferings]    = useState(null);
+  const [customerInfo, setCustomerInfo] = useState(null);
+  const [loading,      setLoading]      = useState(true);
+
+  // ── Inicialização ────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!Purchases) { setLoading(false); return; }
+    (async () => {
+      try {
+        Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
+        await Purchases.configure({ apiKey: REVENUECAT_API_KEY });
+
+        // Liga o utilizador ao RevenueCat se tiver ID
+        if (userId) {
+          await Purchases.logIn(String(userId));
+        }
+
+        await _refresh();
+      } catch (e) {
+        console.warn('[RevenueCat] Erro na inicialização:', e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [userId]);
+
+  // ── Refresh estado ───────────────────────────────────────────────────────
+  const _refresh = async () => {
+    if (!Purchases) return;
+    try {
+      const [info, off] = await Promise.all([
+        Purchases.getCustomerInfo(),
+        Purchases.getOfferings(),
+      ]);
+      setCustomerInfo(info);
+      setOfferings(off.current);
+      setIsPro(info.entitlements.active[PRO_ENTITLEMENT] !== undefined);
+    } catch (e) {
+      console.warn('[RevenueCat] Erro ao fazer refresh:', e);
+    }
+  };
+
+  // ── Comprar pacote ───────────────────────────────────────────────────────
+  const purchase = async (pkg) => {
+    if (!Purchases) throw new Error('RevenueCat não inicializado');
+    const { customerInfo: info } = await Purchases.purchasePackage(pkg);
+    setCustomerInfo(info);
+    const pro = info.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+    setIsPro(pro);
+    return pro;
+  };
+
+  // ── Restaurar compras ────────────────────────────────────────────────────
+  const restore = async () => {
+    if (!Purchases) throw new Error('RevenueCat não inicializado');
+    const info = await Purchases.restorePurchases();
+    setCustomerInfo(info);
+    const pro = info.entitlements.active[PRO_ENTITLEMENT] !== undefined;
+    setIsPro(pro);
+    return pro;
+  };
+
+  return (
+    <RevenueCatContext.Provider value={{
+      isPro,
+      offerings,
+      customerInfo,
+      loading,
+      purchase,
+      restore,
+      refresh: _refresh,
+    }}>
+      {children}
+    </RevenueCatContext.Provider>
+  );
+}
+
+export const useRevenueCat = () => useContext(RevenueCatContext);
+</file>
 
 <file path="app/api/amizades.py">
 """
@@ -4151,63 +4504,6 @@ dependencies {
 apply plugin: 'com.google.gms.google-services'
 </file>
 
-<file path="verly-mobile/android/app/google-services.json">
-{
-  "project_info": {
-    "project_number": "667118060597",
-    "project_id": "verly-app",
-    "storage_bucket": "verly-app.firebasestorage.app"
-  },
-  "client": [
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:667118060597:android:cbf48c9b0406f6fdb99d7c",
-        "android_client_info": {
-          "package_name": "com.verly.app"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "667118060597-jtuepc1ti5suakbcn7ec9av4mc22piu7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.verly.app",
-            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
-          }
-        },
-        {
-          "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyByQHExT4ClAipZPuNu2zeoE7WEAPPG2go"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "667118060597-n41e0frtf4slno15tofa3t83trhfjrdv.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.verly.app"
-              }
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "configuration_version": "1"
-}
-</file>
-
 <file path="verly-mobile/android/app/proguard-rules.pro">
 # Add project specific ProGuard rules here.
 # By default, the flags in this file are appended to flags specified
@@ -5222,67 +5518,68 @@ export function useInterstitialAd() {
 </file>
 
 <file path="verly-mobile/src/components/UI.js">
-// src/components/UI.js — Componentes primitivos partilhados (zero deps externas)
-// Animated nativo do React Native — funciona 100% no Expo Go
+// src/components/UI.js — Componentes primitivos com Moti + Reanimated 4
+import React, { useEffect } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { MotiView, MotiText, useAnimationState } from 'moti';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+  withRepeat,
+  withDelay,
+  interpolate,
+  Easing,
+  FadeInDown,
+  FadeIn,
+  ZoomIn,
+  BounceIn,
+} from 'react-native-reanimated';
+import { COLORS, RADIUS, FONT } from '../constants/theme';
 
-import React, { useRef, useEffect } from 'react';
-import {
-  View, Text, Pressable,
-  Animated, Easing, StyleSheet,
-} from 'react-native';
-import { COLORS, RADIUS } from '../constants/theme';
+const C = COLORS;
 
-// ─── Hook: fade + slide de entrada ───────────────────────────────────────────
-export function useFadeSlide(delay = 0, fromY = 16) {
-  const opacity   = useRef(new Animated.Value(0)).current;
-  const translateY = useRef(new Animated.Value(fromY)).current;
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(opacity, {
-          toValue: 1, duration: 380,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(translateY, {
-          toValue: 0, duration: 380,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start();
-    }, delay);
-    return () => clearTimeout(timer);
-  }, []);
-
-  return { opacity, transform: [{ translateY }] };
+// ─── Hook: scale press com Reanimated 4 ──────────────────────────────────────
+export function useScalePress(to = 0.96) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+  const onPressIn  = () => { scale.value = withSpring(to,  { damping: 20, stiffness: 400 }); };
+  const onPressOut = () => { scale.value = withSpring(1,   { damping: 18, stiffness: 300 }); };
+  return { animStyle, onPressIn, onPressOut };
 }
 
-// ─── FadeSlide wrapper ────────────────────────────────────────────────────────
-export function Reveal({ delay = 0, style, children }) {
-  const anim = useFadeSlide(delay);
+// ─── Reveal — fade + slide com Moti ──────────────────────────────────────────
+export function Reveal({ delay = 0, fromY = 18, style, children }) {
   return (
-    <Animated.View style={[anim, style]}>
+    <MotiView
+      from={{ opacity: 0, translateY: fromY }}
+      animate={{ opacity: 1, translateY: 0 }}
+      transition={{
+        type: 'timing',
+        duration: 400,
+        delay,
+        easing: Easing.out(Easing.cubic),
+      }}
+      style={style}
+    >
       {children}
-    </Animated.View>
+    </MotiView>
   );
 }
 
-// ─── Hook: scale press (micro-interação) ─────────────────────────────────────
-export function useScalePress(to = 0.96) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const onPressIn  = () => Animated.spring(scale, { toValue: to,  useNativeDriver: true, speed: 50, bounciness: 4 }).start();
-  const onPressOut = () => Animated.spring(scale, { toValue: 1,   useNativeDriver: true, speed: 50, bounciness: 4 }).start();
-  return { scale, onPressIn, onPressOut };
-}
-
-// ─── Card com press feedback ──────────────────────────────────────────────────
-export function Card({ onPress, style, children, delay = 0 }) {
-  const { scale, onPressIn, onPressOut } = useScalePress();
-  const anim = useFadeSlide(delay);
+// ─── Card com press feedback e entrada animada ────────────────────────────────
+export function Card({ onPress, style, children, delay = 0, entering }) {
+  const { animStyle, onPressIn, onPressOut } = useScalePress();
 
   const inner = (
-    <Animated.View style={[anim, { transform: [...anim.transform, { scale }] }, style]}>
+    <Animated.View
+      entering={entering ?? FadeInDown.delay(delay).duration(380).springify()}
+      style={[animStyle, style]}
+    >
       {children}
     </Animated.View>
   );
@@ -5296,67 +5593,242 @@ export function Card({ onPress, style, children, delay = 0 }) {
   );
 }
 
-// ─── Skeleton shimmer ─────────────────────────────────────────────────────────
-export function Skeleton({ width, height = 16, radius = RADIUS.sm, style }) {
-  const opacity = useRef(new Animated.Value(0.4)).current;
+// ─── PressCard — card interativo com glow ao pressionar ──────────────────────
+export function PressCard({ onPress, style, children, delay = 0, glowColor }) {
+  const scale   = useSharedValue(1);
+  const opacity = useSharedValue(0);
 
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(opacity, { toValue: 0.9, duration: 700, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0.4, duration: 700, useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+  }));
+
+  const onPressIn = () => {
+    scale.value   = withSpring(0.97, { damping: 20, stiffness: 400 });
+    opacity.value = withTiming(1, { duration: 120 });
+  };
+
+  const onPressOut = () => {
+    scale.value   = withSpring(1, { damping: 18, stiffness: 300 });
+    opacity.value = withTiming(0, { duration: 200 });
+  };
+
+  const color = glowColor || C.brand;
 
   return (
-    <Animated.View style={[{
-      width: width || '100%',
-      height,
-      borderRadius: radius,
-      backgroundColor: COLORS.surface3,
-      opacity,
-    }, style]} />
+    <Animated.View
+      entering={FadeInDown.delay(delay).duration(380).springify()}
+      style={animStyle}
+    >
+      <Pressable onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress} style={style}>
+        {/* Glow overlay ao pressionar */}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            { borderRadius: RADIUS.lg, backgroundColor: color + '15' },
+            glowStyle,
+          ]}
+        />
+        {children}
+      </Pressable>
+    </Animated.View>
   );
 }
 
-// ─── Pill badge ───────────────────────────────────────────────────────────────
-export function Badge({ label, color = COLORS.brand, style }) {
+// ─── Skeleton shimmer com Moti ────────────────────────────────────────────────
+export function Skeleton({ width, height = 16, radius = RADIUS.sm, style }) {
   return (
-    <View style={[{
-      paddingHorizontal: 8, paddingVertical: 3,
-      borderRadius: RADIUS.pill,
-      backgroundColor: color + '20',
-    }, style]}>
+    <MotiView
+      from={{ opacity: 0.4 }}
+      animate={{ opacity: 0.9 }}
+      transition={{
+        type: 'timing',
+        duration: 700,
+        loop: true,
+        repeatReverse: true,
+      }}
+      style={[
+        {
+          width: width || '100%',
+          height,
+          borderRadius: radius,
+          backgroundColor: C.surface3,
+        },
+        style,
+      ]}
+    />
+  );
+}
+
+// ─── Badge com entrada bounce ─────────────────────────────────────────────────
+export function Badge({ label, color = C.brand, style, animated = false }) {
+  const inner = (
+    <View
+      style={[
+        {
+          paddingHorizontal: 8,
+          paddingVertical: 3,
+          borderRadius: RADIUS.pill,
+          backgroundColor: color + '20',
+        },
+        style,
+      ]}
+    >
       <Text style={{ fontSize: 10, fontWeight: '700', color, letterSpacing: 0.5 }}>
         {label}
       </Text>
     </View>
   );
+
+  if (!animated) return inner;
+
+  return (
+    <Animated.View entering={BounceIn.duration(500)}>
+      {inner}
+    </Animated.View>
+  );
 }
 
-// ─── Divider ─────────────────────────────────────────────────────────────────
+// ─── NumberTicker — número que anima ao mudar ─────────────────────────────────
+export function NumberTicker({ value, style, prefix = '', suffix = '' }) {
+  const displayed = useSharedValue(0);
+
+  useEffect(() => {
+    displayed.value = withTiming(value, {
+      duration: 800,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [value]);
+
+  // Usa MotiText para mostrar o valor formatado
+  return (
+    <MotiView
+      key={value}
+      from={{ opacity: 0, scale: 0.85 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ type: 'spring', damping: 18, stiffness: 200 }}
+    >
+      <Text style={style}>{prefix}{value}{suffix}</Text>
+    </MotiView>
+  );
+}
+
+// ─── Pulse dot — indicador animado ───────────────────────────────────────────
+export function PulseDot({ color = C.brand, size = 8 }) {
+  return (
+    <MotiView
+      from={{ scale: 1, opacity: 1 }}
+      animate={{ scale: 1.8, opacity: 0 }}
+      transition={{
+        type: 'timing',
+        duration: 900,
+        loop: true,
+        easing: Easing.out(Easing.ease),
+      }}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+      }}
+    />
+  );
+}
+
+// ─── Divider ──────────────────────────────────────────────────────────────────
 export function Divider({ style }) {
-  return <View style={[{ height: 1, backgroundColor: COLORS.border }, style]} />;
+  return <View style={[{ height: 1, backgroundColor: C.border }, style]} />;
 }
 
-// ─── Section header ───────────────────────────────────────────────────────────
+// ─── SectionHeader ────────────────────────────────────────────────────────────
 export function SectionHeader({ title, action, onAction, style }) {
+  const { animStyle, onPressIn, onPressOut } = useScalePress(0.94);
+
   return (
     <View style={[{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }, style]}>
-      <Text style={{ fontSize: 11, fontWeight: '800', color: COLORS.textMid, letterSpacing: 1.2, textTransform: 'uppercase' }}>
+      <Text style={{ fontSize: 11, fontWeight: '800', color: C.textMid, letterSpacing: 1.2, textTransform: 'uppercase' }}>
         {title}
       </Text>
       {action && (
-        <Pressable onPress={onAction} hitSlop={8}>
-          <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.brand }}>
-            {action}
-          </Text>
-        </Pressable>
+        <Animated.View style={animStyle}>
+          <Pressable onPress={onAction} onPressIn={onPressIn} onPressOut={onPressOut} hitSlop={8}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: C.brand }}>
+              {action}
+            </Text>
+          </Pressable>
+        </Animated.View>
       )}
     </View>
   );
 }
+
+// ─── AnimatedListItem — item de lista que entra em stagger ───────────────────
+export function AnimatedListItem({ index = 0, children, style }) {
+  return (
+    <Animated.View
+      entering={FadeInDown.delay(index * 60).duration(350).springify()}
+      style={style}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+// ─── IconButton — botão de ícone com feedback ────────────────────────────────
+export function IconButton({ onPress, children, active = false, activeColor, style }) {
+  const scale = useSharedValue(1);
+  const bg    = useSharedValue(0);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+    backgroundColor: active
+      ? (activeColor || C.brand) + '18'
+      : C.surface,
+  }));
+
+  const onPressIn  = () => { scale.value = withSpring(0.9,  { damping: 20, stiffness: 400 }); };
+  const onPressOut = () => { scale.value = withSpring(1,    { damping: 18, stiffness: 300 }); };
+
+  return (
+    <Animated.View style={[styles.iconBtn, animStyle, style]}>
+      <Pressable
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        onPress={onPress}
+        style={{ width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' }}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// ─── ShimmerLine — linha de loading animada ───────────────────────────────────
+export function ShimmerLine({ width = '100%', height = 14, radius = 6, style }) {
+  return (
+    <MotiView
+      from={{ opacity: 0.3 }}
+      animate={{ opacity: 0.8 }}
+      transition={{ type: 'timing', duration: 800, loop: true, repeatReverse: true }}
+      style={[{ width, height, borderRadius: radius, backgroundColor: C.surface3 }, style]}
+    />
+  );
+}
+
+const styles = StyleSheet.create({
+  iconBtn: {
+    width: 40, height: 40,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: C.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
 </file>
 
 <file path="verly-mobile/src/screens/AmigosScreen.js">
@@ -8094,140 +8566,362 @@ const styles = StyleSheet.create({
 <file path="verly-mobile/src/screens/SubscricoesScreen.js">
 /**
  * src/screens/SubscricoesScreen.js
+ * Ecrã "Modo Pro" — paywall + estado de subscrição ativa
  */
-import React, { useState, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
-  View, Text, FlatList, StyleSheet,
-  RefreshControl, ActivityIndicator,
+  View, Text, StyleSheet, Pressable,
+  Alert, TouchableOpacity, ScrollView,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { subscricoesAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
+import Animated, {
+  FadeInDown, FadeIn, ZoomIn,
+} from 'react-native-reanimated';
+import { MotiView, MotiText } from 'moti';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { useRevenueCat } from '../context/RevenueCatContext';
 
-const RISK_COLORS = { danger: COLORS.red, warning: COLORS.yellow, ok: COLORS.green };
+const C = COLORS;
 
-function SubCard({ sub }) {
-  const riskColor = RISK_COLORS[sub.risk] || COLORS.textSub;
-  return (
-    <View style={[styles.card, { borderLeftColor: riskColor, borderLeftWidth: 3 }]}>
-      <View style={styles.cardLeft}>
-        <Text style={styles.cardIcon}>{sub.icone}</Text>
-      </View>
-      <View style={styles.cardInfo}>
-        <Text style={styles.cardNome}>{sub.nome}</Text>
-        <Text style={styles.cardAlerta}>{sub.alerta}</Text>
-        <View style={[styles.badge, { backgroundColor: `${riskColor}22` }]}>
-          <Text style={[styles.badgeText, { color: riskColor }]}>{sub.risk_label}</Text>
-        </View>
-      </View>
-      <View style={styles.cardRight}>
-        <Text style={[styles.cardPreco, { color: riskColor }]}>{sub.preco_mensal.toFixed(2)}€</Text>
-        <Text style={styles.cardPrecoPeriod}>/mês</Text>
-      </View>
-    </View>
+// Cores por tier
+const TIER = {
+  MONTHLY:  { color: '#CD7F32', label: '🥉 Bronze', glow: 'rgba(205,127,50,0.15)',  border: 'rgba(205,127,50,0.35)' },
+  ANNUAL:   { color: '#C0C0C0', label: '🥈 Prata',  glow: 'rgba(192,192,192,0.12)', border: 'rgba(192,192,192,0.3)' },
+  LIFETIME: { color: '#FFD700', label: '🥇 Ouro',   glow: 'rgba(255,215,0,0.15)',   border: 'rgba(255,215,0,0.35)' },
+};
+
+// ─── Ecrã Pro Ativo ───────────────────────────────────────────────────────────
+function ProActiveScreen({ offerings, restore }) {
+  const [loading, setLoading] = useState(false);
+
+  // Tenta encontrar o plano ativo pelo packageType
+  const packages = offerings?.availablePackages || [];
+  const activePkg = packages.find(p =>
+    p.packageType === 'ANNUAL' || p.packageType === 'LIFETIME' || p.packageType === 'MONTHLY'
   );
-}
 
-export default function SubscricoesScreen() {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [refreshing, setRefresh]= useState(false);
-
-  const fetchData = async () => {
+  const handleRestore = async () => {
+    setLoading(true);
     try {
-      const result = await subscricoesAPI.listar();
-      setData(result);
+      await restore();
     } catch (e) {
-      console.error(e);
+      Alert.alert('Erro', e.message);
     } finally {
       setLoading(false);
-      setRefresh(false);
     }
   };
 
-  useFocusEffect(useCallback(() => { fetchData(); }, []));
-
-  if (loading) {
-    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.brand} /></View>;
-  }
-
-  const subs = data?.subscriptions || [];
-  const totalMensal = data?.total_mensal_desperdicado || 0;
-  const countDanger = data?.count_danger || 0;
+  const features = [
+    { icon: '🔍', label: 'Leak Detector', desc: 'Deteta subscrições que drenam a tua conta' },
+    { icon: '⚡', label: 'Alertas em tempo real', desc: 'Notificações de desperdício automáticas' },
+    { icon: '📊', label: 'Relatórios detalhados', desc: 'Análise mensal completa das tuas despesas' },
+    { icon: '🤖', label: 'Chat IA ilimitado', desc: 'Sem limites de mensagens com a IA' },
+  ];
 
   return (
-    <View style={styles.root}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>Leak Detector</Text>
-        <Text style={styles.sub}>Subscrições que drenam a tua conta</Text>
-      </View>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      contentContainerStyle={{ padding: 24, paddingBottom: 48 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header Pro */}
+      <Animated.View entering={FadeInDown.duration(400).springify()} style={styles.proHeader}>
+        <MotiView
+          from={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', delay: 100, damping: 16 }}
+          style={styles.proIconBox}
+        >
+          <Text style={{ fontSize: 44 }}>👑</Text>
+        </MotiView>
 
-      {/* Resumo */}
-      {totalMensal > 0 && (
-        <View style={styles.wasteBox}>
-          <View>
-            <Text style={styles.wasteLabel}>DESPERDÍCIO / MÊS</Text>
-            <Text style={styles.wasteVal}>{totalMensal.toFixed(2)}€</Text>
-            <Text style={styles.wasteAnual}>≈ {Math.round(totalMensal * 12)}€/ano</Text>
-          </View>
-          {countDanger > 0 && (
-            <View style={styles.dangerBadge}>
-              <Text style={styles.dangerBadgeNum}>{countDanger}</Text>
-              <Text style={styles.dangerBadgeLabel}>para cancelar</Text>
-            </View>
-          )}
+        <MotiText
+          from={{ opacity: 0, translateY: 10 }}
+          animate={{ opacity: 1, translateY: 0 }}
+          transition={{ type: 'spring', delay: 200 }}
+          style={styles.proTitle}
+        >
+          Verly Pro
+        </MotiText>
+
+        <Animated.View entering={ZoomIn.delay(300).springify()} style={styles.proActiveBadge}>
+          <Text style={styles.proActiveBadgeText}>✦ ATIVO</Text>
+        </Animated.View>
+
+        {activePkg && (
+          <MotiView
+            from={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 400 }}
+            style={styles.planBox}
+          >
+            <Text style={styles.planLabel}>O TEU PLANO</Text>
+            <Text style={styles.planName}>{activePkg.product.title}</Text>
+            <Text style={styles.planPrice}>
+              {activePkg.product.priceString}
+              {activePkg.packageType === 'ANNUAL'   ? ' / ano'  :
+               activePkg.packageType === 'MONTHLY'  ? ' / mês'  :
+               activePkg.packageType === 'LIFETIME' ? ' (vitalício)' : ''}
+            </Text>
+          </MotiView>
+        )}
+      </Animated.View>
+
+      {/* Features desbloqueadas */}
+      <Animated.View entering={FadeInDown.delay(200).springify()}>
+        <Text style={styles.sectionLabel}>FUNCIONALIDADES DESBLOQUEADAS</Text>
+        <View style={styles.featuresGrid}>
+          {features.map((f, i) => (
+            <Animated.View
+              key={i}
+              entering={FadeInDown.delay(250 + i * 60).springify()}
+              style={styles.featCard}
+            >
+              <Text style={{ fontSize: 26, marginBottom: 8 }}>{f.icon}</Text>
+              <Text style={styles.featCardLabel}>{f.label}</Text>
+              <Text style={styles.featCardDesc}>{f.desc}</Text>
+            </Animated.View>
+          ))}
         </View>
-      )}
+      </Animated.View>
 
-      {/* Lista */}
-      <FlatList
-        data={subs}
-        keyExtractor={(item, i) => item.db_id?.toString() || item.nome + i}
-        contentContainerStyle={styles.list}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchData(); }} tintColor={COLORS.brand} />}
-        renderItem={({ item }) => <SubCard sub={item} />}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>🛡️</Text>
-            <Text style={styles.emptyTitle}>Sem subscrições detetadas</Text>
-            <Text style={styles.emptySub}>Carrega um extrato bancário na app web para detetar subscrições automáticas.</Text>
-          </View>
-        }
-      />
-    </View>
+      {/* Restaurar */}
+      <Pressable onPress={handleRestore} disabled={loading} style={{ alignItems: 'center', marginTop: 24 }}>
+        <Text style={{ fontSize: 12, color: C.textMid }}>Restaurar compras</Text>
+      </Pressable>
+    </ScrollView>
   );
 }
 
+// ─── Paywall (não Pro) ────────────────────────────────────────────────────────
+function PaywallScreen({ offerings, purchase, restore }) {
+  const [loading, setLoading] = useState(false);
+
+  const packages = offerings?.availablePackages || [];
+
+  // Ordenar: Monthly primeiro (destaque), depois Yearly, depois Lifetime
+  const order = { MONTHLY: 0, ANNUAL: 1, LIFETIME: 2 };
+  const sorted = [...packages].sort((a, b) =>
+    (order[a.packageType] ?? 9) - (order[b.packageType] ?? 9)
+  );
+
+  const handlePurchase = async (pkg) => {
+    setLoading(true);
+    try {
+      const isPro = await purchase(pkg);
+      if (isPro) {
+        Alert.alert('🎉 Bem-vindo ao Pro!', 'A tua conta foi atualizada.');
+      }
+    } catch (e) {
+      if (!e.userCancelled) Alert.alert('Erro na compra', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setLoading(true);
+    try {
+      const isPro = await restore();
+      if (!isPro) Alert.alert('Sem compras', 'Nenhuma subscrição ativa encontrada.');
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const features = [
+    'Deteção automática de subscrições',
+    'Alertas de desperdício em tempo real',
+    'Relatórios mensais detalhados',
+    'Chat com IA ilimitado',
+  ];
+
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      contentContainerStyle={{ padding: 24, paddingBottom: 48 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header */}
+      <Animated.View entering={FadeInDown.duration(400).springify()} style={{ alignItems: 'center', marginBottom: 32 }}>
+        <MotiView
+          from={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', delay: 100, damping: 16 }}
+          style={styles.proIconBox}
+        >
+          <Text style={{ fontSize: 44 }}>👑</Text>
+        </MotiView>
+        <Text style={styles.proTitle}>Verly Pro</Text>
+        <Text style={styles.proSubtitle}>Desbloqueia tudo. Sem limites.</Text>
+      </Animated.View>
+
+      {/* Features */}
+      {features.map((feat, i) => (
+        <Animated.View
+          key={i}
+          entering={FadeInDown.delay(150 + i * 60).springify()}
+          style={styles.featRow}
+        >
+          <View style={styles.featDot} />
+          <Text style={styles.featText}>{feat}</Text>
+        </Animated.View>
+      ))}
+
+      {/* Packages */}
+      <View style={{ gap: 10, marginTop: 28 }}>
+        {sorted.length === 0 ? (
+          <MotiView from={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 300 }}>
+            <Pressable style={[styles.pkgBtn, styles.pkgBtnPrimary]} disabled>
+              <Text style={styles.pkgBtnText}>A carregar planos...</Text>
+            </Pressable>
+          </MotiView>
+        ) : (
+          sorted.map((pkg, i) => {
+            const tier = TIER[pkg.packageType] || TIER.MONTHLY;
+            const period =
+              pkg.packageType === 'ANNUAL'   ? '/ ano'       :
+              pkg.packageType === 'LIFETIME' ? '(vitalício)' : '/ mês';
+            return (
+              <Animated.View key={pkg.identifier} entering={FadeInDown.delay(300 + i * 80).springify()}>
+                <Pressable
+                  style={[styles.pkgBtn, {
+                    backgroundColor: tier.glow,
+                    borderColor: tier.border,
+                  }]}
+                  onPress={() => handlePurchase(pkg)}
+                  disabled={loading}
+                >
+                  <Text style={[styles.pkgTierLabel, { color: tier.color }]}>{tier.label}</Text>
+                  <Text style={[styles.pkgBtnText, { color: tier.color }]}>
+                    {pkg.product.title}
+                  </Text>
+                  <Text style={[styles.pkgBtnSub, { color: tier.color + 'bb' }]}>
+                    {pkg.product.priceString} {period}
+                  </Text>
+                </Pressable>
+              </Animated.View>
+            );
+          })
+        )}
+      </View>
+
+      <Pressable onPress={handleRestore} disabled={loading} style={{ alignItems: 'center', marginTop: 16 }}>
+        <Text style={{ fontSize: 12, color: C.textMid }}>Restaurar compras anteriores</Text>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+// ─── Ecrã principal ───────────────────────────────────────────────────────────
+export default function SubscricoesScreen() {
+  const { isPro, offerings, purchase, restore, loading } = useRevenueCat();
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <MotiView
+          from={{ opacity: 0.3 }} animate={{ opacity: 1 }}
+          transition={{ type: 'timing', duration: 800, loop: true, repeatReverse: true }}
+        >
+          <Text style={{ fontSize: 32 }}>👑</Text>
+        </MotiView>
+      </View>
+    );
+  }
+
+  if (isPro) {
+    return <ProActiveScreen offerings={offerings} restore={restore} />;
+  }
+
+  return <PaywallScreen offerings={offerings} purchase={purchase} restore={restore} />;
+}
+
 const styles = StyleSheet.create({
-  root:   { flex: 1, backgroundColor: COLORS.bg },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
-  header: { padding: 20, paddingBottom: 12 },
-  title:  { fontSize: 28, fontWeight: '800', color: COLORS.text },
-  sub:    { fontSize: 13, color: COLORS.textSub, marginTop: 4 },
-  wasteBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255,71,87,0.07)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.15)', borderRadius: 14, marginHorizontal: 20, marginBottom: 16, padding: 16 },
-  wasteLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.8, color: COLORS.red, marginBottom: 4 },
-  wasteVal:   { fontSize: 28, fontWeight: '800', color: COLORS.red },
-  wasteAnual: { fontSize: 11, color: COLORS.red, opacity: 0.7, marginTop: 2 },
-  dangerBadge: { backgroundColor: 'rgba(255,71,87,0.12)', borderWidth: 1, borderColor: 'rgba(255,71,87,0.2)', borderRadius: 12, padding: 12, alignItems: 'center' },
-  dangerBadgeNum: { fontSize: 22, fontWeight: '800', color: COLORS.red },
-  dangerBadgeLabel: { fontSize: 10, color: COLORS.red },
-  list: { paddingHorizontal: 20, paddingBottom: 32 },
-  card: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border, gap: 12 },
-  cardLeft: { width: 40, height: 40, borderRadius: 10, backgroundColor: COLORS.surface2, justifyContent: 'center', alignItems: 'center' },
-  cardIcon: { fontSize: 20 },
-  cardInfo: { flex: 1, gap: 3 },
-  cardNome:   { fontSize: 14, fontWeight: '700', color: COLORS.text },
-  cardAlerta: { fontSize: 12, color: COLORS.textSub },
-  badge: { borderRadius: 4, paddingHorizontal: 8, paddingVertical: 2, alignSelf: 'flex-start', marginTop: 2 },
-  badgeText: { fontSize: 10, fontWeight: '700' },
-  cardRight: { alignItems: 'flex-end' },
-  cardPreco:  { fontSize: 16, fontWeight: '800' },
-  cardPrecoPeriod: { fontSize: 11, color: COLORS.textSub },
-  empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
-  emptyIcon:  { fontSize: 48, marginBottom: 12, opacity: 0.3 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: COLORS.text, marginBottom: 8 },
-  emptySub:   { fontSize: 13, color: COLORS.textSub, textAlign: 'center', lineHeight: 20 },
+  proHeader: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  proIconBox: {
+    width: 88, height: 88,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,215,0,0.1)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,215,0,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  proTitle: {
+    fontSize: 32, fontWeight: '900', color: COLORS.text,
+    letterSpacing: -0.5, textAlign: 'center',
+  },
+  proSubtitle: {
+    fontSize: 15, color: COLORS.textSub, marginTop: 6, textAlign: 'center',
+  },
+  proActiveBadge: {
+    marginTop: 12,
+    paddingHorizontal: 16, paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+  },
+  proActiveBadgeText: {
+    fontSize: 12, fontWeight: '800', color: '#FFD700', letterSpacing: 1,
+  },
+  planBox: {
+    marginTop: 20,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: 18,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,215,0,0.15)',
+    width: '100%',
+  },
+  planLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1.2,
+    color: COLORS.textSub, marginBottom: 4,
+  },
+  planName:  { fontSize: 18, fontWeight: '800', color: COLORS.text },
+  planPrice: { fontSize: 14, color: '#FFD700', marginTop: 4, fontWeight: '600' },
+
+  sectionLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1.2,
+    color: COLORS.textSub, marginBottom: 12,
+  },
+  featuresGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 10,
+  },
+  featCard: {
+    flex: 1, minWidth: '45%',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  featCardLabel: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 4 },
+  featCardDesc:  { fontSize: 11, color: COLORS.textSub, lineHeight: 16 },
+
+  featRow: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: 12, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: COLORS.border,
+  },
+  featDot:  { width: 7, height: 7, borderRadius: 4, backgroundColor: COLORS.brand },
+  featText: { fontSize: 14, color: COLORS.text, fontWeight: '500' },
+
+  pkgBtn: {
+    borderRadius: RADIUS.lg,
+    padding: 18,
+    alignItems: 'center',
+    borderWidth: 1.5,
+  },
+  pkgTierLabel: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, marginBottom: 4 },
+  pkgBtnText:   { fontSize: 16, fontWeight: '800' },
+  pkgBtnSub:    { fontSize: 12, marginTop: 3 },
 });
 </file>
 
@@ -11186,18 +11880,86 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
+<file path="verly-mobile/android/app/google-services.json">
+{
+  "project_info": {
+    "project_number": "667118060597",
+    "project_id": "verly-app",
+    "storage_bucket": "verly-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:667118060597:android:cbf48c9b0406f6fdb99d7c",
+        "android_client_info": {
+          "package_name": "com.verly.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "667118060597-jtuepc1ti5suakbcn7ec9av4mc22piu7.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.verly.app",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByQHExT4ClAipZPuNu2zeoE7WEAPPG2go"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "667118060597-n41e0frtf4slno15tofa3t83trhfjrdv.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.verly.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+</file>
+
 <file path="verly-mobile/App.js">
 import 'react-native-gesture-handler';
 import React from 'react';
 import { StatusBar } from 'react-native';
-import { AuthProvider } from './src/context/AuthContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { RevenueCatProvider } from './src/context/RevenueCatContext';
 import AppNavigator, { COLORS } from './src/navigation/AppNavigator';
+
+// ─── Wrapper que passa o userId ao RevenueCat depois do login ─────────────────
+function AppWithRevenueCat() {
+  const { user } = useAuth();
+  return (
+    <RevenueCatProvider userId={user?.id}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
+      <AppNavigator />
+    </RevenueCatProvider>
+  );
+}
 
 export default function App() {
   return (
     <AuthProvider>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
-      <AppNavigator />
+      <AppWithRevenueCat />
     </AuthProvider>
   );
 }
@@ -11239,7 +12001,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { useAuth } from '../context/AuthContext';
-import { notificacoesAPI } from '../services/api';
+import { useRevenueCat } from '../context/RevenueCatContext';
 
 import LoginScreen         from '../screens/auth/LoginScreen';
 import RegisterScreen      from '../screens/auth/RegisterScreen';
@@ -11276,52 +12038,129 @@ export const COLORS = {
   green:   '#00C896',
   yellow:  '#FFB300',
   brandDim:'rgba(108,92,231,0.15)',
+  gold:    '#FFD700',
 };
 
-// ── Menu Screen (replaces drawer) ─────────────────────────────────────────
+// ── Menu Screen ───────────────────────────────────────────────────────────────
 function MenuScreen({ navigation }) {
   const { user, logout } = useAuth();
+  const { isPro } = useRevenueCat();
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : '?';
 
-  const items = [
-    { label: 'Histórico',       screen: 'Historico'    },
-    { label: 'Relatório',       screen: 'Relatorio'    },
-    { label: 'Score',           screen: 'Score'        },
-    { label: 'Impulse Control', screen: 'Impulse'      },
-    { label: 'Estatísticas',    screen: 'Estatisticas' },
-    { label: 'Subscrições',     screen: 'Subscricoes'  },
-    { label: 'Notificações',    screen: 'Notificacoes' },
+  const sections = [
+    {
+      label: 'SOCIAL',
+      items: [
+        { label: 'Amigos',             screen: 'Amigos',      icon: '👥' },
+        { label: 'Playlists de compras',screen: 'Playlists',  icon: '🎵' },
+      ],
+    },
+    {
+      label: 'ANÁLISE',
+      items: [
+        { label: 'Estatísticas',  screen: 'Estatisticas', icon: '📊' },
+        { label: 'Relatório',     screen: 'Relatorio',    icon: '📄' },
+        { label: 'Histórico',     screen: 'Historico',    icon: '🕐' },
+      ],
+    },
+    {
+      label: 'FERRAMENTAS',
+      items: [
+        { label: 'Score de compra', screen: 'Score',       icon: '⭐' },
+        {
+          label:  isPro ? 'Modo Pro ✦' : 'Modo Pro',
+          screen: 'Subscricoes',
+          icon:   '👑',
+          isPro:  true,
+        },
+      ],
+    },
+    {
+      label: 'CONTA',
+      items: [
+        { label: 'Notificações', screen: 'Notificacoes', icon: '🔔' },
+      ],
+    },
   ];
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
       <ScrollView contentContainerStyle={{ padding: 24 }}>
+
+        {/* Botão fechar */}
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={{ alignSelf: 'flex-end', marginBottom: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={{ color: COLORS.textSub, fontSize: 22 }}>✕</Text>
+        </TouchableOpacity>
+
         {/* Profile */}
         <View style={mStyles.profileRow}>
           <View style={mStyles.avatar}>
             <Text style={mStyles.avatarText}>{initials}</Text>
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
-            <Text style={mStyles.email}>{user?.email || ''}</Text>
+            <Text style={mStyles.email} numberOfLines={1}>{user?.email || ''}</Text>
           </View>
+          {/* Badge Pro no perfil */}
+          {isPro && (
+            <View style={mStyles.proBadge}>
+              <Text style={mStyles.proBadgeText}>✦ Pro</Text>
+            </View>
+          )}
         </View>
 
         <View style={mStyles.divider} />
 
-        {items.map(item => (
-          <TouchableOpacity
-            key={item.screen}
-            style={mStyles.item}
-            onPress={() => navigation.navigate(item.screen)}
-            activeOpacity={0.7}
-          >
-            <Text style={mStyles.itemText}>{item.label}</Text>
-            <Text style={{ color: COLORS.textSub }}>›</Text>
-          </TouchableOpacity>
+        {/* Secções */}
+        {sections.map(section => (
+          <View key={section.label} style={{ marginBottom: 8 }}>
+            <Text style={mStyles.sectionLabel}>{section.label}</Text>
+            {section.items.map(item => {
+              const isProItem = item.isPro;
+              return (
+                <TouchableOpacity
+                  key={item.screen}
+                  style={[
+                    mStyles.item,
+                    isProItem && !isPro && mStyles.itemProUnlocked,
+                    isProItem && isPro  && mStyles.itemProActive,
+                  ]}
+                  onPress={() => navigation.navigate(item.screen)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <Text style={{ fontSize: 18 }}>{item.icon}</Text>
+                    <Text style={[
+                      mStyles.itemText,
+                      isProItem && isPro && { color: COLORS.gold },
+                    ]}>
+                      {item.label}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {isProItem && !isPro && (
+                      <View style={mStyles.lockBadge}>
+                        <Text style={mStyles.lockBadgeText}>FREE</Text>
+                      </View>
+                    )}
+                    {isProItem && isPro && (
+                      <View style={mStyles.activeBadge}>
+                        <Text style={mStyles.activeBadgeText}>ATIVO</Text>
+                      </View>
+                    )}
+                    <Text style={{ color: COLORS.textSub }}>›</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         ))}
 
         <View style={mStyles.divider} />
@@ -11341,33 +12180,65 @@ const mStyles = StyleSheet.create({
     backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
-  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  email:      { fontSize: 12, color: COLORS.textSub },
-  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  avatarText:  { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:        { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:       { fontSize: 12, color: COLORS.textSub },
+  divider:     { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+
+  sectionLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1.2,
+    color: COLORS.textSub, marginBottom: 4, marginTop: 8,
+  },
+
   item: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+    paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: COLORS.border,
   },
-  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  itemProUnlocked: {
+    // nada especial — mostra FREE badge
+  },
+  itemProActive: {
+    // item dourado quando Pro ativo
+  },
+  itemText: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+
+  proBadge: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+  },
+  proBadgeText: { fontSize: 11, fontWeight: '800', color: COLORS.gold },
+
+  lockBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: COLORS.brandDim,
+    borderWidth: 1, borderColor: COLORS.brand + '50',
+  },
+  lockBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.brand },
+
+  activeBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+  },
+  activeBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.gold },
+
   logout:     { paddingVertical: 14 },
   logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
 });
 
-// ── Tabs ──────────────────────────────────────────────────────────────────
+// ── Tabs ──────────────────────────────────────────────────────────────────────
 function MainTabs({ navigation }) {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: true,
+        headerShown: false,
         headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
         headerTintColor: COLORS.text,
         headerTitleStyle: { fontWeight: '800', fontSize: 18 },
-        headerRight: () => (
-          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
-            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
-          </TouchableOpacity>
-        ),
         tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
         tabBarActiveTintColor: COLORS.brand,
         tabBarInactiveTintColor: COLORS.textSub,
@@ -11375,7 +12246,11 @@ function MainTabs({ navigation }) {
         tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
       })}
     >
-      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{ tabBarLabel: 'Início', headerShown: false }}
+      />
       <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
       <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
       <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
@@ -11384,7 +12259,7 @@ function MainTabs({ navigation }) {
   );
 }
 
-// ── Main Stack ────────────────────────────────────────────────────────────
+// ── Main Stack ────────────────────────────────────────────────────────────────
 function MainStackNav() {
   const commonHeader = {
     headerShown: true,
@@ -11397,10 +12272,10 @@ function MainStackNav() {
   return (
     <MainStack.Navigator screenOptions={{ headerShown: false }}>
       <MainStack.Screen name="Tabs"          component={MainTabs} />
-      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu', presentation: 'modal' }} />
       <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Modo Pro' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
       <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
@@ -11410,7 +12285,7 @@ function MainStackNav() {
   );
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
 function AuthNavigator() {
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
@@ -11420,7 +12295,7 @@ function AuthNavigator() {
   );
 }
 
-// ── Root ──────────────────────────────────────────────────────────────────
+// ── Root ──────────────────────────────────────────────────────────────────────
 export default function AppNavigator() {
   const { user, loading } = useAuth();
 
@@ -13353,135 +14228,6 @@ Run the Application:
 /user_data: Isolated storage for text data and vector indices per user (Privacy First).
 </file>
 
-<file path="verly-mobile/src/context/AuthContext.js">
-/**
- * src/context/AuthContext.js
- * Contexto global de autenticação — com Google Sign-In via Firebase
- */
-
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authAPI, saveToken, removeToken, getToken } from '../services/api';
-
-// ── Google Sign-In ────────────────────────────────────────────────────────────
-let GoogleSignin, statusCodes, firebaseAuth, GoogleAuthProvider;
-
-try {
-  const googleModule = require('@react-native-google-signin/google-signin');
-  GoogleSignin = googleModule.GoogleSignin;
-  statusCodes = googleModule.statusCodes;
-
-  const firebaseModule = require('@react-native-firebase/auth');
-  firebaseAuth = firebaseModule.default;
-  GoogleAuthProvider = firebaseModule.GoogleAuthProvider;
-
-  GoogleSignin.configure({
-    webClientId: '667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com',
-  });
-} catch (_) {
-  console.warn('[AuthContext] Firebase/Google Sign-In não instalado — funcionalidade desativada.');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AuthContext = createContext(null);
-
-export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const token = await getToken();
-        if (token) {
-          const data = await authAPI.me();
-          setUser(data.user);
-        }
-      } catch {
-        await removeToken();
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  // ── Login com Email + Password ────────────────────────────────────────────
-  const login = async (email, password) => {
-    const data = await authAPI.login(email, password);
-    await saveToken(data.access_token);
-    setUser(data.user);
-    return data.user;
-  };
-
-  // ── Registo — NÃO faz login automático, envia email de confirmação ────────
-  const register = async (nome, email, password) => {
-    const data = await authAPI.register(nome, email, password);
-    return { email, message: data.message };
-  };
-
-  // ── Google Sign-In ────────────────────────────────────────────────────────
-  const loginWithGoogle = async () => {
-    if (!GoogleSignin || !firebaseAuth) {
-      throw new Error('Google Sign-In não está configurado.');
-    }
-
-    try {
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-
-      const result = await GoogleSignin.signIn();
-
-      // Compatibilidade com v12+ (retorna { data: { idToken } }) e versões anteriores
-      const idToken = result?.data?.idToken ?? result?.idToken;
-
-      if (!idToken) {
-        throw new Error('Não foi possível obter o token do Google.');
-      }
-
-      const googleCredential = GoogleAuthProvider.credential(idToken);
-      const firebaseUserCred = await firebaseAuth().signInWithCredential(googleCredential);
-
-      const firebaseToken = await firebaseUserCred.user.getIdToken();
-
-      const data = await authAPI.firebaseLogin(firebaseToken);
-      await saveToken(data.access_token);
-      setUser(data.user);
-      return data.user;
-    } catch (err) {
-      if (statusCodes && err.code === statusCodes.SIGN_IN_CANCELLED) {
-        throw new Error('LOGIN_CANCELADO');
-      }
-      throw err;
-    }
-  };
-
-  // ── Logout ────────────────────────────────────────────────────────────────
-  const logout = async () => {
-    await removeToken();
-    setUser(null);
-    try {
-      if (GoogleSignin) await GoogleSignin.signOut();
-    } catch (_) {}
-  };
-
-  // ── Atualizar user no contexto ────────────────────────────────────────────
-  const updateUser = (updates) => {
-    setUser(prev => prev ? { ...prev, ...updates } : prev);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, loginWithGoogle, updateUser }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider');
-  return ctx;
-}
-</file>
-
 <file path="verly-mobile/src/screens/auth/RegisterScreen.js">
 // src/screens/auth/RegisterScreen.js — Redesign Luxury
 import React, { useState, useRef, useEffect } from 'react';
@@ -13630,27 +14376,46 @@ const s = StyleSheet.create({
 </file>
 
 <file path="verly-mobile/src/screens/DashboardScreen.js">
-// src/screens/DashboardScreen.js — Dashboard com gráficos interativos
+// src/screens/DashboardScreen.js — Dashboard com Moti + Reanimated 4
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, Pressable, TouchableOpacity,
-  Animated, Easing, StatusBar, RefreshControl,
-  Modal, TextInput, Alert, StyleSheet, Dimensions,
-  KeyboardAvoidingView, Platform,
+  StatusBar, RefreshControl, Modal, TextInput, Alert,
+  StyleSheet, Dimensions, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+  withDelay,
+  withRepeat,
+  interpolate,
+  Easing,
+  FadeInDown,
+  FadeIn,
+  SlideInDown,
+  ZoomIn,
+  BounceIn,
+} from 'react-native-reanimated';
+import { MotiView, MotiText } from 'moti';
 import * as ImagePicker    from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   Bell, Plus, Search, X, TrendingUp, TrendingDown,
   Receipt, Camera, Upload, FileText, Zap,
-  ChevronRight, AlertCircle, Target, BarChart2,
+  ChevronRight, AlertCircle, Target, BarChart2, Settings,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import { Reveal, Card, Skeleton, SectionHeader, useScalePress } from '../components/UI';
+import {
+  Reveal, Card, Skeleton, SectionHeader,
+  useScalePress, AnimatedListItem, PulseDot,
+} from '../components/UI';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -13663,213 +14428,207 @@ const CHART_COLORS = [
   '#22D4FD', '#EC4899', '#FF7340', '#4ECDC4',
 ];
 
-// ─── Normaliza dados do backend para o formato esperado pelos gráficos ─────────
-// Backend retorna:
-//   categorias: [{ nome, total }]
-//   evolucao:   { labels: ['2025-01', ...], values: [123, ...] }
-//
-// Os gráficos esperam:
-//   porCategoria: [{ categoria, total }]
-//   porMes:       [{ mes: '2025-01', total, num_faturas? }]
-
 function normalizeDashboardData(data) {
   if (!data) return { porCategoria: [], porMes: [] };
-
-  // Categorias: backend usa "nome", gráfico usa "categoria"
   const porCategoria = Array.isArray(data.categorias)
-    ? data.categorias.map(c => ({
-        categoria: c.nome || c.categoria || 'Outros',
-        total:     c.total || 0,
-      }))
+    ? data.categorias.map(c => ({ categoria: c.nome || c.categoria || 'Outros', total: c.total || 0 }))
     : [];
-
-  // Evolução mensal: backend devolve { labels, values }
-  // Precisamos de [{ mes, total }]
   let porMes = [];
   if (data.evolucao?.labels && data.evolucao?.values) {
-    porMes = data.evolucao.labels.map((label, i) => ({
-      mes:   label,
-      total: data.evolucao.values[i] || 0,
-    }));
+    porMes = data.evolucao.labels.map((label, i) => ({ mes: label, total: data.evolucao.values[i] || 0 }));
   }
-
   return { porCategoria, porMes };
 }
 
-// ─── Animated Budget Bar ──────────────────────────────────────────────────────
+// ─── Budget Bar animada com Reanimated 4 ─────────────────────────────────────
 function BudgetBar({ pct = 0, color = C.brand }) {
-  const width = useRef(new Animated.Value(0)).current;
+  const width = useSharedValue(0);
+
   useEffect(() => {
-    Animated.timing(width, {
-      toValue: Math.min(pct, 100),
-      duration: 900, delay: 300,
+    width.value = withDelay(300, withTiming(Math.min(pct, 100), {
+      duration: 900,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
+    }));
   }, [pct]);
-  const widthInterp = width.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${width.value}%`,
+  }));
+
   return (
-    <View style={{ height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' }}>
-      <Animated.View style={{ height: '100%', width: widthInterp, backgroundColor: color, borderRadius: 2 }} />
+    <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+      <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
     </View>
   );
 }
 
-// ─── Barras horizontais animadas com toque ────────────────────────────────────
+// ─── Bar chart interativo com Reanimated 4 ────────────────────────────────────
+function BarItem({ item, idx, onSelect, isSelected, max }) {
+  const val   = item.valor || item.total || 0;
+  const pct   = val / max;
+  const color = CHART_COLORS[idx % CHART_COLORS.length];
+  const BAR_W = W - 80 - SPACE.lg * 2;
+
+  const barWidth  = useSharedValue(4);
+  const bgOpacity = useSharedValue(0);
+  const barHeight = useSharedValue(isSelected ? 7 : 5);
+
+  useEffect(() => {
+    barWidth.value = withDelay(100 + idx * 80, withTiming(Math.max(BAR_W * pct, 4), {
+      duration: 600,
+      easing: Easing.out(Easing.cubic),
+    }));
+  }, [pct]);
+
+  useEffect(() => {
+    bgOpacity.value = withTiming(isSelected ? 1 : 0, { duration: 200 });
+    barHeight.value = withSpring(isSelected ? 8 : 5, { damping: 20, stiffness: 300 });
+  }, [isSelected]);
+
+  const barStyle   = useAnimatedStyle(() => ({ width: barWidth.value, height: barHeight.value }));
+  const rowStyle   = useAnimatedStyle(() => ({ backgroundColor: `${color}${Math.round(bgOpacity.value * 18).toString(16).padStart(2,'0')}` }));
+
+  return (
+    <Animated.View
+      entering={FadeInDown.delay(idx * 60).duration(350).springify()}
+      style={rowStyle}
+    >
+      <Pressable
+        onPress={() => onSelect?.(isSelected ? null : idx)}
+        style={{ borderRadius: 10, padding: 8 }}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Text
+            style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}
+            numberOfLines={1}
+          >
+            {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
+          </Text>
+          <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
+        </View>
+        <View style={{ backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+          <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]} />
+        </View>
+        {isSelected && (
+          <Animated.View entering={FadeIn.duration(200)}>
+            <Text style={[s.microText, { marginTop: 5, color }]}>
+              {Math.round(pct * 100)}% do total gasto
+            </Text>
+          </Animated.View>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function InteractiveBarChart({ items = [], onSelect, selectedIdx }) {
   const max = Math.max(...items.map(i => i.valor || i.total || 0), 1);
-  const BAR_W = W - 80 - (SPACE.lg || 20) * 2;
-
   return (
-    <View style={{ gap: 10 }}>
-      {items.slice(0, 6).map((item, idx) => {
-        const val   = item.valor || item.total || 0;
-        const pct   = val / max;
-        const color = CHART_COLORS[idx % CHART_COLORS.length];
-        const isSelected = selectedIdx === idx;
-        const anim  = useRef(new Animated.Value(0)).current;
-
-        useEffect(() => {
-          Animated.timing(anim, {
-            toValue: pct,
-            duration: 600 + idx * 80,
-            delay: 100,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: false,
-          }).start();
-        }, [pct]);
-
-        const animW = anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [4, Math.max(BAR_W * pct, 4)],
-        });
-
-        return (
-          <Pressable
-            key={idx}
-            onPress={() => onSelect?.(isSelected ? null : idx)}
-            style={[
-              {
-                borderRadius: 10,
-                padding: 8,
-                backgroundColor: isSelected ? color + '12' : 'transparent',
-              },
-            ]}
-          >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]} numberOfLines={1}>
-                {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
-              </Text>
-              <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
-            </View>
-            <View style={{ height: isSelected ? 7 : 5, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-              <Animated.View style={{
-                height: '100%',
-                width: animW,
-                backgroundColor: color,
-                borderRadius: 4,
-              }} />
-            </View>
-            {isSelected && (
-              <Text style={[s.microText, { marginTop: 5, color: color }]}>
-                {Math.round(pct * 100)}% do total gasto
-              </Text>
-            )}
-          </Pressable>
-        );
-      })}
+    <View style={{ gap: 6 }}>
+      {items.slice(0, 6).map((item, idx) => (
+        <BarItem key={idx} item={item} idx={idx} onSelect={onSelect} isSelected={selectedIdx === idx} max={max} />
+      ))}
     </View>
   );
 }
 
-// ─── Gráfico mensal interativo ────────────────────────────────────────────────
+// ─── Monthly chart ────────────────────────────────────────────────────────────
+function MonthBar({ item, idx, total, onPress, isSelected }) {
+  const max = total;
+  const pct = (item.total || 0) / max;
+  const CHART_H = 72;
+  const h = Math.max(pct * CHART_H, 4);
+  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
+  const label = meses[m] ?? item.mes?.slice(-2) ?? '';
+  const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '55';
+
+  const barH    = useSharedValue(0);
+  const opacity = useSharedValue(isSelected ? 1 : 0.6);
+
+  useEffect(() => {
+    barH.value    = withDelay(150 + idx * 60, withTiming(h, { duration: 500, easing: Easing.out(Easing.cubic) }));
+  }, [h]);
+
+  useEffect(() => {
+    opacity.value = withTiming(isSelected ? 1 : 0.6, { duration: 200 });
+  }, [isSelected]);
+
+  const barStyle = useAnimatedStyle(() => ({ height: barH.value, opacity: opacity.value }));
+
+  return (
+    <Pressable
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 36 }}
+      onPress={onPress}
+    >
+      {isSelected ? (
+        <Animated.View entering={FadeIn.duration(150)}>
+          <Text style={[s.microText, { fontSize: 9, marginBottom: 3, color: CHART_COLORS[0], fontWeight: '800' }]}>
+            {(item.total || 0) >= 1000 ? `${((item.total) / 1000).toFixed(1)}k` : fmt(item.total || 0)}€
+          </Text>
+        </Animated.View>
+      ) : (
+        <Text style={{ fontSize: 9, marginBottom: 3, opacity: 0 }}>-</Text>
+      )}
+      <Animated.View style={[{ width: '75%', backgroundColor: color, borderRadius: 4, marginBottom: 6 }, barStyle]} />
+      <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
   if (!data.length) return null;
   const max = Math.max(...data.map(d => d.total || 0), 1);
-  const CHART_H = 72;
   const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
   return (
     <View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: CHART_H + 30 }}>
-        {data.slice(-6).map((item, idx) => {
-          const pct   = (item.total || 0) / max;
-          const h     = Math.max(pct * CHART_H, 4);
-          const m     = parseInt((item.mes || '').split('-')[1], 10) - 1;
-          const label = meses[m] ?? item.mes?.slice(-2) ?? '';
-          const isSelected = selectedMonth === idx;
-          const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '60';
-          const anim  = useRef(new Animated.Value(0)).current;
-
-          useEffect(() => {
-            Animated.timing(anim, {
-              toValue: h,
-              duration: 500 + idx * 60,
-              delay: 150,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: false,
-            }).start();
-          }, [h]);
-
-          return (
-            <Pressable
-              key={idx}
-              style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 30 }}
-              onPress={() => onMonthSelect?.(isSelected ? null : idx)}
-            >
-              {isSelected && (
-                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, color: CHART_COLORS[0], fontWeight: '800' }]}>
-                  {(item.total || 0) >= 1000
-                    ? `${((item.total) / 1000).toFixed(1)}k`
-                    : fmt(item.total || 0)}€
-                </Text>
-              )}
-              {!isSelected && (
-                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, opacity: 0 }]}>-</Text>
-              )}
-              <Animated.View style={{
-                width: '80%',
-                height: anim,
-                backgroundColor: color,
-                borderRadius: 4,
-                marginBottom: 5,
-              }} />
-              <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
-                {label}
-              </Text>
-            </Pressable>
-          );
-        })}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5 }}>
+        {data.slice(-6).map((item, idx) => (
+          <MonthBar
+            key={idx} item={item} idx={idx} total={max}
+            onPress={() => onMonthSelect?.(selectedMonth === idx ? null : idx)}
+            isSelected={selectedMonth === idx}
+          />
+        ))}
       </View>
-
       {selectedMonth != null && data[data.length - 6 + selectedMonth] && (() => {
         const item = data[data.length - 6 + selectedMonth];
-        const m    = parseInt((item.mes || '').split('-')[1], 10) - 1;
+        const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
         return (
-          <View style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
+          <Animated.View entering={FadeInDown.duration(250)} style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
             <Text style={[s.microText, { color: C.text, fontWeight: '800' }]}>
               {meses[m] || item.mes} — {fmt(item.total)} €
             </Text>
             {item.num_faturas != null && (
-              <Text style={[s.microText, { marginTop: 3 }]}>
-                {item.num_faturas} fatura(s) registada(s)
-              </Text>
+              <Text style={[s.microText, { marginTop: 3 }]}>{item.num_faturas} fatura(s) registada(s)</Text>
             )}
-          </View>
+          </Animated.View>
         );
       })()}
     </View>
   );
 }
 
-// ─── Secção de gráficos interativos (substitui QuickActions) ──────────────────
+// ─── Charts section ───────────────────────────────────────────────────────────
 function ChartsSection({ porCategoria, porMes, navigation }) {
-  const [tab, setTab]              = useState('categorias');
-  const [selectedBar, setSelectedBar]     = useState(null);
+  const [tab, setTab] = useState('categorias');
+  const [selectedBar, setSelectedBar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
 
   const hasCats  = Array.isArray(porCategoria) && porCategoria.length > 0;
-  const hasMeses = Array.isArray(porMes)        && porMes.length > 0;
+  const hasMeses = Array.isArray(porMes) && porMes.length > 0;
+
+  const tabIndicator = useSharedValue(tab === 'categorias' ? 0 : 1);
+
+  const handleTab = (t) => {
+    setTab(t);
+    tabIndicator.value = withSpring(t === 'categorias' ? 0 : 1, { damping: 22, stiffness: 300 });
+    if (t === 'categorias') setSelectedBar(null);
+    else setSelectedMonth(null);
+  };
 
   if (!hasCats && !hasMeses) {
     return (
@@ -13877,16 +14636,9 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
         <SectionHeader title="Os teus gastos" />
         <View style={[s.card, { padding: 24, alignItems: 'center', gap: 12 }]}>
           <BarChart2 size={32} color={C.textMid} />
-          <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>
-            Ainda sem dados suficientes
-          </Text>
-          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>
-            Adiciona as tuas primeiras faturas para ver gráficos aqui
-          </Text>
-          <Pressable
-            onPress={() => navigation?.navigate?.('Faturas')}
-            style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}
-          >
+          <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>Ainda sem dados suficientes</Text>
+          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>Adiciona as tuas primeiras faturas para ver gráficos aqui</Text>
+          <Pressable onPress={() => navigation?.navigate?.('Faturas')} style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: C.brand }}>+ Adicionar fatura</Text>
           </Pressable>
         </View>
@@ -13900,10 +14652,10 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
 
   let tendencia = null;
   if (hasMeses && porMes.length >= 2) {
-    const last  = porMes[porMes.length - 1]?.total || 0;
-    const prev  = porMes[porMes.length - 2]?.total || 0;
-    const diff  = last - prev;
-    const pct   = prev > 0 ? Math.abs(diff / prev * 100) : 0;
+    const last = porMes[porMes.length - 1]?.total || 0;
+    const prev = porMes[porMes.length - 2]?.total || 0;
+    const diff = last - prev;
+    const pct  = prev > 0 ? Math.abs(diff / prev * 100) : 0;
     tendencia = { diff, pct: Math.round(pct), subiu: diff > 0 };
   }
 
@@ -13911,98 +14663,62 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
     <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <SectionHeader title="Os teus gastos" />
       <View style={s.card}>
-
         {/* Tabs */}
         <View style={{ flexDirection: 'row', padding: 12, gap: 8 }}>
           {hasCats && (
-            <Pressable
-              onPress={() => { setTab('categorias'); setSelectedBar(null); }}
-              style={[s.tab, tab === 'categorias' && s.tabActive]}
-            >
-              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>
-                Por categoria
-              </Text>
+            <Pressable onPress={() => handleTab('categorias')} style={[s.tab, tab === 'categorias' && s.tabActive]}>
+              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>Por categoria</Text>
             </Pressable>
           )}
           {hasMeses && (
-            <Pressable
-              onPress={() => { setTab('mensal'); setSelectedMonth(null); }}
-              style={[s.tab, tab === 'mensal' && s.tabActive]}
-            >
-              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>
-                Evolução
-              </Text>
+            <Pressable onPress={() => handleTab('mensal')} style={[s.tab, tab === 'mensal' && s.tabActive]}>
+              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>Evolução</Text>
             </Pressable>
           )}
         </View>
 
-        {/* Tab: Categorias */}
         {tab === 'categorias' && hasCats && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
             {topCat && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: CHART_COLORS[0] }} />
                 <Text style={[s.microText, { flex: 1 }]}>
-                  A tua categoria principal é{' '}
-                  <Text style={{ color: C.text, fontWeight: '800' }}>
-                    {topCat.categoria || topCat.label}
-                  </Text>{' '}
-                  com{' '}
-                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>
-                    {fmt(topCat.valor || topCat.total)} €
-                  </Text>
+                  Categoria principal:{' '}
+                  <Text style={{ color: C.text, fontWeight: '800' }}>{topCat.categoria || topCat.label}</Text>
+                  {' '}com{' '}
+                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>{fmt(topCat.valor || topCat.total)} €</Text>
                 </Text>
               </View>
             )}
-
-            <InteractiveBarChart
-              items={porCategoria}
-              onSelect={setSelectedBar}
-              selectedIdx={selectedBar}
-            />
-
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
-              Toca numa categoria para ver detalhes
-            </Text>
-          </View>
+            <InteractiveBarChart items={porCategoria} onSelect={setSelectedBar} selectedIdx={selectedBar} />
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca numa categoria para ver detalhes</Text>
+          </Animated.View>
         )}
 
-        {/* Tab: Mensal */}
         {tab === 'mensal' && hasMeses && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
             {tendencia && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
-                {tendencia.subiu
-                  ? <TrendingUp size={14} color={C.red} />
-                  : <TrendingDown size={14} color={C.green} />
-                }
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+                {tendencia.subiu ? <TrendingUp size={14} color={C.red} /> : <TrendingDown size={14} color={C.green} />}
                 <Text style={[s.microText, { flex: 1 }]}>
                   Este mês gastaste{' '}
                   <Text style={{ color: tendencia.subiu ? C.red : C.green, fontWeight: '800' }}>
                     {tendencia.subiu ? '+' : '-'}{tendencia.pct}%
-                  </Text>{' '}
-                  {tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
+                  </Text>
+                  {' '}{tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
                 </Text>
               </View>
             )}
-
-            <MonthlyChart
-              data={porMes}
-              onMonthSelect={setSelectedMonth}
-              selectedMonth={selectedMonth}
-            />
-
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
-              Toca num mês para ver o valor
-            </Text>
-          </View>
+            <MonthlyChart data={porMes} onMonthSelect={setSelectedMonth} selectedMonth={selectedMonth} />
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca num mês para ver o valor</Text>
+          </Animated.View>
         )}
       </View>
     </Reveal>
   );
 }
 
-// ─── Hero Card ────────────────────────────────────────────────────────────────
+// ─── HeroCard ─────────────────────────────────────────────────────────────────
 function HeroCard({ data, onSearchPress }) {
   const spent    = data?.total_gasto || 0;
   const budget   = data?.orcamento   || 0;
@@ -14010,19 +14726,29 @@ function HeroCard({ data, onSearchPress }) {
   const barColor = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
 
   return (
-    <Reveal delay={60} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}>
+    <Animated.View
+      entering={FadeInDown.delay(60).duration(450).springify()}
+      style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}
+    >
       <View style={[s.card, { padding: 20 }]}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View>
             <Text style={s.label}>Gasto este mês</Text>
-            <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
-            {budget > 0 && (
-              <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>
-            )}
+            <MotiView
+              key={spent}
+              from={{ opacity: 0, translateY: 6 }}
+              animate={{ opacity: 1, translateY: 0 }}
+              transition={{ type: 'spring', damping: 18, delay: 80 }}
+            >
+              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
+            </MotiView>
+            {budget > 0 && <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>}
           </View>
-          <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
-            <Search size={17} color={C.textMid} />
-          </Pressable>
+          <Animated.View entering={FadeIn.delay(200)}>
+            <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
+              <Search size={17} color={C.textMid} />
+            </Pressable>
+          </Animated.View>
         </View>
 
         {budget > 0 && (
@@ -14037,56 +14763,51 @@ function HeroCard({ data, onSearchPress }) {
           </View>
         )}
       </View>
-    </Reveal>
+    </Animated.View>
   );
 }
 
-// ─── Metrics Row ──────────────────────────────────────────────────────────────
+// ─── MetricsRow ───────────────────────────────────────────────────────────────
 function MetricsRow({ data }) {
   const comparacao = data?.comparacao || {};
   const variacao   = comparacao.variacao_pct;
   const subiu      = comparacao.subiu;
 
   const metrics = [
-    {
-      label: 'Faturas',
-      value: data?.num_faturas ?? '—',
-      icon:  <Receipt size={14} color={C.brand} />,
-      color: C.brand,
-    },
-    {
-      label: 'Alertas',
-      value: data?.alertas?.length ?? 0,
-      icon:  <AlertCircle size={14} color={data?.alertas?.length ? C.red : C.green} />,
-      color: data?.alertas?.length ? C.red : C.green,
-    },
-    {
-      label: 'Vs. mês ant.',
-      value: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—',
-      icon:  subiu
-        ? <TrendingUp size={14} color={C.red} />
-        : <TrendingDown size={14} color={C.green} />,
-      color: subiu ? C.red : C.green,
-    },
+    { label: 'Faturas',    value: data?.num_faturas ?? '—',                                icon: <Receipt size={14} color={C.brand} />,                                                            color: C.brand },
+    { label: 'Alertas',    value: data?.alertas?.length ?? 0,                              icon: <AlertCircle size={14} color={data?.alertas?.length ? C.red : C.green} />,                        color: data?.alertas?.length ? C.red : C.green },
+    { label: 'Vs. mês',   value: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—', icon: subiu ? <TrendingUp size={14} color={C.red} /> : <TrendingDown size={14} color={C.green} />, color: subiu ? C.red : C.green },
   ];
 
   return (
-    <Reveal delay={100} style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+    <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       {metrics.map((m, i) => (
-        <View key={i} style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}>
+        <Animated.View
+          key={i}
+          entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
+          style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
+        >
           {m.icon}
-          <Text style={[s.metricVal, { color: m.color }]}>{m.value}</Text>
+          <MotiText
+            key={m.value}
+            from={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', damping: 16 }}
+            style={[s.metricVal, { color: m.color }]}
+          >
+            {m.value}
+          </MotiText>
           <Text style={s.label}>{m.label}</Text>
-        </View>
+        </Animated.View>
       ))}
-    </Reveal>
+    </View>
   );
 }
 
-// ─── Insights Verly (texto + mood) ───────────────────────────────────────────
+// ─── InsightsSection ──────────────────────────────────────────────────────────
 function InsightsSection({ mood, feed }) {
-  const hasMood     = !!mood?.frase;
-  const feedItems   = Array.isArray(feed)
+  const hasMood   = !!mood?.frase;
+  const feedItems = Array.isArray(feed)
     ? feed.map(item => typeof item === 'object' ? (item.texto || '') : String(item)).filter(Boolean)
     : [];
 
@@ -14107,16 +14828,15 @@ function InsightsSection({ mood, feed }) {
             </Text>
           </View>
         )}
-
         {feedItems.length > 0 && (
           <View style={{ padding: 16, gap: 10 }}>
             {feedItems.slice(0, 3).map((item, i) => (
-              <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 6 }} />
-                <Text style={[s.bodyText, { flex: 1, color: C.textMid, lineHeight: 20, fontWeight: '500' }]}>
-                  {item}
-                </Text>
-              </View>
+              <AnimatedListItem key={i} index={i}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 6 }} />
+                  <Text style={[s.bodyText, { flex: 1, color: C.textMid, lineHeight: 20, fontWeight: '500' }]}>{item}</Text>
+                </View>
+              </AnimatedListItem>
             ))}
           </View>
         )}
@@ -14125,24 +14845,27 @@ function InsightsSection({ mood, feed }) {
   );
 }
 
-// ─── Alertas accordion ────────────────────────────────────────────────────────
+// ─── AlertsPanel ─────────────────────────────────────────────────────────────
 function AlertsPanel({ visible, alertas = [] }) {
-  const maxH = useRef(new Animated.Value(0)).current;
-  const opac = useRef(new Animated.Value(0)).current;
-  const ITEM_H = 64;
+  const height  = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  const ITEM_H  = 64;
 
   useEffect(() => {
     const target = visible ? alertas.length * ITEM_H + 16 : 0;
-    Animated.parallel([
-      Animated.timing(maxH, { toValue: target, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(opac, { toValue: visible ? 1 : 0, duration: 220, useNativeDriver: false }),
-    ]).start();
+    height.value  = withTiming(target,        { duration: 280, easing: Easing.out(Easing.cubic) });
+    opacity.value = withTiming(visible ? 1 : 0, { duration: 220 });
   }, [visible]);
+
+  const panelStyle = useAnimatedStyle(() => ({
+    maxHeight: height.value,
+    opacity:   opacity.value,
+  }));
 
   if (!alertas.length) return null;
 
   return (
-    <Animated.View style={{ overflow: 'hidden', maxHeight: maxH, opacity: opac, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+    <Animated.View style={[{ overflow: 'hidden', marginHorizontal: SPACE.lg, marginBottom: 14 }, panelStyle]}>
       <View style={s.card}>
         {alertas.map((a, i) => (
           <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: i < alertas.length - 1 ? 1 : 0, borderBottomColor: C.border }}>
@@ -14161,7 +14884,7 @@ function AlertsPanel({ visible, alertas = [] }) {
   );
 }
 
-// ─── Faturas recentes ─────────────────────────────────────────────────────────
+// ─── RecentFaturas ────────────────────────────────────────────────────────────
 function RecentFaturas({ faturas = [], navigation }) {
   if (!faturas.length) return null;
   return (
@@ -14169,58 +14892,56 @@ function RecentFaturas({ faturas = [], navigation }) {
       <SectionHeader title="Últimas faturas" action="Ver todas" onAction={() => navigation.navigate('Faturas')} />
       <View style={s.card}>
         {faturas.map((f, i) => (
-          <Pressable
-            key={f.id}
-            onPress={() => navigation.navigate('FaturaDetalhe', { faturaId: f.id })}
-            style={({ pressed }) => [{
-              flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
-              borderBottomWidth: i < faturas.length - 1 ? 1 : 0, borderBottomColor: C.border,
-              opacity: pressed ? 0.75 : 1,
-            }]}
-          >
-            <View style={[s.iconBox, { backgroundColor: C.brandDim }]}>
-              <Receipt size={15} color={C.brand} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.bodyText} numberOfLines={1}>{f.loja}</Text>
-              <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
-            </View>
-            <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
-            <ChevronRight size={13} color={C.textMid} />
-          </Pressable>
+          <AnimatedListItem key={f.id} index={i}>
+            <Pressable
+              onPress={() => navigation.navigate('FaturaDetalhe', { faturaId: f.id })}
+              style={({ pressed }) => [{
+                flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
+                borderBottomWidth: i < faturas.length - 1 ? 1 : 0, borderBottomColor: C.border,
+                opacity: pressed ? 0.7 : 1,
+              }]}
+            >
+              <View style={[s.iconBox, { backgroundColor: C.brandDim }]}>
+                <Receipt size={15} color={C.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.bodyText} numberOfLines={1}>{f.loja}</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+              </View>
+              <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+              <ChevronRight size={13} color={C.textMid} />
+            </Pressable>
+          </AnimatedListItem>
         ))}
       </View>
     </Reveal>
   );
 }
 
-// ─── Upload Sheet ─────────────────────────────────────────────────────────────
-// CORRIGIDO: usa faturasAPI.upload em vez de fetch direto, e chama onUploaded após sucesso
+// ─── UploadSheet com Reanimated 4 ────────────────────────────────────────────
 function UploadSheet({ visible, onClose, onUploaded }) {
-  const slideY  = useRef(new Animated.Value(400)).current;
-  const overlay = useRef(new Animated.Value(0)).current;
+  const slideY  = useSharedValue(400);
+  const overlay = useSharedValue(0);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      Animated.parallel([
-        Animated.spring(slideY,  { toValue: 0, damping: 26, stiffness: 180, useNativeDriver: true }),
-        Animated.timing(overlay, { toValue: 1, duration: 200, useNativeDriver: true }),
-      ]).start();
+      slideY.value  = withSpring(0, { damping: 26, stiffness: 180 });
+      overlay.value = withTiming(1, { duration: 200 });
     } else {
-      Animated.parallel([
-        Animated.timing(slideY,  { toValue: 400, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-        Animated.timing(overlay, { toValue: 0,   duration: 200, useNativeDriver: true }),
-      ]).start();
+      slideY.value  = withTiming(400, { duration: 220, easing: Easing.in(Easing.quad) });
+      overlay.value = withTiming(0, { duration: 200 });
     }
   }, [visible]);
+
+  const sheetStyle   = useAnimatedStyle(() => ({ transform: [{ translateY: slideY.value }] }));
+  const overlayStyle = useAnimatedStyle(() => ({ opacity: overlay.value }));
 
   const upload = async (uri, name, type) => {
     setUploading(true);
     try {
       await faturasAPI.upload(uri, name, type);
       onClose();
-      // Pequeno delay para dar tempo ao backend de processar antes do reload
       setTimeout(() => { onUploaded(); }, 500);
     } catch (err) {
       Alert.alert('Erro no upload', err.message || 'Não foi possível fazer upload');
@@ -14233,26 +14954,17 @@ function UploadSheet({ visible, onClose, onUploaded }) {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return Alert.alert('Permissão', 'Câmara necessária');
     const r = await ImagePicker.launchCameraAsync({ quality: 0.85 });
-    if (!r.canceled && r.assets?.[0]) {
-      const a = r.assets[0];
-      await upload(a.uri, a.fileName || 'foto.jpg', 'image/jpeg');
-    }
+    if (!r.canceled && r.assets?.[0]) { const a = r.assets[0]; await upload(a.uri, a.fileName || 'foto.jpg', 'image/jpeg'); }
   };
 
   const pickGallery = async () => {
     const r = await ImagePicker.launchImageLibraryAsync({ quality: 0.85 });
-    if (!r.canceled && r.assets?.[0]) {
-      const a = r.assets[0];
-      await upload(a.uri, a.fileName || 'galeria.jpg', 'image/jpeg');
-    }
+    if (!r.canceled && r.assets?.[0]) { const a = r.assets[0]; await upload(a.uri, a.fileName || 'galeria.jpg', 'image/jpeg'); }
   };
 
   const pickFile = async () => {
     const r = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'text/plain', 'image/*'] });
-    if (!r.canceled && r.assets?.[0]) {
-      const f = r.assets[0];
-      await upload(f.uri, f.name, f.mimeType || 'application/octet-stream');
-    }
+    if (!r.canceled && r.assets?.[0]) { const f = r.assets[0]; await upload(f.uri, f.name, f.mimeType || 'application/octet-stream'); }
   };
 
   const OPTIONS = [
@@ -14263,33 +14975,42 @@ function UploadSheet({ visible, onClose, onUploaded }) {
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', opacity: overlay, justifyContent: 'flex-end' }}>
+      <Animated.View style={[{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }, overlayStyle]}>
         <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
-        <Animated.View style={[s.sheet, { transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[s.sheet, sheetStyle]}>
           <View style={s.sheetHandle} />
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
             <Text style={s.sheetTitle}>Adicionar fatura</Text>
             <Pressable onPress={onClose} hitSlop={10}><X size={18} color={C.textMid} /></Pressable>
           </View>
+
           {uploading ? (
-            <View style={{ alignItems: 'center', paddingVertical: 36, gap: 12 }}>
-              <Zap size={26} color={C.brand} />
+            <MotiView
+              from={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              style={{ alignItems: 'center', paddingVertical: 36, gap: 12 }}
+            >
+              <MotiView
+                from={{ rotate: '0deg' }}
+                animate={{ rotate: '360deg' }}
+                transition={{ type: 'timing', duration: 1200, loop: true, repeatReverse: false }}
+              >
+                <Zap size={28} color={C.brand} />
+              </MotiView>
               <Text style={[s.label, { textAlign: 'center' }]}>A processar com IA…</Text>
-            </View>
+            </MotiView>
           ) : (
             <View style={{ flexDirection: 'row', gap: 10 }}>
-              {OPTIONS.map(({ label, sub, Icon, color, fn }) => (
-                <Pressable
-                  key={label}
-                  onPress={fn}
-                  style={({ pressed }) => [s.uploadOption, { opacity: pressed ? 0.75 : 1 }]}
-                >
-                  <View style={{ width: 48, height: 48, borderRadius: RADIUS.md, backgroundColor: color + '20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                    <Icon size={22} color={color} />
-                  </View>
-                  <Text style={[s.bodyText, { fontSize: 13 }]}>{label}</Text>
-                  <Text style={[s.microText, { fontSize: 11, marginTop: 2 }]}>{sub}</Text>
-                </Pressable>
+              {OPTIONS.map(({ label, sub, Icon, color, fn }, i) => (
+                <Animated.View key={label} entering={FadeInDown.delay(i * 60).springify()} style={{ flex: 1 }}>
+                  <Pressable onPress={fn} style={({ pressed }) => [s.uploadOption, { opacity: pressed ? 0.75 : 1 }]}>
+                    <View style={{ width: 50, height: 50, borderRadius: RADIUS.md, backgroundColor: color + '18', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                      <Icon size={22} color={color} />
+                    </View>
+                    <Text style={[s.bodyText, { fontSize: 13 }]}>{label}</Text>
+                    <Text style={[s.microText, { fontSize: 11, marginTop: 2 }]}>{sub}</Text>
+                  </Pressable>
+                </Animated.View>
               ))}
             </View>
           )}
@@ -14299,37 +15020,36 @@ function UploadSheet({ visible, onClose, onUploaded }) {
   );
 }
 
-// ─── Search Overlay ───────────────────────────────────────────────────────────
+// ─── SearchOverlay ────────────────────────────────────────────────────────────
 function SearchOverlay({ visible, onClose, navigation }) {
-  const opacity = useRef(new Animated.Value(0)).current;
+  const opacity = useSharedValue(0);
   const [q, setQ]             = useState('');
   const [results, setResults] = useState([]);
   const timer = useRef(null);
 
   useEffect(() => {
-    Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+    opacity.value = withTiming(visible ? 1 : 0, { duration: 200 });
     if (!visible) { setQ(''); setResults([]); }
   }, [visible]);
+
+  const overlayStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   const search = (text) => {
     setQ(text);
     clearTimeout(timer.current);
     if (!text.trim()) return setResults([]);
     timer.current = setTimeout(async () => {
-      try {
-        const d = await faturasAPI.listar({ q: text });
-        setResults(d.faturas || []);
-      } catch (_) {}
+      try { const d = await faturasAPI.listar({ q: text }); setResults(d.faturas || []); } catch (_) {}
     }, 320);
   };
 
   if (!visible) return null;
 
   return (
-    <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: C.bg, zIndex: 9999, opacity }]}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+    <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: C.bg, zIndex: 9999 }, overlayStyle]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={{ flex: 1, padding: SPACE.lg, paddingTop: 56 }}>
-          <View style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16 }]}>
+          <Animated.View entering={FadeInDown.duration(250)} style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16 }]}>
             <Search size={16} color={C.textMid} />
             <TextInput
               autoFocus value={q} onChangeText={search}
@@ -14337,23 +15057,26 @@ function SearchOverlay({ visible, onClose, navigation }) {
               style={{ flex: 1, fontSize: FONT.md, color: C.text, paddingVertical: 10 }}
             />
             <Pressable onPress={onClose} hitSlop={8}><X size={16} color={C.textMid} /></Pressable>
-          </View>
+          </Animated.View>
           <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-            {results.map(f => (
-              <Pressable
-                key={f.id}
-                onPress={() => { onClose(); navigation.navigate('FaturaDetalhe', { faturaId: f.id }); }}
-                style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, opacity: pressed ? 0.7 : 1 }]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={s.bodyText}>{f.loja}</Text>
-                  <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
-                </View>
-                <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
-              </Pressable>
+            {results.map((f, i) => (
+              <AnimatedListItem key={f.id} index={i}>
+                <Pressable
+                  onPress={() => { onClose(); navigation.navigate('FaturaDetalhe', { faturaId: f.id }); }}
+                  style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.bodyText}>{f.loja}</Text>
+                    <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+                  </View>
+                  <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+                </Pressable>
+              </AnimatedListItem>
             ))}
             {!results.length && q.length > 1 && (
-              <Text style={[s.label, { textAlign: 'center', marginTop: 40 }]}>Sem resultados para "{q}"</Text>
+              <Animated.View entering={FadeIn.duration(200)}>
+                <Text style={[s.label, { textAlign: 'center', marginTop: 40 }]}>Sem resultados para "{q}"</Text>
+              </Animated.View>
             )}
           </ScrollView>
         </View>
@@ -14362,21 +15085,40 @@ function SearchOverlay({ visible, onClose, navigation }) {
   );
 }
 
-// ─── FAB ──────────────────────────────────────────────────────────────────────
+// ─── FAB com spring bounce ────────────────────────────────────────────────────
 function FAB({ onPress }) {
-  const scale = useRef(new Animated.Value(0)).current;
-  const { onPressIn, onPressOut, scale: pressScale } = useScalePress(0.92);
+  const scale      = useSharedValue(0);
+  const pressScale = useSharedValue(1);
+  const rotate     = useSharedValue(0);
 
   useEffect(() => {
     setTimeout(() => {
-      Animated.spring(scale, { toValue: 1, speed: 12, bounciness: 14, useNativeDriver: true }).start();
+      scale.value = withSpring(1, { damping: 12, stiffness: 180 });
     }, 400);
   }, []);
 
+  const onPressIn  = () => {
+    pressScale.value = withSpring(0.90, { damping: 20, stiffness: 400 });
+    rotate.value     = withTiming(45, { duration: 150 });
+  };
+  const onPressOut = () => {
+    pressScale.value = withSpring(1,    { damping: 18, stiffness: 300 });
+    rotate.value     = withTiming(0,    { duration: 150 });
+  };
+
+  const fabStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: scale.value * pressScale.value },
+      { rotate: `${rotate.value}deg` },
+    ],
+  }));
+
   return (
-    <Animated.View style={[s.fab, { transform: [{ scale: Animated.multiply(scale, pressScale) }] }]}>
+    <Animated.View style={[s.fab, fabStyle]}>
       <Pressable
-        onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        onPress={onPress}
         style={{ width: '100%', height: '100%', borderRadius: RADIUS.lg, justifyContent: 'center', alignItems: 'center' }}
       >
         <Plus size={22} color="#fff" strokeWidth={2.5} />
@@ -14386,57 +15128,77 @@ function FAB({ onPress }) {
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ user, alertas, showAlerts, onBellPress, insets }) {
-  const dotScale = useRef(new Animated.Value(0)).current;
+function Header({ user, alertas, showAlerts, onBellPress, onUploadPress, navigation }) {
+  const dotScale  = useSharedValue(0);
   const hasAlerts = alertas?.length > 0;
 
   useEffect(() => {
     if (hasAlerts) {
       setTimeout(() => {
-        Animated.spring(dotScale, { toValue: 1, speed: 14, bounciness: 14, useNativeDriver: true }).start();
-      }, 500);
+        dotScale.value = withSpring(1, { damping: 12, stiffness: 200 });
+      }, 600);
     }
   }, [hasAlerts]);
 
-  return (
-    <Reveal delay={0} style={{
-      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-      paddingHorizontal: SPACE.lg,
-      paddingTop: SPACE.sm,
-      paddingBottom: 6,
-    }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={s.avatar}>
-          <Text style={s.avatarText}>{initials(user?.nome)}</Text>
-        </View>
-        <View>
-          <Text style={s.microText}>Olá,</Text>
-          <Text style={[s.bodyText, { fontWeight: '800', fontSize: FONT.lg }]}>
-            {(user?.nome || '').split(' ')[0] || 'Utilizador'}
-          </Text>
-        </View>
-      </View>
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: dotScale.value }],
+  }));
 
+  const { animStyle: bellStyle, onPressIn: bellIn, onPressOut: bellOut } = useScalePress(0.88);
+
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(380).springify()}
+      style={{
+        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+        paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: 6,
+      }}
+    >
+      {/* Esquerda — Definições */}
       <Pressable
-        onPress={onBellPress}
-        style={[s.iconBtn, showAlerts && { backgroundColor: C.brandDim, borderColor: C.brand }]}
+        onPress={() => navigation.navigate('Configuracoes')}
+        style={s.iconBtn}
+        hitSlop={8}
       >
-        <Bell size={17} color={hasAlerts ? C.red : C.textMid} />
-        {hasAlerts && (
-          <Animated.View style={[s.dot, { transform: [{ scale: dotScale }] }]} />
-        )}
+        <Text style={{ fontSize: 18 }}>⚙️</Text>
       </Pressable>
-    </Reveal>
+
+      {/* Centro — Logo */}
+      <Animated.View entering={FadeIn.delay(100).duration(300)} style={{ alignItems: 'center' }}>
+        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+      </Animated.View>
+
+      {/* Direita — + e ☰ */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {/* Botão + */}
+        <Pressable
+          onPress={onUploadPress}
+          style={[s.iconBtn, { backgroundColor: C.brand, borderColor: C.brand }]}
+          hitSlop={4}
+        >
+          <Plus size={17} color="#fff" strokeWidth={2.5} />
+        </Pressable>
+
+        {/* Botão ☰ menu lateral */}
+        <Pressable
+          onPress={() => navigation.navigate('Menu')}
+          style={s.iconBtn}
+          hitSlop={4}
+        >
+          <Text style={{ color: C.text, fontSize: 17, fontWeight: '700' }}>☰</Text>
+        </Pressable>
+      </View>
+    </Animated.View>
   );
 }
 
-// ─── Loading ──────────────────────────────────────────────────────────────────
+// ─── Loading skeleton ─────────────────────────────────────────────────────────
 function LoadingSkeleton() {
   return (
     <View style={{ gap: 14, paddingHorizontal: SPACE.lg, marginTop: 12 }}>
       <Skeleton height={130} radius={RADIUS.lg} />
       <View style={{ flexDirection: 'row', gap: 10 }}>
-        {[1, 2, 3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
+        {[1,2,3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
       </View>
       <Skeleton height={200} radius={RADIUS.lg} />
       <Skeleton height={140} radius={RADIUS.lg} />
@@ -14445,7 +15207,7 @@ function LoadingSkeleton() {
 }
 
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
-export default function DashboardScreen({ navigation }) {
+export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
   const insets    = useSafeAreaInsets();
   const [data,       setData]   = useState(null);
@@ -14454,6 +15216,14 @@ export default function DashboardScreen({ navigation }) {
   const [showUpload, setUpload]  = useState(false);
   const [showSearch, setSearch]  = useState(false);
   const [showAlerts, setAlerts]  = useState(false);
+
+  // Abre upload quando o + do header é pressionado
+  useEffect(() => {
+    if (route?.params?.openUpload) {
+      setUpload(true);
+      navigation.setParams({ openUpload: false });
+    }
+  }, [route?.params?.openUpload]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefresh(true); else setLoading(true);
@@ -14466,17 +15236,47 @@ export default function DashboardScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  // Normaliza os dados do backend para o formato esperado pelos gráficos
   const { porCategoria, porMes } = normalizeDashboardData(data);
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
+      {/* Header custom */}
+      <View style={{
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12,
+        backgroundColor: C.bg, borderBottomWidth: 1, borderBottomColor: C.border,
+      }}>
+        {/* Esquerda — definições */}
+        <TouchableOpacity onPress={() => navigation.navigate('Configuracoes')} hitSlop={8}>
+          <Settings size={20} color={C.textMid} strokeWidth={1.8} />
+        </TouchableOpacity>
+
+        {/* Centro — título */}
+        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+
+        {/* Direita — + e ☰ */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <TouchableOpacity
+            onPress={() => setUpload(true)}
+            style={{
+              width: 34, height: 34, borderRadius: 10,
+              backgroundColor: C.brand,
+              justifyContent: 'center', alignItems: 'center',
+            }}
+          >
+            <Plus size={18} color="#fff" strokeWidth={2.5} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} hitSlop={8}>
+            <Text style={{ color: C.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {showSearch && (
         <SearchOverlay visible={showSearch} onClose={() => setSearch(false)} navigation={navigation} />
       )}
-
       <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} />
 
       <ScrollView
@@ -14485,40 +15285,24 @@ export default function DashboardScreen({ navigation }) {
         contentContainerStyle={{ paddingBottom: 130 }}
         keyboardShouldPersistTaps="handled"
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => load(true)}
-            tintColor={C.brand}
-            colors={[C.brand]}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} colors={[C.brand]} />
         }
       >
-        <Header
-          user={user}
-          alertas={data?.alertas}
-          showAlerts={showAlerts}
-          onBellPress={() => setAlerts(v => !v)}
-          insets={insets}
-        />
         <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
 
         {loading ? <LoadingSkeleton /> : (
           <>
             <HeroCard data={data} onSearchPress={() => setSearch(true)} />
             <MetricsRow data={data} />
-
-            {/* Gráficos interativos com dados normalizados do backend */}
-            <ChartsSection
-              porCategoria={porCategoria}
-              porMes={porMes}
-              navigation={navigation}
-            />
-
+            <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
             <InsightsSection mood={data?.mood} feed={data?.feed} />
 
             {data?.subscricoes?.count_danger > 0 && (
-              <Reveal delay={200} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-                <Card
+              <Animated.View
+                entering={FadeInDown.delay(200).duration(400).springify()}
+                style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}
+              >
+                <Pressable
                   onPress={() => navigation.navigate('Subscricoes')}
                   style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
                 >
@@ -14530,21 +15314,18 @@ export default function DashboardScreen({ navigation }) {
                     <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mês</Text>
                   </View>
                   <ChevronRight size={14} color={C.red} />
-                </Card>
-              </Reveal>
+                </Pressable>
+              </Animated.View>
             )}
 
             <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
           </>
         )}
       </ScrollView>
-
-      <FAB onPress={() => setUpload(true)} />
     </View>
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   card: {
     backgroundColor: C.surface,
@@ -14595,25 +15376,16 @@ const s = StyleSheet.create({
   },
   sheetTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
   uploadOption: {
-    flex: 1,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 8,
+    flex: 1, backgroundColor: C.surface,
+    borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', paddingVertical: 18, paddingHorizontal: 8,
   },
   tab: {
     paddingHorizontal: 14, paddingVertical: 7,
-    borderRadius: 10, borderWidth: 1,
-    borderColor: 'transparent',
+    borderRadius: 10, borderWidth: 1, borderColor: 'transparent',
   },
-  tabActive: {
-    backgroundColor: C.brandDim,
-    borderColor: C.brand + '40',
-  },
-  tabText: { fontSize: 12, fontWeight: '700', color: C.textMid },
+  tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
+  tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
   tabTextActive: { color: C.brand },
 });
 </file>
@@ -16535,6 +17307,135 @@ async function analisarExtrato(file) {
 </script>
 {% endblock %}
 {% endblock %}
+</file>
+
+<file path="verly-mobile/src/context/AuthContext.js">
+/**
+ * src/context/AuthContext.js
+ * Contexto global de autenticação — com Google Sign-In via Firebase
+ */
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authAPI, saveToken, removeToken, getToken } from '../services/api';
+
+// ── Google Sign-In ────────────────────────────────────────────────────────────
+let GoogleSignin, statusCodes, firebaseAuth, GoogleAuthProvider;
+
+try {
+  const googleModule = require('@react-native-google-signin/google-signin');
+  GoogleSignin = googleModule.GoogleSignin;
+  statusCodes = googleModule.statusCodes;
+
+  const firebaseModule = require('@react-native-firebase/auth');
+  firebaseAuth = firebaseModule.default;
+  GoogleAuthProvider = firebaseModule.GoogleAuthProvider;
+
+  GoogleSignin.configure({
+    webClientId: '667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com',
+  });
+} catch (_) {
+  console.warn('[AuthContext] Firebase/Google Sign-In não instalado — funcionalidade desativada.');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = await getToken();
+        if (token) {
+          const data = await authAPI.me();
+          setUser(data.user);
+        }
+      } catch {
+        await removeToken();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // ── Login com Email + Password ────────────────────────────────────────────
+  const login = async (email, password) => {
+    const data = await authAPI.login(email, password);
+    await saveToken(data.access_token);
+    setUser(data.user);
+    return data.user;
+  };
+
+  // ── Registo — NÃO faz login automático, envia email de confirmação ────────
+  const register = async (nome, email, password) => {
+    const data = await authAPI.register(nome, email, password);
+    return { email, message: data.message };
+  };
+
+  // ── Google Sign-In ────────────────────────────────────────────────────────
+  const loginWithGoogle = async () => {
+    if (!GoogleSignin || !firebaseAuth) {
+      throw new Error('Google Sign-In não está configurado.');
+    }
+
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+      const result = await GoogleSignin.signIn();
+
+      // Compatibilidade com v12+ (retorna { data: { idToken } }) e versões anteriores
+      const idToken = result?.data?.idToken ?? result?.idToken;
+
+      if (!idToken) {
+        throw new Error('Não foi possível obter o token do Google.');
+      }
+
+      const googleCredential = GoogleAuthProvider.credential(idToken);
+      const firebaseUserCred = await firebaseAuth().signInWithCredential(googleCredential);
+
+      const firebaseToken = await firebaseUserCred.user.getIdToken();
+
+      const data = await authAPI.firebaseLogin(firebaseToken);
+      await saveToken(data.access_token);
+      setUser(data.user);
+      return data.user;
+    } catch (err) {
+      if (statusCodes && err.code === statusCodes.SIGN_IN_CANCELLED) {
+        throw new Error('LOGIN_CANCELADO');
+      }
+      throw err;
+    }
+  };
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const logout = async () => {
+    await removeToken();
+    setUser(null);
+    try {
+      if (GoogleSignin) await GoogleSignin.signOut();
+    } catch (_) {}
+  };
+
+  // ── Atualizar user no contexto ────────────────────────────────────────────
+  const updateUser = (updates) => {
+    setUser(prev => prev ? { ...prev, ...updates } : prev);
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, loading, login, register, logout, loginWithGoogle, updateUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider');
+  return ctx;
+}
 </file>
 
 <file path="app/auth.py">
@@ -21814,7 +22715,7 @@ function MainTabs({ navigation }) {
       <Tab.Screen
         name="Dashboard"
         component={DashboardScreen}
-        options={{ tabBarLabel: 'Início', headerTitle: 'Verly', headerShown: true }}
+        options={{ tabBarLabel: 'Início', headerShown: false }}
       />
       <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
       <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
@@ -22101,6 +23002,8 @@ class Amizade(db.Model):
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-maps": "1.20.1",
+    "react-native-purchases": "^10.1.1",
+    "react-native-purchases-ui": "^10.1.1",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
@@ -22231,7 +23134,7 @@ firebase-admin>=6.0.0
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'http://192.168.1.246:5000/api/v1';
+const BASE_URL = 'http://192.168.1.250:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
@@ -23673,6 +24576,8 @@ def _migrate_db():
 
             except Exception:
                 db.session.rollback()
+               
+                from app.api import subscricoes  # noqa
 </file>
 
 </files>

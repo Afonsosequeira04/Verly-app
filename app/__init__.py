@@ -281,3 +281,5 @@ def _migrate_db():
 
             except Exception:
                 db.session.rollback()
+               
+                from app.api import subscricoes  # noqa

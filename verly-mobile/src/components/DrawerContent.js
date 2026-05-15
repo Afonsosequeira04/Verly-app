@@ -9,7 +9,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import { useAuth } from '../context/AuthContext';
-import { notificacoesAPI } from '../services/api';
+import { useRevenueCat } from '../context/RevenueCatContext';
 
 import LoginScreen         from '../screens/auth/LoginScreen';
 import RegisterScreen      from '../screens/auth/RegisterScreen';
@@ -46,52 +46,129 @@ export const COLORS = {
   green:   '#00C896',
   yellow:  '#FFB300',
   brandDim:'rgba(108,92,231,0.15)',
+  gold:    '#FFD700',
 };
 
-// ── Menu Screen (replaces drawer) ─────────────────────────────────────────
+// ── Menu Screen ───────────────────────────────────────────────────────────────
 function MenuScreen({ navigation }) {
   const { user, logout } = useAuth();
+  const { isPro } = useRevenueCat();
 
   const initials = user?.nome
     ? user.nome.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase()
     : '?';
 
-  const items = [
-    { label: 'Histórico',       screen: 'Historico'    },
-    { label: 'Relatório',       screen: 'Relatorio'    },
-    { label: 'Score',           screen: 'Score'        },
-    { label: 'Impulse Control', screen: 'Impulse'      },
-    { label: 'Estatísticas',    screen: 'Estatisticas' },
-    { label: 'Subscrições',     screen: 'Subscricoes'  },
-    { label: 'Notificações',    screen: 'Notificacoes' },
+  const sections = [
+    {
+      label: 'SOCIAL',
+      items: [
+        { label: 'Amigos',             screen: 'Amigos',      icon: '👥' },
+        { label: 'Playlists de compras',screen: 'Playlists',  icon: '🎵' },
+      ],
+    },
+    {
+      label: 'ANÁLISE',
+      items: [
+        { label: 'Estatísticas',  screen: 'Estatisticas', icon: '📊' },
+        { label: 'Relatório',     screen: 'Relatorio',    icon: '📄' },
+        { label: 'Histórico',     screen: 'Historico',    icon: '🕐' },
+      ],
+    },
+    {
+      label: 'FERRAMENTAS',
+      items: [
+        { label: 'Score de compra', screen: 'Score',       icon: '⭐' },
+        {
+          label:  isPro ? 'Modo Pro ✦' : 'Modo Pro',
+          screen: 'Subscricoes',
+          icon:   '👑',
+          isPro:  true,
+        },
+      ],
+    },
+    {
+      label: 'CONTA',
+      items: [
+        { label: 'Notificações', screen: 'Notificacoes', icon: '🔔' },
+      ],
+    },
   ];
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: COLORS.bg }}>
       <ScrollView contentContainerStyle={{ padding: 24 }}>
+
+        {/* Botão fechar */}
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={{ alignSelf: 'flex-end', marginBottom: 8 }}
+          activeOpacity={0.7}
+        >
+          <Text style={{ color: COLORS.textSub, fontSize: 22 }}>✕</Text>
+        </TouchableOpacity>
+
         {/* Profile */}
         <View style={mStyles.profileRow}>
           <View style={mStyles.avatar}>
             <Text style={mStyles.avatarText}>{initials}</Text>
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={mStyles.name}>{user?.nome || 'Utilizador'}</Text>
-            <Text style={mStyles.email}>{user?.email || ''}</Text>
+            <Text style={mStyles.email} numberOfLines={1}>{user?.email || ''}</Text>
           </View>
+          {/* Badge Pro no perfil */}
+          {isPro && (
+            <View style={mStyles.proBadge}>
+              <Text style={mStyles.proBadgeText}>✦ Pro</Text>
+            </View>
+          )}
         </View>
 
         <View style={mStyles.divider} />
 
-        {items.map(item => (
-          <TouchableOpacity
-            key={item.screen}
-            style={mStyles.item}
-            onPress={() => navigation.navigate(item.screen)}
-            activeOpacity={0.7}
-          >
-            <Text style={mStyles.itemText}>{item.label}</Text>
-            <Text style={{ color: COLORS.textSub }}>›</Text>
-          </TouchableOpacity>
+        {/* Secções */}
+        {sections.map(section => (
+          <View key={section.label} style={{ marginBottom: 8 }}>
+            <Text style={mStyles.sectionLabel}>{section.label}</Text>
+            {section.items.map(item => {
+              const isProItem = item.isPro;
+              return (
+                <TouchableOpacity
+                  key={item.screen}
+                  style={[
+                    mStyles.item,
+                    isProItem && !isPro && mStyles.itemProUnlocked,
+                    isProItem && isPro  && mStyles.itemProActive,
+                  ]}
+                  onPress={() => navigation.navigate(item.screen)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <Text style={{ fontSize: 18 }}>{item.icon}</Text>
+                    <Text style={[
+                      mStyles.itemText,
+                      isProItem && isPro && { color: COLORS.gold },
+                    ]}>
+                      {item.label}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {isProItem && !isPro && (
+                      <View style={mStyles.lockBadge}>
+                        <Text style={mStyles.lockBadgeText}>FREE</Text>
+                      </View>
+                    )}
+                    {isProItem && isPro && (
+                      <View style={mStyles.activeBadge}>
+                        <Text style={mStyles.activeBadgeText}>ATIVO</Text>
+                      </View>
+                    )}
+                    <Text style={{ color: COLORS.textSub }}>›</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         ))}
 
         <View style={mStyles.divider} />
@@ -111,33 +188,65 @@ const mStyles = StyleSheet.create({
     backgroundColor: COLORS.brandDim, borderWidth: 1.5, borderColor: COLORS.brand,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarText: { fontSize: 17, fontWeight: '800', color: COLORS.brand },
-  name:       { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  email:      { fontSize: 12, color: COLORS.textSub },
-  divider:    { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+  avatarText:  { fontSize: 17, fontWeight: '800', color: COLORS.brand },
+  name:        { fontSize: 15, fontWeight: '700', color: COLORS.text },
+  email:       { fontSize: 12, color: COLORS.textSub },
+  divider:     { height: 1, backgroundColor: COLORS.border, marginVertical: 16 },
+
+  sectionLabel: {
+    fontSize: 10, fontWeight: '800', letterSpacing: 1.2,
+    color: COLORS.textSub, marginBottom: 4, marginTop: 8,
+  },
+
   item: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+    paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: COLORS.border,
   },
-  itemText:   { fontSize: 15, fontWeight: '600', color: COLORS.text },
+  itemProUnlocked: {
+    // nada especial — mostra FREE badge
+  },
+  itemProActive: {
+    // item dourado quando Pro ativo
+  },
+  itemText: { fontSize: 15, fontWeight: '600', color: COLORS.text },
+
+  proBadge: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+  },
+  proBadgeText: { fontSize: 11, fontWeight: '800', color: COLORS.gold },
+
+  lockBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: COLORS.brandDim,
+    borderWidth: 1, borderColor: COLORS.brand + '50',
+  },
+  lockBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.brand },
+
+  activeBadge: {
+    paddingHorizontal: 7, paddingVertical: 2,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255,215,0,0.12)',
+    borderWidth: 1, borderColor: 'rgba(255,215,0,0.3)',
+  },
+  activeBadgeText: { fontSize: 9, fontWeight: '800', color: COLORS.gold },
+
   logout:     { paddingVertical: 14 },
   logoutText: { fontSize: 15, fontWeight: '700', color: COLORS.red },
 });
 
-// ── Tabs ──────────────────────────────────────────────────────────────────
+// ── Tabs ──────────────────────────────────────────────────────────────────────
 function MainTabs({ navigation }) {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: true,
+        headerShown: false,
         headerStyle: { backgroundColor: COLORS.bg, shadowColor: 'transparent', elevation: 0, borderBottomWidth: 1, borderBottomColor: COLORS.border },
         headerTintColor: COLORS.text,
         headerTitleStyle: { fontWeight: '800', fontSize: 18 },
-        headerRight: () => (
-          <TouchableOpacity onPress={() => navigation.navigate('Menu')} style={{ paddingRight: 16 }}>
-            <Text style={{ color: COLORS.text, fontSize: 22 }}>☰</Text>
-          </TouchableOpacity>
-        ),
         tabBarStyle: { backgroundColor: COLORS.surface, borderTopColor: COLORS.border, borderTopWidth: 1, paddingBottom: 10, paddingTop: 8, height: 68 },
         tabBarActiveTintColor: COLORS.brand,
         tabBarInactiveTintColor: COLORS.textSub,
@@ -145,7 +254,11 @@ function MainTabs({ navigation }) {
         tabBarIcon: ({ color, size }) => <TabIcon name={route.name} color={color} size={size} />,
       })}
     >
-      <Tab.Screen name="Dashboard" component={DashboardScreen} options={{ tabBarLabel: 'Início',  headerTitle: 'Verly' }} />
+      <Tab.Screen
+        name="Dashboard"
+        component={DashboardScreen}
+        options={{ tabBarLabel: 'Início', headerShown: false }}
+      />
       <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
       <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
       <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas' }} />
@@ -154,7 +267,7 @@ function MainTabs({ navigation }) {
   );
 }
 
-// ── Main Stack ────────────────────────────────────────────────────────────
+// ── Main Stack ────────────────────────────────────────────────────────────────
 function MainStackNav() {
   const commonHeader = {
     headerShown: true,
@@ -167,10 +280,10 @@ function MainStackNav() {
   return (
     <MainStack.Navigator screenOptions={{ headerShown: false }}>
       <MainStack.Screen name="Tabs"          component={MainTabs} />
-      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu' }} />
+      <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ ...commonHeader, headerTitle: 'Menu', presentation: 'modal' }} />
       <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...commonHeader, headerTitle: 'Detalhe da Fatura' }} />
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...commonHeader, headerTitle: 'Notificações' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...commonHeader, headerTitle: 'Modo Pro' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...commonHeader, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...commonHeader, headerTitle: 'Score de Compra' }} />
       <MainStack.Screen name="Impulse"       component={ImpulseScreen}       options={{ ...commonHeader, headerTitle: 'Impulse Control' }} />
@@ -180,7 +293,7 @@ function MainStackNav() {
   );
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
 function AuthNavigator() {
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
@@ -190,7 +303,7 @@ function AuthNavigator() {
   );
 }
 
-// ── Root ──────────────────────────────────────────────────────────────────
+// ── Root ──────────────────────────────────────────────────────────────────────
 export default function AppNavigator() {
   const { user, loading } = useAuth();
 

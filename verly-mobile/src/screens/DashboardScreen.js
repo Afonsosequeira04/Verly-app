@@ -1,24 +1,43 @@
-// src/screens/DashboardScreen.js — Dashboard com gráficos interativos
+// src/screens/DashboardScreen.js — Dashboard com Moti + Reanimated 4
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, Pressable, TouchableOpacity,
-  Animated, Easing, StatusBar, RefreshControl,
-  Modal, TextInput, Alert, StyleSheet, Dimensions,
-  KeyboardAvoidingView, Platform,
+  StatusBar, RefreshControl, Modal, TextInput, Alert,
+  StyleSheet, Dimensions, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withSpring,
+  withTiming,
+  withSequence,
+  withDelay,
+  withRepeat,
+  interpolate,
+  Easing,
+  FadeInDown,
+  FadeIn,
+  SlideInDown,
+  ZoomIn,
+  BounceIn,
+} from 'react-native-reanimated';
+import { MotiView, MotiText } from 'moti';
 import * as ImagePicker    from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   Bell, Plus, Search, X, TrendingUp, TrendingDown,
   Receipt, Camera, Upload, FileText, Zap,
-  ChevronRight, AlertCircle, Target, BarChart2,
+  ChevronRight, AlertCircle, Target, BarChart2, Settings,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import { Reveal, Card, Skeleton, SectionHeader, useScalePress } from '../components/UI';
+import {
+  Reveal, Card, Skeleton, SectionHeader,
+  useScalePress, AnimatedListItem, PulseDot,
+} from '../components/UI';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -31,213 +50,207 @@ const CHART_COLORS = [
   '#22D4FD', '#EC4899', '#FF7340', '#4ECDC4',
 ];
 
-// ─── Normaliza dados do backend para o formato esperado pelos gráficos ─────────
-// Backend retorna:
-//   categorias: [{ nome, total }]
-//   evolucao:   { labels: ['2025-01', ...], values: [123, ...] }
-//
-// Os gráficos esperam:
-//   porCategoria: [{ categoria, total }]
-//   porMes:       [{ mes: '2025-01', total, num_faturas? }]
-
 function normalizeDashboardData(data) {
   if (!data) return { porCategoria: [], porMes: [] };
-
-  // Categorias: backend usa "nome", gráfico usa "categoria"
   const porCategoria = Array.isArray(data.categorias)
-    ? data.categorias.map(c => ({
-        categoria: c.nome || c.categoria || 'Outros',
-        total:     c.total || 0,
-      }))
+    ? data.categorias.map(c => ({ categoria: c.nome || c.categoria || 'Outros', total: c.total || 0 }))
     : [];
-
-  // Evolução mensal: backend devolve { labels, values }
-  // Precisamos de [{ mes, total }]
   let porMes = [];
   if (data.evolucao?.labels && data.evolucao?.values) {
-    porMes = data.evolucao.labels.map((label, i) => ({
-      mes:   label,
-      total: data.evolucao.values[i] || 0,
-    }));
+    porMes = data.evolucao.labels.map((label, i) => ({ mes: label, total: data.evolucao.values[i] || 0 }));
   }
-
   return { porCategoria, porMes };
 }
 
-// ─── Animated Budget Bar ──────────────────────────────────────────────────────
+// ─── Budget Bar animada com Reanimated 4 ─────────────────────────────────────
 function BudgetBar({ pct = 0, color = C.brand }) {
-  const width = useRef(new Animated.Value(0)).current;
+  const width = useSharedValue(0);
+
   useEffect(() => {
-    Animated.timing(width, {
-      toValue: Math.min(pct, 100),
-      duration: 900, delay: 300,
+    width.value = withDelay(300, withTiming(Math.min(pct, 100), {
+      duration: 900,
       easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
+    }));
   }, [pct]);
-  const widthInterp = width.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] });
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${width.value}%`,
+  }));
+
   return (
-    <View style={{ height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' }}>
-      <Animated.View style={{ height: '100%', width: widthInterp, backgroundColor: color, borderRadius: 2 }} />
+    <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+      <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
     </View>
   );
 }
 
-// ─── Barras horizontais animadas com toque ────────────────────────────────────
+// ─── Bar chart interativo com Reanimated 4 ────────────────────────────────────
+function BarItem({ item, idx, onSelect, isSelected, max }) {
+  const val   = item.valor || item.total || 0;
+  const pct   = val / max;
+  const color = CHART_COLORS[idx % CHART_COLORS.length];
+  const BAR_W = W - 80 - SPACE.lg * 2;
+
+  const barWidth  = useSharedValue(4);
+  const bgOpacity = useSharedValue(0);
+  const barHeight = useSharedValue(isSelected ? 7 : 5);
+
+  useEffect(() => {
+    barWidth.value = withDelay(100 + idx * 80, withTiming(Math.max(BAR_W * pct, 4), {
+      duration: 600,
+      easing: Easing.out(Easing.cubic),
+    }));
+  }, [pct]);
+
+  useEffect(() => {
+    bgOpacity.value = withTiming(isSelected ? 1 : 0, { duration: 200 });
+    barHeight.value = withSpring(isSelected ? 8 : 5, { damping: 20, stiffness: 300 });
+  }, [isSelected]);
+
+  const barStyle   = useAnimatedStyle(() => ({ width: barWidth.value, height: barHeight.value }));
+  const rowStyle   = useAnimatedStyle(() => ({ backgroundColor: `${color}${Math.round(bgOpacity.value * 18).toString(16).padStart(2,'0')}` }));
+
+  return (
+    <Animated.View
+      entering={FadeInDown.delay(idx * 60).duration(350).springify()}
+      style={rowStyle}
+    >
+      <Pressable
+        onPress={() => onSelect?.(isSelected ? null : idx)}
+        style={{ borderRadius: 10, padding: 8 }}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Text
+            style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}
+            numberOfLines={1}
+          >
+            {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
+          </Text>
+          <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
+        </View>
+        <View style={{ backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+          <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]} />
+        </View>
+        {isSelected && (
+          <Animated.View entering={FadeIn.duration(200)}>
+            <Text style={[s.microText, { marginTop: 5, color }]}>
+              {Math.round(pct * 100)}% do total gasto
+            </Text>
+          </Animated.View>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function InteractiveBarChart({ items = [], onSelect, selectedIdx }) {
   const max = Math.max(...items.map(i => i.valor || i.total || 0), 1);
-  const BAR_W = W - 80 - (SPACE.lg || 20) * 2;
-
   return (
-    <View style={{ gap: 10 }}>
-      {items.slice(0, 6).map((item, idx) => {
-        const val   = item.valor || item.total || 0;
-        const pct   = val / max;
-        const color = CHART_COLORS[idx % CHART_COLORS.length];
-        const isSelected = selectedIdx === idx;
-        const anim  = useRef(new Animated.Value(0)).current;
-
-        useEffect(() => {
-          Animated.timing(anim, {
-            toValue: pct,
-            duration: 600 + idx * 80,
-            delay: 100,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: false,
-          }).start();
-        }, [pct]);
-
-        const animW = anim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [4, Math.max(BAR_W * pct, 4)],
-        });
-
-        return (
-          <Pressable
-            key={idx}
-            onPress={() => onSelect?.(isSelected ? null : idx)}
-            style={[
-              {
-                borderRadius: 10,
-                padding: 8,
-                backgroundColor: isSelected ? color + '12' : 'transparent',
-              },
-            ]}
-          >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]} numberOfLines={1}>
-                {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
-              </Text>
-              <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
-            </View>
-            <View style={{ height: isSelected ? 7 : 5, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-              <Animated.View style={{
-                height: '100%',
-                width: animW,
-                backgroundColor: color,
-                borderRadius: 4,
-              }} />
-            </View>
-            {isSelected && (
-              <Text style={[s.microText, { marginTop: 5, color: color }]}>
-                {Math.round(pct * 100)}% do total gasto
-              </Text>
-            )}
-          </Pressable>
-        );
-      })}
+    <View style={{ gap: 6 }}>
+      {items.slice(0, 6).map((item, idx) => (
+        <BarItem key={idx} item={item} idx={idx} onSelect={onSelect} isSelected={selectedIdx === idx} max={max} />
+      ))}
     </View>
   );
 }
 
-// ─── Gráfico mensal interativo ────────────────────────────────────────────────
+// ─── Monthly chart ────────────────────────────────────────────────────────────
+function MonthBar({ item, idx, total, onPress, isSelected }) {
+  const max = total;
+  const pct = (item.total || 0) / max;
+  const CHART_H = 72;
+  const h = Math.max(pct * CHART_H, 4);
+  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
+  const label = meses[m] ?? item.mes?.slice(-2) ?? '';
+  const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '55';
+
+  const barH    = useSharedValue(0);
+  const opacity = useSharedValue(isSelected ? 1 : 0.6);
+
+  useEffect(() => {
+    barH.value    = withDelay(150 + idx * 60, withTiming(h, { duration: 500, easing: Easing.out(Easing.cubic) }));
+  }, [h]);
+
+  useEffect(() => {
+    opacity.value = withTiming(isSelected ? 1 : 0.6, { duration: 200 });
+  }, [isSelected]);
+
+  const barStyle = useAnimatedStyle(() => ({ height: barH.value, opacity: opacity.value }));
+
+  return (
+    <Pressable
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 36 }}
+      onPress={onPress}
+    >
+      {isSelected ? (
+        <Animated.View entering={FadeIn.duration(150)}>
+          <Text style={[s.microText, { fontSize: 9, marginBottom: 3, color: CHART_COLORS[0], fontWeight: '800' }]}>
+            {(item.total || 0) >= 1000 ? `${((item.total) / 1000).toFixed(1)}k` : fmt(item.total || 0)}€
+          </Text>
+        </Animated.View>
+      ) : (
+        <Text style={{ fontSize: 9, marginBottom: 3, opacity: 0 }}>-</Text>
+      )}
+      <Animated.View style={[{ width: '75%', backgroundColor: color, borderRadius: 4, marginBottom: 6 }, barStyle]} />
+      <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
 function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
   if (!data.length) return null;
   const max = Math.max(...data.map(d => d.total || 0), 1);
-  const CHART_H = 72;
   const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
   return (
     <View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: CHART_H + 30 }}>
-        {data.slice(-6).map((item, idx) => {
-          const pct   = (item.total || 0) / max;
-          const h     = Math.max(pct * CHART_H, 4);
-          const m     = parseInt((item.mes || '').split('-')[1], 10) - 1;
-          const label = meses[m] ?? item.mes?.slice(-2) ?? '';
-          const isSelected = selectedMonth === idx;
-          const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '60';
-          const anim  = useRef(new Animated.Value(0)).current;
-
-          useEffect(() => {
-            Animated.timing(anim, {
-              toValue: h,
-              duration: 500 + idx * 60,
-              delay: 150,
-              easing: Easing.out(Easing.cubic),
-              useNativeDriver: false,
-            }).start();
-          }, [h]);
-
-          return (
-            <Pressable
-              key={idx}
-              style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 30 }}
-              onPress={() => onMonthSelect?.(isSelected ? null : idx)}
-            >
-              {isSelected && (
-                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, color: CHART_COLORS[0], fontWeight: '800' }]}>
-                  {(item.total || 0) >= 1000
-                    ? `${((item.total) / 1000).toFixed(1)}k`
-                    : fmt(item.total || 0)}€
-                </Text>
-              )}
-              {!isSelected && (
-                <Text style={[s.microText, { fontSize: 9, marginBottom: 2, opacity: 0 }]}>-</Text>
-              )}
-              <Animated.View style={{
-                width: '80%',
-                height: anim,
-                backgroundColor: color,
-                borderRadius: 4,
-                marginBottom: 5,
-              }} />
-              <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
-                {label}
-              </Text>
-            </Pressable>
-          );
-        })}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5 }}>
+        {data.slice(-6).map((item, idx) => (
+          <MonthBar
+            key={idx} item={item} idx={idx} total={max}
+            onPress={() => onMonthSelect?.(selectedMonth === idx ? null : idx)}
+            isSelected={selectedMonth === idx}
+          />
+        ))}
       </View>
-
       {selectedMonth != null && data[data.length - 6 + selectedMonth] && (() => {
         const item = data[data.length - 6 + selectedMonth];
-        const m    = parseInt((item.mes || '').split('-')[1], 10) - 1;
+        const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
         return (
-          <View style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
+          <Animated.View entering={FadeInDown.duration(250)} style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
             <Text style={[s.microText, { color: C.text, fontWeight: '800' }]}>
               {meses[m] || item.mes} — {fmt(item.total)} €
             </Text>
             {item.num_faturas != null && (
-              <Text style={[s.microText, { marginTop: 3 }]}>
-                {item.num_faturas} fatura(s) registada(s)
-              </Text>
+              <Text style={[s.microText, { marginTop: 3 }]}>{item.num_faturas} fatura(s) registada(s)</Text>
             )}
-          </View>
+          </Animated.View>
         );
       })()}
     </View>
   );
 }
 
-// ─── Secção de gráficos interativos (substitui QuickActions) ──────────────────
+// ─── Charts section ───────────────────────────────────────────────────────────
 function ChartsSection({ porCategoria, porMes, navigation }) {
-  const [tab, setTab]              = useState('categorias');
-  const [selectedBar, setSelectedBar]     = useState(null);
+  const [tab, setTab] = useState('categorias');
+  const [selectedBar, setSelectedBar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
 
   const hasCats  = Array.isArray(porCategoria) && porCategoria.length > 0;
-  const hasMeses = Array.isArray(porMes)        && porMes.length > 0;
+  const hasMeses = Array.isArray(porMes) && porMes.length > 0;
+
+  const tabIndicator = useSharedValue(tab === 'categorias' ? 0 : 1);
+
+  const handleTab = (t) => {
+    setTab(t);
+    tabIndicator.value = withSpring(t === 'categorias' ? 0 : 1, { damping: 22, stiffness: 300 });
+    if (t === 'categorias') setSelectedBar(null);
+    else setSelectedMonth(null);
+  };
 
   if (!hasCats && !hasMeses) {
     return (
@@ -245,16 +258,9 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
         <SectionHeader title="Os teus gastos" />
         <View style={[s.card, { padding: 24, alignItems: 'center', gap: 12 }]}>
           <BarChart2 size={32} color={C.textMid} />
-          <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>
-            Ainda sem dados suficientes
-          </Text>
-          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>
-            Adiciona as tuas primeiras faturas para ver gráficos aqui
-          </Text>
-          <Pressable
-            onPress={() => navigation?.navigate?.('Faturas')}
-            style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}
-          >
+          <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>Ainda sem dados suficientes</Text>
+          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>Adiciona as tuas primeiras faturas para ver gráficos aqui</Text>
+          <Pressable onPress={() => navigation?.navigate?.('Faturas')} style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: C.brand }}>+ Adicionar fatura</Text>
           </Pressable>
         </View>
@@ -268,10 +274,10 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
 
   let tendencia = null;
   if (hasMeses && porMes.length >= 2) {
-    const last  = porMes[porMes.length - 1]?.total || 0;
-    const prev  = porMes[porMes.length - 2]?.total || 0;
-    const diff  = last - prev;
-    const pct   = prev > 0 ? Math.abs(diff / prev * 100) : 0;
+    const last = porMes[porMes.length - 1]?.total || 0;
+    const prev = porMes[porMes.length - 2]?.total || 0;
+    const diff = last - prev;
+    const pct  = prev > 0 ? Math.abs(diff / prev * 100) : 0;
     tendencia = { diff, pct: Math.round(pct), subiu: diff > 0 };
   }
 
@@ -279,98 +285,62 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
     <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <SectionHeader title="Os teus gastos" />
       <View style={s.card}>
-
         {/* Tabs */}
         <View style={{ flexDirection: 'row', padding: 12, gap: 8 }}>
           {hasCats && (
-            <Pressable
-              onPress={() => { setTab('categorias'); setSelectedBar(null); }}
-              style={[s.tab, tab === 'categorias' && s.tabActive]}
-            >
-              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>
-                Por categoria
-              </Text>
+            <Pressable onPress={() => handleTab('categorias')} style={[s.tab, tab === 'categorias' && s.tabActive]}>
+              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>Por categoria</Text>
             </Pressable>
           )}
           {hasMeses && (
-            <Pressable
-              onPress={() => { setTab('mensal'); setSelectedMonth(null); }}
-              style={[s.tab, tab === 'mensal' && s.tabActive]}
-            >
-              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>
-                Evolução
-              </Text>
+            <Pressable onPress={() => handleTab('mensal')} style={[s.tab, tab === 'mensal' && s.tabActive]}>
+              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>Evolução</Text>
             </Pressable>
           )}
         </View>
 
-        {/* Tab: Categorias */}
         {tab === 'categorias' && hasCats && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
             {topCat && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
                 <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: CHART_COLORS[0] }} />
                 <Text style={[s.microText, { flex: 1 }]}>
-                  A tua categoria principal é{' '}
-                  <Text style={{ color: C.text, fontWeight: '800' }}>
-                    {topCat.categoria || topCat.label}
-                  </Text>{' '}
-                  com{' '}
-                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>
-                    {fmt(topCat.valor || topCat.total)} €
-                  </Text>
+                  Categoria principal:{' '}
+                  <Text style={{ color: C.text, fontWeight: '800' }}>{topCat.categoria || topCat.label}</Text>
+                  {' '}com{' '}
+                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>{fmt(topCat.valor || topCat.total)} €</Text>
                 </Text>
               </View>
             )}
-
-            <InteractiveBarChart
-              items={porCategoria}
-              onSelect={setSelectedBar}
-              selectedIdx={selectedBar}
-            />
-
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
-              Toca numa categoria para ver detalhes
-            </Text>
-          </View>
+            <InteractiveBarChart items={porCategoria} onSelect={setSelectedBar} selectedIdx={selectedBar} />
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca numa categoria para ver detalhes</Text>
+          </Animated.View>
         )}
 
-        {/* Tab: Mensal */}
         {tab === 'mensal' && hasMeses && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
             {tendencia && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
-                {tendencia.subiu
-                  ? <TrendingUp size={14} color={C.red} />
-                  : <TrendingDown size={14} color={C.green} />
-                }
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
+                {tendencia.subiu ? <TrendingUp size={14} color={C.red} /> : <TrendingDown size={14} color={C.green} />}
                 <Text style={[s.microText, { flex: 1 }]}>
                   Este mês gastaste{' '}
                   <Text style={{ color: tendencia.subiu ? C.red : C.green, fontWeight: '800' }}>
                     {tendencia.subiu ? '+' : '-'}{tendencia.pct}%
-                  </Text>{' '}
-                  {tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
+                  </Text>
+                  {' '}{tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
                 </Text>
               </View>
             )}
-
-            <MonthlyChart
-              data={porMes}
-              onMonthSelect={setSelectedMonth}
-              selectedMonth={selectedMonth}
-            />
-
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 14, opacity: 0.6 }]}>
-              Toca num mês para ver o valor
-            </Text>
-          </View>
+            <MonthlyChart data={porMes} onMonthSelect={setSelectedMonth} selectedMonth={selectedMonth} />
+            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca num mês para ver o valor</Text>
+          </Animated.View>
         )}
       </View>
     </Reveal>
   );
 }
 
-// ─── Hero Card ────────────────────────────────────────────────────────────────
+// ─── HeroCard ─────────────────────────────────────────────────────────────────
 function HeroCard({ data, onSearchPress }) {
   const spent    = data?.total_gasto || 0;
   const budget   = data?.orcamento   || 0;
@@ -378,19 +348,29 @@ function HeroCard({ data, onSearchPress }) {
   const barColor = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
 
   return (
-    <Reveal delay={60} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}>
+    <Animated.View
+      entering={FadeInDown.delay(60).duration(450).springify()}
+      style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}
+    >
       <View style={[s.card, { padding: 20 }]}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View>
             <Text style={s.label}>Gasto este mês</Text>
-            <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
-            {budget > 0 && (
-              <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>
-            )}
+            <MotiView
+              key={spent}
+              from={{ opacity: 0, translateY: 6 }}
+              animate={{ opacity: 1, translateY: 0 }}
+              transition={{ type: 'spring', damping: 18, delay: 80 }}
+            >
+              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
+            </MotiView>
+            {budget > 0 && <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>}
           </View>
-          <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
-            <Search size={17} color={C.textMid} />
-          </Pressable>
+          <Animated.View entering={FadeIn.delay(200)}>
+            <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
+              <Search size={17} color={C.textMid} />
+            </Pressable>
+          </Animated.View>
         </View>
 
         {budget > 0 && (
@@ -405,56 +385,51 @@ function HeroCard({ data, onSearchPress }) {
           </View>
         )}
       </View>
-    </Reveal>
+    </Animated.View>
   );
 }
 
-// ─── Metrics Row ──────────────────────────────────────────────────────────────
+// ─── MetricsRow ───────────────────────────────────────────────────────────────
 function MetricsRow({ data }) {
   const comparacao = data?.comparacao || {};
   const variacao   = comparacao.variacao_pct;
   const subiu      = comparacao.subiu;
 
   const metrics = [
-    {
-      label: 'Faturas',
-      value: data?.num_faturas ?? '—',
-      icon:  <Receipt size={14} color={C.brand} />,
-      color: C.brand,
-    },
-    {
-      label: 'Alertas',
-      value: data?.alertas?.length ?? 0,
-      icon:  <AlertCircle size={14} color={data?.alertas?.length ? C.red : C.green} />,
-      color: data?.alertas?.length ? C.red : C.green,
-    },
-    {
-      label: 'Vs. mês ant.',
-      value: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—',
-      icon:  subiu
-        ? <TrendingUp size={14} color={C.red} />
-        : <TrendingDown size={14} color={C.green} />,
-      color: subiu ? C.red : C.green,
-    },
+    { label: 'Faturas',    value: data?.num_faturas ?? '—',                                icon: <Receipt size={14} color={C.brand} />,                                                            color: C.brand },
+    { label: 'Alertas',    value: data?.alertas?.length ?? 0,                              icon: <AlertCircle size={14} color={data?.alertas?.length ? C.red : C.green} />,                        color: data?.alertas?.length ? C.red : C.green },
+    { label: 'Vs. mês',   value: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—', icon: subiu ? <TrendingUp size={14} color={C.red} /> : <TrendingDown size={14} color={C.green} />, color: subiu ? C.red : C.green },
   ];
 
   return (
-    <Reveal delay={100} style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+    <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       {metrics.map((m, i) => (
-        <View key={i} style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}>
+        <Animated.View
+          key={i}
+          entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
+          style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
+        >
           {m.icon}
-          <Text style={[s.metricVal, { color: m.color }]}>{m.value}</Text>
+          <MotiText
+            key={m.value}
+            from={{ opacity: 0, scale: 0.7 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', damping: 16 }}
+            style={[s.metricVal, { color: m.color }]}
+          >
+            {m.value}
+          </MotiText>
           <Text style={s.label}>{m.label}</Text>
-        </View>
+        </Animated.View>
       ))}
-    </Reveal>
+    </View>
   );
 }
 
-// ─── Insights Verly (texto + mood) ───────────────────────────────────────────
+// ─── InsightsSection ──────────────────────────────────────────────────────────
 function InsightsSection({ mood, feed }) {
-  const hasMood     = !!mood?.frase;
-  const feedItems   = Array.isArray(feed)
+  const hasMood   = !!mood?.frase;
+  const feedItems = Array.isArray(feed)
     ? feed.map(item => typeof item === 'object' ? (item.texto || '') : String(item)).filter(Boolean)
     : [];
 
@@ -475,16 +450,15 @@ function InsightsSection({ mood, feed }) {
             </Text>
           </View>
         )}
-
         {feedItems.length > 0 && (
           <View style={{ padding: 16, gap: 10 }}>
             {feedItems.slice(0, 3).map((item, i) => (
-              <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 6 }} />
-                <Text style={[s.bodyText, { flex: 1, color: C.textMid, lineHeight: 20, fontWeight: '500' }]}>
-                  {item}
-                </Text>
-              </View>
+              <AnimatedListItem key={i} index={i}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 6 }} />
+                  <Text style={[s.bodyText, { flex: 1, color: C.textMid, lineHeight: 20, fontWeight: '500' }]}>{item}</Text>
+                </View>
+              </AnimatedListItem>
             ))}
           </View>
         )}
@@ -493,24 +467,27 @@ function InsightsSection({ mood, feed }) {
   );
 }
 
-// ─── Alertas accordion ────────────────────────────────────────────────────────
+// ─── AlertsPanel ─────────────────────────────────────────────────────────────
 function AlertsPanel({ visible, alertas = [] }) {
-  const maxH = useRef(new Animated.Value(0)).current;
-  const opac = useRef(new Animated.Value(0)).current;
-  const ITEM_H = 64;
+  const height  = useSharedValue(0);
+  const opacity = useSharedValue(0);
+  const ITEM_H  = 64;
 
   useEffect(() => {
     const target = visible ? alertas.length * ITEM_H + 16 : 0;
-    Animated.parallel([
-      Animated.timing(maxH, { toValue: target, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: false }),
-      Animated.timing(opac, { toValue: visible ? 1 : 0, duration: 220, useNativeDriver: false }),
-    ]).start();
+    height.value  = withTiming(target,        { duration: 280, easing: Easing.out(Easing.cubic) });
+    opacity.value = withTiming(visible ? 1 : 0, { duration: 220 });
   }, [visible]);
+
+  const panelStyle = useAnimatedStyle(() => ({
+    maxHeight: height.value,
+    opacity:   opacity.value,
+  }));
 
   if (!alertas.length) return null;
 
   return (
-    <Animated.View style={{ overflow: 'hidden', maxHeight: maxH, opacity: opac, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+    <Animated.View style={[{ overflow: 'hidden', marginHorizontal: SPACE.lg, marginBottom: 14 }, panelStyle]}>
       <View style={s.card}>
         {alertas.map((a, i) => (
           <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderBottomWidth: i < alertas.length - 1 ? 1 : 0, borderBottomColor: C.border }}>
@@ -529,7 +506,7 @@ function AlertsPanel({ visible, alertas = [] }) {
   );
 }
 
-// ─── Faturas recentes ─────────────────────────────────────────────────────────
+// ─── RecentFaturas ────────────────────────────────────────────────────────────
 function RecentFaturas({ faturas = [], navigation }) {
   if (!faturas.length) return null;
   return (
@@ -537,58 +514,57 @@ function RecentFaturas({ faturas = [], navigation }) {
       <SectionHeader title="Últimas faturas" action="Ver todas" onAction={() => navigation.navigate('Faturas')} />
       <View style={s.card}>
         {faturas.map((f, i) => (
-          <Pressable
-            key={f.id}
-            onPress={() => navigation.navigate('FaturaDetalhe', { faturaId: f.id })}
-            style={({ pressed }) => [{
-              flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
-              borderBottomWidth: i < faturas.length - 1 ? 1 : 0, borderBottomColor: C.border,
-              opacity: pressed ? 0.75 : 1,
-            }]}
-          >
-            <View style={[s.iconBox, { backgroundColor: C.brandDim }]}>
-              <Receipt size={15} color={C.brand} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.bodyText} numberOfLines={1}>{f.loja}</Text>
-              <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
-            </View>
-            <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
-            <ChevronRight size={13} color={C.textMid} />
-          </Pressable>
+          <AnimatedListItem key={f.id} index={i}>
+            <Pressable
+              onPress={() => navigation.navigate('FaturaDetalhe', { faturaId: f.id })}
+              style={({ pressed }) => [{
+                flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14,
+                borderBottomWidth: i < faturas.length - 1 ? 1 : 0, borderBottomColor: C.border,
+                opacity: pressed ? 0.7 : 1,
+              }]}
+            >
+              <View style={[s.iconBox, { backgroundColor: C.brandDim }]}>
+                <Receipt size={15} color={C.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.bodyText} numberOfLines={1}>{f.loja}</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+              </View>
+              <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+              <ChevronRight size={13} color={C.textMid} />
+            </Pressable>
+          </AnimatedListItem>
         ))}
       </View>
     </Reveal>
   );
 }
 
-// ─── Upload Sheet ─────────────────────────────────────────────────────────────
-// CORRIGIDO: usa faturasAPI.upload em vez de fetch direto, e chama onUploaded após sucesso
+// ─── UploadSheet com Reanimated 4 ────────────────────────────────────────────
 function UploadSheet({ visible, onClose, onUploaded }) {
-  const slideY  = useRef(new Animated.Value(400)).current;
-  const overlay = useRef(new Animated.Value(0)).current;
+  const insets  = useSafeAreaInsets();
+  const slideY  = useSharedValue(400);
+  const overlay = useSharedValue(0);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     if (visible) {
-      Animated.parallel([
-        Animated.spring(slideY,  { toValue: 0, damping: 26, stiffness: 180, useNativeDriver: true }),
-        Animated.timing(overlay, { toValue: 1, duration: 200, useNativeDriver: true }),
-      ]).start();
+      slideY.value  = withSpring(0, { damping: 26, stiffness: 180 });
+      overlay.value = withTiming(1, { duration: 200 });
     } else {
-      Animated.parallel([
-        Animated.timing(slideY,  { toValue: 400, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-        Animated.timing(overlay, { toValue: 0,   duration: 200, useNativeDriver: true }),
-      ]).start();
+      slideY.value  = withTiming(400, { duration: 220, easing: Easing.in(Easing.quad) });
+      overlay.value = withTiming(0, { duration: 200 });
     }
   }, [visible]);
+
+  const sheetStyle   = useAnimatedStyle(() => ({ transform: [{ translateY: slideY.value }] }));
+  const overlayStyle = useAnimatedStyle(() => ({ opacity: overlay.value }));
 
   const upload = async (uri, name, type) => {
     setUploading(true);
     try {
       await faturasAPI.upload(uri, name, type);
       onClose();
-      // Pequeno delay para dar tempo ao backend de processar antes do reload
       setTimeout(() => { onUploaded(); }, 500);
     } catch (err) {
       Alert.alert('Erro no upload', err.message || 'Não foi possível fazer upload');
@@ -631,28 +607,39 @@ function UploadSheet({ visible, onClose, onUploaded }) {
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onClose}>
-      <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', opacity: overlay, justifyContent: 'flex-end' }}>
+      <Animated.View style={[{ flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' }, overlayStyle]}>
         <TouchableOpacity style={StyleSheet.absoluteFill} onPress={onClose} activeOpacity={1} />
-        <Animated.View style={[s.sheet, { transform: [{ translateY: slideY }] }]}>
+        <Animated.View style={[s.sheet, sheetStyle, { paddingBottom: Math.max(insets.bottom, 20) }]}>
           <View style={s.sheetHandle} />
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
             <Text style={s.sheetTitle}>Adicionar fatura</Text>
             <Pressable onPress={onClose} hitSlop={10}><X size={18} color={C.textMid} /></Pressable>
           </View>
+
           {uploading ? (
-            <View style={{ alignItems: 'center', paddingVertical: 36, gap: 12 }}>
-              <Zap size={26} color={C.brand} />
+            <MotiView
+              from={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              style={{ alignItems: 'center', paddingVertical: 36, gap: 12 }}
+            >
+              <MotiView
+                from={{ rotate: '0deg' }}
+                animate={{ rotate: '360deg' }}
+                transition={{ type: 'timing', duration: 1200, loop: true, repeatReverse: false }}
+              >
+                <Zap size={28} color={C.brand} />
+              </MotiView>
               <Text style={[s.label, { textAlign: 'center' }]}>A processar com IA…</Text>
-            </View>
+            </MotiView>
           ) : (
             <View style={{ flexDirection: 'row', gap: 10 }}>
               {OPTIONS.map(({ label, sub, Icon, color, fn }) => (
                 <Pressable
                   key={label}
                   onPress={fn}
-                  style={({ pressed }) => [s.uploadOption, { opacity: pressed ? 0.75 : 1 }]}
+                  style={({ pressed }) => [s.uploadOption, { flex: 1, opacity: pressed ? 0.75 : 1 }]}
                 >
-                  <View style={{ width: 48, height: 48, borderRadius: RADIUS.md, backgroundColor: color + '20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                  <View style={{ width: 50, height: 50, borderRadius: RADIUS.md, backgroundColor: color + '18', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
                     <Icon size={22} color={color} />
                   </View>
                   <Text style={[s.bodyText, { fontSize: 13 }]}>{label}</Text>
@@ -667,37 +654,36 @@ function UploadSheet({ visible, onClose, onUploaded }) {
   );
 }
 
-// ─── Search Overlay ───────────────────────────────────────────────────────────
+// ─── SearchOverlay ────────────────────────────────────────────────────────────
 function SearchOverlay({ visible, onClose, navigation }) {
-  const opacity = useRef(new Animated.Value(0)).current;
+  const opacity = useSharedValue(0);
   const [q, setQ]             = useState('');
   const [results, setResults] = useState([]);
   const timer = useRef(null);
 
   useEffect(() => {
-    Animated.timing(opacity, { toValue: visible ? 1 : 0, duration: 180, useNativeDriver: true }).start();
+    opacity.value = withTiming(visible ? 1 : 0, { duration: 200 });
     if (!visible) { setQ(''); setResults([]); }
   }, [visible]);
+
+  const overlayStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   const search = (text) => {
     setQ(text);
     clearTimeout(timer.current);
     if (!text.trim()) return setResults([]);
     timer.current = setTimeout(async () => {
-      try {
-        const d = await faturasAPI.listar({ q: text });
-        setResults(d.faturas || []);
-      } catch (_) {}
+      try { const d = await faturasAPI.listar({ q: text }); setResults(d.faturas || []); } catch (_) {}
     }, 320);
   };
 
   if (!visible) return null;
 
   return (
-    <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: C.bg, zIndex: 9999, opacity }]}>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
+    <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: C.bg, zIndex: 9999 }, overlayStyle]}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <View style={{ flex: 1, padding: SPACE.lg, paddingTop: 56 }}>
-          <View style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16 }]}>
+          <Animated.View entering={FadeInDown.duration(250)} style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 4, marginBottom: 16 }]}>
             <Search size={16} color={C.textMid} />
             <TextInput
               autoFocus value={q} onChangeText={search}
@@ -705,23 +691,26 @@ function SearchOverlay({ visible, onClose, navigation }) {
               style={{ flex: 1, fontSize: FONT.md, color: C.text, paddingVertical: 10 }}
             />
             <Pressable onPress={onClose} hitSlop={8}><X size={16} color={C.textMid} /></Pressable>
-          </View>
+          </Animated.View>
           <ScrollView keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-            {results.map(f => (
-              <Pressable
-                key={f.id}
-                onPress={() => { onClose(); navigation.navigate('FaturaDetalhe', { faturaId: f.id }); }}
-                style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, opacity: pressed ? 0.7 : 1 }]}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={s.bodyText}>{f.loja}</Text>
-                  <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
-                </View>
-                <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
-              </Pressable>
+            {results.map((f, i) => (
+              <AnimatedListItem key={f.id} index={i}>
+                <Pressable
+                  onPress={() => { onClose(); navigation.navigate('FaturaDetalhe', { faturaId: f.id }); }}
+                  style={({ pressed }) => [{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.border, opacity: pressed ? 0.7 : 1 }]}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.bodyText}>{f.loja}</Text>
+                    <Text style={[s.microText, { marginTop: 2 }]}>{f.categoria} · {f.data_compra || '—'}</Text>
+                  </View>
+                  <Text style={[s.bodyText, { fontWeight: '800' }]}>{fmt(f.total)} €</Text>
+                </Pressable>
+              </AnimatedListItem>
             ))}
             {!results.length && q.length > 1 && (
-              <Text style={[s.label, { textAlign: 'center', marginTop: 40 }]}>Sem resultados para "{q}"</Text>
+              <Animated.View entering={FadeIn.duration(200)}>
+                <Text style={[s.label, { textAlign: 'center', marginTop: 40 }]}>Sem resultados para "{q}"</Text>
+              </Animated.View>
             )}
           </ScrollView>
         </View>
@@ -730,21 +719,40 @@ function SearchOverlay({ visible, onClose, navigation }) {
   );
 }
 
-// ─── FAB ──────────────────────────────────────────────────────────────────────
+// ─── FAB com spring bounce ────────────────────────────────────────────────────
 function FAB({ onPress }) {
-  const scale = useRef(new Animated.Value(0)).current;
-  const { onPressIn, onPressOut, scale: pressScale } = useScalePress(0.92);
+  const scale      = useSharedValue(0);
+  const pressScale = useSharedValue(1);
+  const rotate     = useSharedValue(0);
 
   useEffect(() => {
     setTimeout(() => {
-      Animated.spring(scale, { toValue: 1, speed: 12, bounciness: 14, useNativeDriver: true }).start();
+      scale.value = withSpring(1, { damping: 12, stiffness: 180 });
     }, 400);
   }, []);
 
+  const onPressIn  = () => {
+    pressScale.value = withSpring(0.90, { damping: 20, stiffness: 400 });
+    rotate.value     = withTiming(45, { duration: 150 });
+  };
+  const onPressOut = () => {
+    pressScale.value = withSpring(1,    { damping: 18, stiffness: 300 });
+    rotate.value     = withTiming(0,    { duration: 150 });
+  };
+
+  const fabStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: scale.value * pressScale.value },
+      { rotate: `${rotate.value}deg` },
+    ],
+  }));
+
   return (
-    <Animated.View style={[s.fab, { transform: [{ scale: Animated.multiply(scale, pressScale) }] }]}>
+    <Animated.View style={[s.fab, fabStyle]}>
       <Pressable
-        onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress}
+        onPressIn={onPressIn}
+        onPressOut={onPressOut}
+        onPress={onPress}
         style={{ width: '100%', height: '100%', borderRadius: RADIUS.lg, justifyContent: 'center', alignItems: 'center' }}
       >
         <Plus size={22} color="#fff" strokeWidth={2.5} />
@@ -754,57 +762,75 @@ function FAB({ onPress }) {
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ user, alertas, showAlerts, onBellPress, insets }) {
-  const dotScale = useRef(new Animated.Value(0)).current;
+function Header({ user, alertas, showAlerts, onBellPress, onUploadPress, navigation }) {
+  const dotScale  = useSharedValue(0);
   const hasAlerts = alertas?.length > 0;
 
   useEffect(() => {
     if (hasAlerts) {
       setTimeout(() => {
-        Animated.spring(dotScale, { toValue: 1, speed: 14, bounciness: 14, useNativeDriver: true }).start();
-      }, 500);
+        dotScale.value = withSpring(1, { damping: 12, stiffness: 200 });
+      }, 600);
     }
   }, [hasAlerts]);
 
-  return (
-    <Reveal delay={0} style={{
-      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-      paddingHorizontal: SPACE.lg,
-      paddingTop: SPACE.sm,
-      paddingBottom: 6,
-    }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={s.avatar}>
-          <Text style={s.avatarText}>{initials(user?.nome)}</Text>
-        </View>
-        <View>
-          <Text style={s.microText}>Olá,</Text>
-          <Text style={[s.bodyText, { fontWeight: '800', fontSize: FONT.lg }]}>
-            {(user?.nome || '').split(' ')[0] || 'Utilizador'}
-          </Text>
-        </View>
-      </View>
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: dotScale.value }],
+  }));
 
+  const { animStyle: bellStyle, onPressIn: bellIn, onPressOut: bellOut } = useScalePress(0.88);
+
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(380).springify()}
+      style={{
+        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+        paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: 6,
+      }}
+    >
+      {/* Esquerda — Definições */}
       <Pressable
-        onPress={onBellPress}
-        style={[s.iconBtn, showAlerts && { backgroundColor: C.brandDim, borderColor: C.brand }]}
+        onPress={() => navigation.navigate('Configuracoes')}
+        style={s.iconBtn}
+        hitSlop={8}
       >
-        <Bell size={17} color={hasAlerts ? C.red : C.textMid} />
-        {hasAlerts && (
-          <Animated.View style={[s.dot, { transform: [{ scale: dotScale }] }]} />
-        )}
+        <Settings size={18} color={C.textMid} strokeWidth={1.8} />
       </Pressable>
-    </Reveal>
+
+      {/* Centro — Logo */}
+      <Animated.View entering={FadeIn.delay(100).duration(300)} style={{ alignItems: 'center' }}>
+        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+      </Animated.View>
+
+      {/* Direita — + e menu */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Pressable
+          onPress={onUploadPress}
+          style={[s.iconBtn, { backgroundColor: C.brand, borderColor: C.brand }]}
+          hitSlop={4}
+        >
+          <Plus size={17} color="#fff" strokeWidth={2.5} />
+        </Pressable>
+
+        <Pressable
+          onPress={() => navigation.navigate('Menu')}
+          style={s.iconBtn}
+          hitSlop={4}
+        >
+          <Text style={{ color: C.text, fontSize: 17, fontWeight: '700' }}>☰</Text>
+        </Pressable>
+      </View>
+    </Animated.View>
   );
 }
 
-// ─── Loading ──────────────────────────────────────────────────────────────────
+// ─── Loading skeleton ─────────────────────────────────────────────────────────
 function LoadingSkeleton() {
   return (
     <View style={{ gap: 14, paddingHorizontal: SPACE.lg, marginTop: 12 }}>
       <Skeleton height={130} radius={RADIUS.lg} />
       <View style={{ flexDirection: 'row', gap: 10 }}>
-        {[1, 2, 3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
+        {[1,2,3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
       </View>
       <Skeleton height={200} radius={RADIUS.lg} />
       <Skeleton height={140} radius={RADIUS.lg} />
@@ -813,7 +839,7 @@ function LoadingSkeleton() {
 }
 
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
-export default function DashboardScreen({ navigation }) {
+export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
   const insets    = useSafeAreaInsets();
   const [data,       setData]   = useState(null);
@@ -822,6 +848,14 @@ export default function DashboardScreen({ navigation }) {
   const [showUpload, setUpload]  = useState(false);
   const [showSearch, setSearch]  = useState(false);
   const [showAlerts, setAlerts]  = useState(false);
+
+  // Abre upload quando o + do header é pressionado
+  useEffect(() => {
+    if (route?.params?.openUpload) {
+      setUpload(true);
+      navigation.setParams({ openUpload: false });
+    }
+  }, [route?.params?.openUpload]);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefresh(true); else setLoading(true);
@@ -834,17 +868,47 @@ export default function DashboardScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  // Normaliza os dados do backend para o formato esperado pelos gráficos
   const { porCategoria, porMes } = normalizeDashboardData(data);
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
+      {/* Header custom */}
+      <View style={{
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12,
+        backgroundColor: C.bg, borderBottomWidth: 1, borderBottomColor: C.border,
+      }}>
+        {/* Esquerda — definições */}
+        <TouchableOpacity onPress={() => navigation.navigate('Configuracoes')} hitSlop={8}>
+          <Settings size={20} color={C.textMid} strokeWidth={1.8} />
+        </TouchableOpacity>
+
+        {/* Centro — título */}
+        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+
+        {/* Direita — + e menu */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <TouchableOpacity
+            onPress={() => setUpload(true)}
+            style={{
+              width: 34, height: 34, borderRadius: 10,
+              backgroundColor: C.brand,
+              justifyContent: 'center', alignItems: 'center',
+            }}
+          >
+            <Plus size={18} color="#fff" strokeWidth={2.5} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('Menu')} hitSlop={8}>
+            <Text style={{ color: C.text, fontSize: 22 }}>☰</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {showSearch && (
         <SearchOverlay visible={showSearch} onClose={() => setSearch(false)} navigation={navigation} />
       )}
-
       <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} />
 
       <ScrollView
@@ -853,40 +917,24 @@ export default function DashboardScreen({ navigation }) {
         contentContainerStyle={{ paddingBottom: 130 }}
         keyboardShouldPersistTaps="handled"
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => load(true)}
-            tintColor={C.brand}
-            colors={[C.brand]}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} colors={[C.brand]} />
         }
       >
-        <Header
-          user={user}
-          alertas={data?.alertas}
-          showAlerts={showAlerts}
-          onBellPress={() => setAlerts(v => !v)}
-          insets={insets}
-        />
         <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
 
         {loading ? <LoadingSkeleton /> : (
           <>
             <HeroCard data={data} onSearchPress={() => setSearch(true)} />
             <MetricsRow data={data} />
-
-            {/* Gráficos interativos com dados normalizados do backend */}
-            <ChartsSection
-              porCategoria={porCategoria}
-              porMes={porMes}
-              navigation={navigation}
-            />
-
+            <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
             <InsightsSection mood={data?.mood} feed={data?.feed} />
 
             {data?.subscricoes?.count_danger > 0 && (
-              <Reveal delay={200} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-                <Card
+              <Animated.View
+                entering={FadeInDown.delay(200).duration(400).springify()}
+                style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}
+              >
+                <Pressable
                   onPress={() => navigation.navigate('Subscricoes')}
                   style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
                 >
@@ -898,21 +946,18 @@ export default function DashboardScreen({ navigation }) {
                     <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mês</Text>
                   </View>
                   <ChevronRight size={14} color={C.red} />
-                </Card>
-              </Reveal>
+                </Pressable>
+              </Animated.View>
             )}
 
             <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
           </>
         )}
       </ScrollView>
-
-      <FAB onPress={() => setUpload(true)} />
     </View>
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   card: {
     backgroundColor: C.surface,
@@ -955,7 +1000,7 @@ const s = StyleSheet.create({
   sheet: {
     backgroundColor: C.surface2,
     borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    padding: 24, paddingBottom: 44,
+    padding: 24,
   },
   sheetHandle: {
     width: 36, height: 4, borderRadius: 2,
@@ -963,24 +1008,15 @@ const s = StyleSheet.create({
   },
   sheetTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
   uploadOption: {
-    flex: 1,
     backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    alignItems: 'center',
-    paddingVertical: 18,
-    paddingHorizontal: 8,
+    borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border,
+    alignItems: 'center', paddingVertical: 18, paddingHorizontal: 8,
   },
   tab: {
     paddingHorizontal: 14, paddingVertical: 7,
-    borderRadius: 10, borderWidth: 1,
-    borderColor: 'transparent',
+    borderRadius: 10, borderWidth: 1, borderColor: 'transparent',
   },
-  tabActive: {
-    backgroundColor: C.brandDim,
-    borderColor: C.brand + '40',
-  },
-  tabText: { fontSize: 12, fontWeight: '700', color: C.textMid },
+  tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
+  tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
   tabTextActive: { color: C.brand },
 });

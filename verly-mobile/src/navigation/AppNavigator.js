@@ -458,7 +458,7 @@ function MainTabs({ navigation }) {
       <Tab.Screen
         name="Dashboard"
         component={DashboardScreen}
-        options={{ tabBarLabel: 'Início', headerTitle: 'Verly', headerShown: true }}
+        options={{ tabBarLabel: 'Início', headerShown: false }}
       />
       <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
       <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
