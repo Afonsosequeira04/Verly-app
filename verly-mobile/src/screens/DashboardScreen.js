@@ -542,7 +542,7 @@ function RecentFaturas({ faturas = [], navigation }) {
 }
 
 // ─── UploadSheet com Reanimated 4 ────────────────────────────────────────────
-function UploadSheet({ visible, onClose, onUploaded }) {
+function UploadSheet({ visible, onClose, onUploaded, onUploadResult }) {
   const insets  = useSafeAreaInsets();
   const slideY  = useSharedValue(400);
   const overlay = useSharedValue(0);
@@ -567,7 +567,7 @@ function UploadSheet({ visible, onClose, onUploaded }) {
       const result = await faturasAPI.upload(uri, name, type);
       onClose();
       if (result?.fatura) {
-        setTimeout(() => { setUploadResult(result.fatura); }, 300);
+        setTimeout(() => { onUploadResult?.(result.fatura); }, 300);
       }
       setTimeout(() => { onUploaded(); }, 500);
     } catch (err) {
@@ -956,7 +956,7 @@ export default function DashboardScreen({ navigation, route }) {
       {showSearch && (
         <SearchOverlay visible={showSearch} onClose={() => setSearch(false)} navigation={navigation} />
       )}
-      <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} />
+      <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} onUploadResult={setUploadResult} />
 
       <ScrollView
         style={{ flex: 1 }}
