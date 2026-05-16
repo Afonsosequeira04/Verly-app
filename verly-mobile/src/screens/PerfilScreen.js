@@ -139,6 +139,7 @@ export default function PerfilScreen({ navigation }) {
   const [perfil,        setPerfil]        = useState(null);
   const [nome,          setNome]          = useState('');
   const [orcamento,     setOrcamento]     = useState('');
+  const [rendimento,    setRendimento]    = useState('');
   const [personalidade, setPersonalidade] = useState('calm');
   const [saving,        setSaving]        = useState(false);
   const [refreshing,    setRefreshing]    = useState(false);
@@ -157,6 +158,7 @@ export default function PerfilScreen({ navigation }) {
       setPerfil(d);
       setNome(d.nome || '');
       setOrcamento(d.orcamento_mensal ? String(d.orcamento_mensal) : '');
+      setRendimento(d.rendimento_mensal ? String(d.rendimento_mensal) : '');
       setPersonalidade(d.personalidade || 'calm');
       if (d.avatar_url) setAvatarUri(d.avatar_url);
       if (d.telefone)   setPhone(d.telefone);
@@ -170,6 +172,7 @@ export default function PerfilScreen({ navigation }) {
       await perfilAPI.atualizar({
         nome: nome.trim(),
         orcamento_mensal: parseFloat(orcamento.replace(',', '.')) || 0,
+        rendimento_mensal: parseFloat(rendimento.replace(',', '.')) || 0,
         personalidade,
       });
       updateUser?.({ nome: nome.trim() });
@@ -303,6 +306,20 @@ export default function PerfilScreen({ navigation }) {
                 placeholderTextColor={C.textMid}
                 keyboardType="decimal-pad"
                 onFocus={() => setFocused('orcamento')}
+                onBlur={() => setFocused(null)}
+                returnKeyType="next"
+              />
+            </View>
+            <View style={[pf.field, { borderTopWidth: 1, borderTopColor: C.border }]}>
+              <Text style={pf.label}>Rendimento mensal (€)</Text>
+              <TextInput
+                style={inputStyle('rendimento')}
+                value={rendimento}
+                onChangeText={setRendimento}
+                placeholder="Ex: 1500"
+                placeholderTextColor={C.textMid}
+                keyboardType="decimal-pad"
+                onFocus={() => setFocused('rendimento')}
                 onBlur={() => setFocused(null)}
                 returnKeyType="done"
               />

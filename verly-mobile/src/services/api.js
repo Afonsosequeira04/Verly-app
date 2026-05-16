@@ -6,7 +6,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'http://192.168.1.250:5000/api/v1';
+const BASE_URL = 'http://192.168.1.3:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
@@ -41,7 +41,7 @@ export async function apiFetch(path, options = {}) {
 
   if (!response.ok) {
     const err = new Error(data.error || `Erro ${response.status}`);
-    err.code = data.code; // propaga o código de erro do backend
+    err.code = data.code;
     throw err;
   }
 
@@ -73,15 +73,15 @@ async function apiUpload(path, formData) {
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
 export const authAPI = {
-  login:      (email, password) =>
+  login: (email, password) =>
     apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
 
-  register:   (nome, email, password) =>
+  register: (nome, email, password) =>
     apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
 
-  me:         () => apiFetch('/auth/me'),
+  me: () => apiFetch('/auth/me'),
 
-  updateMe:   (updates) =>
+  updateMe: (updates) =>
     apiFetch('/auth/me', { method: 'PATCH', body: JSON.stringify(updates) }),
 
   uploadAvatar: (image_base64) =>
@@ -93,12 +93,21 @@ export const authAPI = {
   resendConfirm: (email) =>
     apiFetch('/auth/resend-confirm', { method: 'POST', body: JSON.stringify({ email }) }),
 
-  // ✅ Firebase Auth (Google / Apple / SMS)
   firebaseLogin: (idToken) =>
-    apiFetch('/auth/firebase', {
-      method: 'POST',
-      body: JSON.stringify({ idToken }),
-    }),
+    apiFetch('/auth/firebase', { method: 'POST', body: JSON.stringify({ idToken }) }),
+
+  // ✅ Apagar conta permanentemente
+  deleteAccount: () =>
+    apiFetch('/auth/account', { method: 'DELETE' }),
+};
+
+// ── Onboarding (guarda rendimento + objetivo) ──────────────────────────────────
+
+export const onboardingAPI = {
+  save: (answers) =>
+    apiFetch('/onboarding', { method: 'POST', body: JSON.stringify(answers) }),
+
+  status: () => apiFetch('/onboarding/status'),
 };
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
@@ -122,15 +131,15 @@ export const faturasAPI = {
 
   upload: (fileUri, fileName, fileType) => {
     const formData = new FormData();
-
-    formData.append('file', {
-      uri: fileUri,
-      name: fileName,
-      type: fileType,
-    });
-
+    formData.append('file', { uri: fileUri, name: fileName, type: fileType });
     return apiUpload('/faturas/upload', formData);
   },
+};
+
+// ── Insights (IA real) ─────────────────────────────────────────────────────────
+
+export const insightsAPI = {
+  get: () => apiFetch('/insights'),
 };
 
 // ── Notificações ───────────────────────────────────────────────────────────────
@@ -143,10 +152,7 @@ export const notificacoesAPI = {
 
 export const chatAPI = {
   enviar: (mensagem) =>
-    apiFetch('/chat/mensagem', {
-      method: 'POST',
-      body: JSON.stringify({ mensagem }),
-    }),
+    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
 
   historico: (limite = 20) =>
     apiFetch(`/chat/historico?limite=${limite}`),
@@ -167,10 +173,7 @@ export const metasAPI = {
   listar: () => apiFetch('/metas'),
 
   criar: (nome, limite, categoria) =>
-    apiFetch('/metas', {
-      method: 'POST',
-      body: JSON.stringify({ nome, limite, categoria }),
-    }),
+    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
 
   apagar: (id) =>
     apiFetch(`/metas/${id}`, { method: 'DELETE' }),
@@ -186,19 +189,41 @@ export const estatisticasAPI = {
 
 export const scoreAPI = {
   analisar: ({ item, preco, categoria, uso }) =>
-    apiFetch('/scoring/analisar', {
-      method: 'POST',
-      body: JSON.stringify({ item, preco, categoria, uso }),
-    }),
+    apiFetch('/scoring/analisar', { method: 'POST', body: JSON.stringify({ item, preco, categoria, uso }) }),
 
   scoreFatura: (faturaId) =>
     apiFetch(`/scoring/fatura/${faturaId}`),
 
   lojasProximas: ({ item, categoria, lat, lng }) =>
-    apiFetch('/scoring/lojas-proximas', {
-      method: 'POST',
-      body: JSON.stringify({ item, categoria, lat, lng }),
-    }),
+    apiFetch('/scoring/lojas-proximas', { method: 'POST', body: JSON.stringify({ item, categoria, lat, lng }) }),
+};
+
+// ── Perfil ─────────────────────────────────────────────────────────────────────
+
+export const perfilAPI = {
+  get: () => apiFetch('/perfil'),
+
+  update: (data) =>
+    apiFetch('/perfil', { method: 'PATCH', body: JSON.stringify(data) }),
+
+  // alias para compatibilidade com código antigo
+  atualizar: (data) =>
+    apiFetch('/perfil', { method: 'PATCH', body: JSON.stringify(data) }),
+};
+
+// ── Histórico ──────────────────────────────────────────────────────────────────
+
+export const historicoAPI = {
+  get: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/historico${query ? `?${query}` : ''}`);
+  },
+};
+
+// ── Relatório ──────────────────────────────────────────────────────────────────
+
+export const relatorioAPI = {
+  get: () => apiFetch('/relatorio'),
 };
 
 // ── Playlists (Criar Em) ───────────────────────────────────────────────────────
@@ -207,53 +232,34 @@ export const playlistsAPI = {
   listar: () => apiFetch('/playlists'),
 
   criar: (data) =>
-    apiFetch('/playlists', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
+    apiFetch('/playlists', { method: 'POST', body: JSON.stringify(data) }),
 
   detalhe: (id) =>
     apiFetch(`/playlists/${id}`),
 
   editar: (id, data) =>
-    apiFetch(`/playlists/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
+    apiFetch(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   apagar: (id) =>
-    apiFetch(`/playlists/${id}`, {
-      method: 'DELETE',
-    }),
+    apiFetch(`/playlists/${id}`, { method: 'DELETE' }),
 
   addFatura: (id, ids) =>
-    apiFetch(`/playlists/${id}/faturas`, {
-      method: 'POST',
-      body: JSON.stringify({ fatura_ids: ids }),
-    }),
+    apiFetch(`/playlists/${id}/faturas`, { method: 'POST', body: JSON.stringify({ fatura_ids: ids }) }),
 
   remFatura: (id, fid) =>
-    apiFetch(`/playlists/${id}/faturas/${fid}`, {
-      method: 'DELETE',
-    }),
+    apiFetch(`/playlists/${id}/faturas/${fid}`, { method: 'DELETE' }),
 
   partilhar: (id) =>
-    apiFetch(`/playlists/${id}/partilhar`, {
-      method: 'POST',
-    }),
+    apiFetch(`/playlists/${id}/partilhar`, { method: 'POST' }),
 
   juntar: (codigo) =>
-    apiFetch(`/playlists/juntar/${codigo}`, {
-      method: 'POST',
-    }),
+    apiFetch(`/playlists/juntar/${codigo}`, { method: 'POST' }),
 
   membros: (id) =>
     apiFetch(`/playlists/${id}/membros`),
 
   sair: (id) =>
-    apiFetch(`/playlists/${id}/sair`, {
-      method: 'DELETE',
-    }),
+    apiFetch(`/playlists/${id}/sair`, { method: 'DELETE' }),
 };
 
 // ── Amigos / Conexões ──────────────────────────────────────────────────────────
@@ -264,45 +270,11 @@ export const amigosAPI = {
   pedidos: () => apiFetch('/amigos/pedidos'),
 
   enviarPedido: (email) =>
-    apiFetch('/amigos/pedido', {
-      method: 'POST',
-      body: JSON.stringify({ email }),
-    }),
+    apiFetch('/amigos/pedido', { method: 'POST', body: JSON.stringify({ email }) }),
 
   aceitar: (id) =>
-    apiFetch(`/amigos/${id}/aceitar`, {
-      method: 'POST',
-    }),
+    apiFetch(`/amigos/${id}/aceitar`, { method: 'POST' }),
 
   rejeitar: (id) =>
-    apiFetch(`/amigos/${id}/rejeitar`, {
-      method: 'POST',
-    }),
-
-  buscar: (q) =>
-    apiFetch(`/utilizadores/buscar?q=${encodeURIComponent(q)}`),
-};
-
-// ── Relatório Mensal ───────────────────────────────────────────────────────────
-
-export const relatorioAPI = {
-  get: (mes = null, ano = null) => {
-    const params = new URLSearchParams();
-
-    if (mes) params.set('mes', mes);
-    if (ano) params.set('ano', ano);
-
-    const query = params.toString();
-
-    return apiFetch(`/relatorio/api${query ? `?${query}` : ''}`);
-  },
-};
-
-// ── Histórico ──────────────────────────────────────────────────────────────────
-
-export const historicoAPI = {
-  listar: (params = {}) => {
-    const query = new URLSearchParams(params).toString();
-    return apiFetch(`/historico/api${query ? `?${query}` : ''}`);
-  },
+    apiFetch(`/amigos/${id}/rejeitar`, { method: 'POST' }),
 };

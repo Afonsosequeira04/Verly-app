@@ -12,5 +12,9 @@ from app.api import dashboard     # noqa: F401, E402
 from app.api import faturas       # noqa: F401, E402
 from app.api import mobile_extras # noqa: F401, E402
 from app.api import playlists     # noqa: F401, E402
-from app.api import metas         # noqa: F401, E402  ← NOVO
-from app.api import amizades      # noqa: F401, E402  ← NOVO
+from app.api import metas         # noqa: F401, E402
+from app.api import amizades      # noqa: F401, E402
+from app.api import insights          # noqa
+from app.api import onboarding_mobile  # noqa
+from app.api import notificacoes_mobile  # noqa
+from app.api import perfil_mobile  # noqa

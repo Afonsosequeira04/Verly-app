@@ -1,71 +1,195 @@
-Verly 💰
-The ultimate shopping guardian and warranty tracker.
+# Verly 💜
 
-Verly is a SaaS application designed to help users manage their finances, track product warranties, and never miss a return deadline. By leveraging RAG (Retrieval-Augmented Generation), the "Police" analyzes your receipts and invoices to extract organized data, delivered with a touch of sarcastic humor (or professional insight—the choice is yours).
+**O teu guardião financeiro inteligente.**
 
-🚀 Features
-Smart Invoice Upload: Upload PDFs or images of your receipts with automated extraction via OCR and AI.
+Verly é uma aplicação móvel + web que ajuda utilizadores portugueses a gerir as suas despesas, detetar desperdício financeiro e tomar decisões de compra mais inteligentes — com a personalidade irreverente de uma IA que conhece os teus hábitos melhor do que tu.
 
-AI-Powered Analysis: Uses Llama 3.3 (via Groq) to identify stores, prices, dates, items, and categories.
+---
 
-Personality System (Roasting): Choose between 4 profiles (Savage, Sarcastic, Calm, Pro) to receive feedback on your spending habits.
+## ✨ Funcionalidades
 
-Impulse Control Module: Ask Verly before you buy. It performs a cost-benefit analysis and suggests whether you should pull the trigger or save your money.
+### 📱 App Mobile (React Native / Expo)
+- **Dashboard** — visão geral do mês: gastos, faturas, alertas e tendência vs. mês anterior
+- **Faturas** — upload via câmara, galeria ou PDF; extração automática por OCR + IA
+- **Ask Verly** — chat com IA contextualizado com os teus dados financeiros pessoais
+- **Insights** — análise inteligente dos teus padrões de consumo com alertas, tendências e dicas personalizadas
+- **Perfil** — personalidade da IA, avatar, configurações
 
-Subscription Detector: Identifies financial "leaks" in recurring services (Netflix, Spotify, etc.) and warns you if you're paying for something you don't use.
+### 🗂️ Menu Lateral
+- **Metas** — define limites de gasto por categoria e acompanha o progresso
+- **Amigos** — partilha e compara hábitos com amigos
+- **Playlists de compras** — listas colaborativas de produtos
+- **Estatísticas** — gráficos detalhados de consumo
+- **Relatório** — relatório mensal com estimativa de desperdício
+- **Histórico** — todas as faturas ordenadas por data
+- **Score de compra** — analisa se uma compra vale a pena antes de a fazer
+- **Subscrições** — deteta serviços recorrentes e alerta para os que não usas
+- **Notificações** — alertas de garantias e prazos de devolução
 
-Financial Damage Report: Detailed monthly reports featuring "estimated waste" calculations and spending trend analysis.
+### 🌐 Web (Flask + Jinja2)
+- Interface completa de gestão de faturas e relatórios
+- Exportação PDF de relatórios mensais
+- Sistema de personalidade (Savage / Sarcástico / Calmo / Pro)
+- Módulo Impulse Control — análise custo-benefício antes de comprar
 
-Warranty & Returns: Automatic calculation of warranty periods (EU standard 3 years) and return windows.
+---
 
-PDF Export: Generate professional reports of your expenses using ReportLab.
+## 🛠️ Stack Tecnológico
 
-🛠️ Tech Stack
-Backend & AI
-Language: Python 3.10+
+### Mobile
+| Camada | Tecnologia |
+|---|---|
+| Framework | React Native 0.81 + Expo 54 |
+| Linguagem | JavaScript (ES2022) |
+| Navegação | React Navigation 6 (Stack + Bottom Tabs) |
+| Animações | React Native Reanimated 4 + Moti |
+| Ícones | Lucide React Native + SVG customizados |
+| SVG | react-native-svg 15 |
+| Storage local | AsyncStorage |
+| Autenticação | Firebase Auth (email, Google, Apple) |
+| Compras in-app | RevenueCat |
+| Localização | expo-location |
+| Câmara / Galeria | expo-image-picker |
+| Ficheiros | expo-document-picker |
+| HTTP | fetch nativo (via `src/services/api.js`) |
 
-Web Framework: Flask (with Flask-Login & SQLAlchemy)
+### Backend
+| Camada | Tecnologia |
+|---|---|
+| Linguagem | Python 3.10+ |
+| Framework | Flask + Flask-Login + SQLAlchemy |
+| Base de dados | SQLite (com sistema de migração próprio) |
+| IA / LLM | Meta Llama 3.3 via Groq API |
+| Orquestração IA | LlamaIndex |
+| Embeddings | HuggingFace BGE Small |
+| OCR / Extração | LlamaIndex + Groq multimodal |
+| Exportação PDF | ReportLab |
+| Autenticação web | Flask-Login + JWT (API mobile) |
+| Email | Flask-Mail |
 
-AI Orchestration: LlamaIndex
+### Frontend Web
+| Camada | Tecnologia |
+|---|---|
+| Templates | Jinja2 |
+| CSS | CSS puro com variáveis (dark mode) |
+| Tipografia | Sora + Inter |
 
-LLM: Meta Llama 3.3 via Groq
+---
 
-Embeddings: HuggingFace (BGE Small)
+## 📁 Estrutura do Projeto
 
-Database: SQLite (with automatic migration system for new schema fields)
+```
+verly/
+├── app/                        # Backend Flask
+│   ├── api/                    # Endpoints REST para mobile (JWT)
+│   │   ├── auth.py             # Login, registo, Firebase
+│   │   ├── chat.py             # Chat IA
+│   │   ├── dashboard.py        # Dados do dashboard
+│   │   ├── faturas.py          # Upload e listagem de faturas
+│   │   ├── metas.py            # Metas financeiras
+│   │   ├── mobile_extras.py    # Score, impulse, relatório, lojas
+│   │   ├── subscricoes.py      # Subscrições + RevenueCat
+│   │   └── amizades.py         # Sistema social
+│   ├── models.py               # Modelos SQLAlchemy
+│   ├── ai.py                   # Integração LlamaIndex + Groq
+│   ├── email_service.py        # Envio de emails
+│   └── ...                     # Outros módulos (scoring, impulse, etc.)
+│
+├── verly-mobile/               # App React Native / Expo
+│   ├── src/
+│   │   ├── screens/            # Ecrãs da app
+│   │   │   ├── DashboardScreen.js
+│   │   │   ├── ChatScreen.js       # "Ask Verly"
+│   │   │   ├── InsightsScreen.js   # Insights IA
+│   │   │   ├── FaturasScreen.js
+│   │   │   ├── PerfilScreen.js
+│   │   │   ├── MetasScreen.js
+│   │   │   └── ...
+│   │   ├── navigation/
+│   │   │   └── AppNavigator.js # Stack + Tabs + Menu lateral
+│   │   ├── services/
+│   │   │   └── api.js          # Comunicação com o backend Flask
+│   │   ├── context/
+│   │   │   ├── AuthContext.js  # Estado de autenticação global
+│   │   │   └── RevenueCatContext.js
+│   │   ├── components/
+│   │   │   └── UI.js           # Componentes reutilizáveis
+│   │   └── constants/
+│   │       └── theme.js        # COLORS, FONT, SPACE, RADIUS
+│   └── android/                # Build nativo Android
+│
+├── templates/                  # Templates Jinja2 (web)
+├── static/                     # CSS e assets estáticos
+├── dados_utilizadores/         # Ficheiros por utilizador (PDFs, imagens)
+├── storage_utilizadores/       # Índices vectoriais por utilizador
+├── requirements.txt
+└── run.py
+```
 
-Frontend
-Engine: Jinja2 Templates
+---
 
-Design: Modern "Dark Mode" UI with pure CSS and dynamic variables.
+## 🚀 Instalação e Setup
 
-Typography: Sora & Inter.
+### Backend
 
-🔧 Installation & Setup
-Clone the repository:
-
-Bash
+```bash
 git clone https://github.com/your-username/verly.git
 cd verly
-Set up Environment:
 
-Bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-Environment Variables:
-Create a .env file in the root directory:
+```
 
-Code snippet
-GROQ_API_KEY=your_api_key_here
-FLASK_SECRET_KEY=your_secure_secret_key
-Run the Application:
+Cria um ficheiro `.env` na raiz:
 
-📋 Project Structure (Summary)
-/app: Core logic (Blueprints for invoices, chat, scoring, subscriptions, etc.).
+```env
+GROQ_API_KEY=your_groq_api_key
+FLASK_SECRET_KEY=your_secret_key
+MAIL_USERNAME=your_email@gmail.com
+MAIL_PASSWORD=your_app_password
+```
 
-/templates: HTML interfaces organized by module (Jinja2).
+Inicia o servidor:
 
-/static: Assets, including custom CSS and inline SVG icons.
+```bash
+python run.py
+```
 
-/user_data: Isolated storage for text data and vector indices per user (Privacy First).
+### Mobile
+
+```bash
+cd verly-mobile
+npm install
+```
+
+Em `src/services/api.js`, atualiza o IP para o da tua máquina:
+
+```js
+const BASE_URL = 'http://192.168.1.X:5000/api/v1';
+```
+
+Inicia a app:
+
+```bash
+npx expo start
+```
+
+---
+
+## 🎨 Design System
+
+A app usa um sistema de design consistente definido em `src/constants/theme.js`:
+
+- **Cor primária:** `#7C6FE0` (roxo Verly)
+- **Background:** `#080810` (dark profundo)
+- **Surface:** `#0F0F1A` / `#161624`
+- **Tipografia:** FONT.xs / sm / md / lg / xl / h1
+- **Espaçamento:** SPACE.sm / md / lg
+- **Raios:** RADIUS.sm / md / lg
+
+---
+
+## 📄 Licença
+
+Projeto privado — todos os direitos reservados.

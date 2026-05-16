@@ -7,14 +7,14 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Send, Zap } from 'lucide-react-native';
-import { chatAPI } from '../services/api';
+import { chatAPI, dashboardAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
 const C = COLORS;
 const initials = (name = '') => name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
-const SUGESTOES = [
+const SUGESTOES_FALLBACK = [
   'Quanto gastei este mês?',
   'Qual a minha categoria mais cara?',
   'Tenho garantias a expirar?',
@@ -64,6 +64,26 @@ export default function ChatScreen() {
   const [input,     setInput]     = useState('');
   const [sending,   setSending]   = useState(false);
   const [focused,   setFocused]   = useState(false);
+  const [sugestoes, setSugestoes] = useState(SUGESTOES_FALLBACK);
+
+  useEffect(() => {
+    dashboardAPI.get().then(data => {
+      const s = [];
+      const totalGasto = data.total_gasto || 0;
+      const orcamento  = data.orcamento || 0;
+      const pctOrc     = orcamento > 0 ? (totalGasto / orcamento) * 100 : 0;
+      const topCat     = data.categorias?.[0]?.nome;
+      const numFat     = data.num_faturas || 0;
+      if (totalGasto > 0) s.push(`Gastei ${totalGasto.toFixed(0)}€ este mês. Está bem?`);
+      if (pctOrc >= 80) s.push(`Usei ${Math.round(pctOrc)}% do orçamento. O que cortar?`);
+      if (topCat) s.push(`Qual a tendência em ${topCat}?`);
+      if (numFat === 0) s.push('Como começo a usar a Verly?');
+      else s.push('Tenho garantias a expirar?');
+      s.push('Estou a cumprir as minhas metas?');
+      setSugestoes(s.slice(0, 4));
+    }).catch(() => {});
+  }, []);
+
   const listRef = useRef(null);
 
   useFocusEffect(useCallback(() => {
@@ -141,7 +161,7 @@ export default function ChatScreen() {
       {/* Sugestões (só quando vazio) */}
       {messages.length === 0 && (
         <View style={s.sugestoesWrap}>
-          {SUGESTOES.map(s2 => (
+          {sugestoes.map(s2 => (
             <Pressable key={s2} onPress={() => send(s2)}
               style={({ pressed }) => [s.sugestao, pressed && { opacity: 0.75 }]}>
               <Text style={s.sugestaoText}>{s2}</Text>

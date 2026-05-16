@@ -283,3 +283,4 @@ def _migrate_db():
                 db.session.rollback()
                
                 from app.api import subscricoes  # noqa
+                from app.api import notificacoes_mobile  # noqa

@@ -365,3 +365,28 @@ def firebase_login():
 
     access_token = create_access_token(identity=str(user.id))
     return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+
+# ── Adicionar no final de app/api/auth.py ─────────────────────────────────────
+
+@api_bp.route('/auth/account', methods=['DELETE'])
+@jwt_required()
+def delete_account():
+    """
+    DELETE /api/v1/auth/account
+    Apaga permanentemente a conta do utilizador autenticado
+    e todos os dados associados via cascade.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+
+    if not user:
+        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
+
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Conta apagada com sucesso.'})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Erro ao apagar conta {user_id}: {e}')
+        return jsonify({'success': False, 'message': 'Erro ao apagar conta.'}), 500

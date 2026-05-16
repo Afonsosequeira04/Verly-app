@@ -1,13 +1,13 @@
-// src/screens/OnboardingScreen.js
+// src/screens/OnboardingScreen.js — com slide de rendimento mensal real
 import React, { useRef, useState, useCallback } from 'react';
 import {
   View, Text, Pressable, StyleSheet, Dimensions,
-  ScrollView, Animated, Platform, StatusBar,
+  ScrollView, Animated, Platform, StatusBar, TextInput, KeyboardAvoidingView,
 } from 'react-native';
 import Svg, { Path, Circle, Rect, Line, Polyline } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
-import { authAPI } from '../services/api';
+import { authAPI, onboardingAPI } from '../services/api';
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -91,6 +91,14 @@ function Icon({ name, color, size = 56 }) {
           <Line x1="9" y1="17" x2="15" y2="17" />
         </Svg>
       );
+    case 'euro':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M4 10h12" />
+          <Path d="M4 14h12" />
+          <Path d="M19.5 9a6.5 6.5 0 1 0 0 6" />
+        </Svg>
+      );
     default:
       return null;
   }
@@ -105,7 +113,7 @@ const SLIDES = [
     accent: C.brand,
     title: 'Bem-vindo à Verly',
     sub: 'O teu assistente financeiro pessoal com IA. Vamos configurar o teu perfil em 2 minutos.',
-    showLogin: true, // ← mostra "Já tenho conta" neste slide
+    showLogin: true,
   },
   {
     id: 'faturas',
@@ -141,21 +149,6 @@ const SLIDES = [
     ],
   },
   {
-    id: 'q_frequencia',
-    type: 'choice',
-    icon: 'receipt',
-    accent: C.yellow,
-    title: 'Com que frequência compras?',
-    sub: 'Isso ajuda-nos a calibrar os teus alertas e padrões.',
-    key: 'frequencia_compra',
-    options: [
-      { id: 'diario',    label: '⚡ Todos os dias',       sub: 'Compro quase sempre algo' },
-      { id: 'semanal',   label: '📅 Algumas vezes/semana', sub: 'Compras regulares mas controladas' },
-      { id: 'mensal',    label: '🗓 Algumas vezes/mês',    sub: 'Compro com moderação' },
-      { id: 'ocasional', label: '🎯 Ocasionalmente',       sub: 'Só quando preciso mesmo' },
-    ],
-  },
-  {
     id: 'q_objetivo',
     type: 'choice',
     icon: 'target',
@@ -170,21 +163,48 @@ const SLIDES = [
       { id: 'investir',   label: '📈 Planear investimento', sub: 'Entender onde posso cortar' },
     ],
   },
+  // ── SLIDE NOVO: Rendimento mensal com input numérico ──────────────────────
+  {
+    id: 'q_rendimento',
+    type: 'number_input',
+    icon: 'euro',
+    accent: C.green,
+    title: 'Qual é o teu rendimento mensal?',
+    sub: 'Usado apenas para calcular a % do rendimento que gastas. Fica sempre privado.',
+    key: 'rendimento_mensal',
+    placeholder: 'ex: 1500',
+    suffix: '€ / mês',
+    hint: 'Rendimento líquido (depois de impostos)',
+    quickOptions: [
+      { label: '< 800 €', value: '700' },
+      { label: '1000 €',  value: '1000' },
+      { label: '1500 €',  value: '1500' },
+      { label: '2000 €',  value: '2000' },
+      { label: '2500 €',  value: '2500' },
+      { label: '3000+ €', value: '3500' },
+    ],
+    optional: true, // pode saltar
+  },
   {
     id: 'q_orcamento',
-    type: 'choice',
+    type: 'number_input',
     icon: 'wallet',
     accent: '#FF7340',
     title: 'Qual é o teu orçamento mensal?',
-    sub: 'Uma estimativa serve — podes mudar depois nas definições.',
+    sub: 'O limite que queres gastar por mês. A Verly avisa quando estás perto.',
     key: 'orcamento_mensal',
-    options: [
-      { id: '200',  label: 'Até 200 €/mês',      sub: 'Gastos muito controlados' },
-      { id: '500',  label: '200 – 500 €/mês',    sub: 'Orçamento médio-baixo' },
-      { id: '1000', label: '500 – 1000 €/mês',   sub: 'Orçamento médio' },
-      { id: '2000', label: '1000 – 2000 €/mês',  sub: 'Orçamento elevado' },
-      { id: '9999', label: 'Mais de 2000 €/mês',  sub: 'Sem limite definido' },
+    placeholder: 'ex: 1000',
+    suffix: '€ / mês',
+    hint: 'Podes alterar a qualquer momento no Perfil',
+    quickOptions: [
+      { label: '300 €',  value: '300' },
+      { label: '500 €',  value: '500' },
+      { label: '800 €',  value: '800' },
+      { label: '1000 €', value: '1000' },
+      { label: '1500 €', value: '1500' },
+      { label: '2000 €', value: '2000' },
     ],
+    optional: true,
   },
   {
     id: 'q_personalidade',
@@ -195,19 +215,11 @@ const SLIDES = [
     sub: 'Escolhe a personalidade. Podes mudar quando quiseres.',
     key: 'personalidade',
     options: [
-      { id: 'calm',     label: 'Equilibrada', emoji: '😌', desc: 'Tom neutro e profissional. Direto ao ponto, sem drama.',                    accent: C.green  },
-      { id: 'savage',   label: 'Brutal',      emoji: '🔥', desc: 'Sem filtros. A Verly diz-te exatamente o que não queres ouvir.',            accent: C.red    },
-      { id: 'sarcastic',label: 'Sarcástica',  emoji: '😏', desc: 'Humor negro financeiro. Comenta os teus gastos com ironia afiada.',         accent: C.yellow },
-      { id: 'pro',      label: 'Analista',    emoji: '📊', desc: 'Dados, métricas e recomendações técnicas. Para quem quer profundidade.',    accent: C.brand  },
+      { id: 'calm',      label: 'Equilibrada', emoji: '😌', desc: 'Tom neutro e profissional. Direto ao ponto, sem drama.',                 accent: C.green  },
+      { id: 'savage',    label: 'Brutal',      emoji: '🔥', desc: 'Sem filtros. A Verly diz-te exatamente o que não queres ouvir.',         accent: C.red    },
+      { id: 'sarcastic', label: 'Sarcástica',  emoji: '😏', desc: 'Humor negro financeiro. Comenta os teus gastos com ironia afiada.',      accent: C.yellow },
+      { id: 'pro',       label: 'Analista',    emoji: '📊', desc: 'Dados, métricas e recomendações técnicas. Para quem quer profundidade.', accent: C.brand  },
     ],
-  },
-  {
-    id: 'social',
-    type: 'info',
-    icon: 'users',
-    accent: C.pink,
-    title: 'Partilha com amigos',
-    sub: 'Cria playlists de compras, adiciona amigos e compara hábitos de consumo de forma divertida.',
   },
 ];
 
@@ -248,10 +260,86 @@ function ChoiceOption({ option, selected, onPress, accent }) {
   );
 }
 
-// ─── PersonalityCard — sem minHeight, sem flex conflituoso ────────────────────
+// ─── NumberInputSlide — input numérico com atalhos rápidos ────────────────────
+function NumberInputSlide({ slide, answers, setAnswer }) {
+  const value = answers[slide.key] || '';
+
+  const handleQuick = (val) => {
+    setAnswer(slide.key, val);
+  };
+
+  return (
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={{ width: W }}
+    >
+      <ScrollView
+        contentContainerStyle={[s.slide, { justifyContent: 'flex-start', paddingTop: H * 0.07, paddingBottom: 40 }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={[s.iconRingSmall, {
+          borderColor: slide.accent + '50',
+          backgroundColor: slide.accent + '12',
+          marginBottom: 14,
+        }]}>
+          <Icon name={slide.icon} color={slide.accent} size={36} />
+        </View>
+        <Text style={[s.title, { marginBottom: 6 }]}>{slide.title}</Text>
+        <Text style={[s.sub, { marginBottom: 28 }]}>{slide.sub}</Text>
+
+        {/* Input principal */}
+        <View style={[cs.numberInputWrap, { borderColor: value ? slide.accent : C.border }]}>
+          <TextInput
+            style={[cs.numberInput, { color: value ? C.text : C.textMid }]}
+            placeholder={slide.placeholder}
+            placeholderTextColor={C.textMid}
+            keyboardType="numeric"
+            value={value}
+            onChangeText={(t) => {
+              // Só aceita números
+              const clean = t.replace(/[^0-9]/g, '');
+              setAnswer(slide.key, clean);
+            }}
+            returnKeyType="done"
+            maxLength={6}
+          />
+          <Text style={cs.numberSuffix}>{slide.suffix}</Text>
+        </View>
+
+        {slide.hint && (
+          <Text style={[cs.optSub, { textAlign: 'center', marginBottom: 24 }]}>
+            {slide.hint}
+          </Text>
+        )}
+
+        {/* Atalhos rápidos */}
+        <Text style={[cs.optSub, { marginBottom: 10, alignSelf: 'flex-start' }]}>Ou escolhe rapidamente:</Text>
+        <View style={cs.quickGrid}>
+          {slide.quickOptions.map((opt) => (
+            <Pressable
+              key={opt.value}
+              onPress={() => handleQuick(opt.value)}
+              style={[
+                cs.quickBtn,
+                value === opt.value && { borderColor: slide.accent, backgroundColor: slide.accent + '18' },
+              ]}
+            >
+              <Text style={[cs.quickLabel, value === opt.value && { color: slide.accent }]}>
+                {opt.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+// ─── PersonalityCard ──────────────────────────────────────────────────────────
 function PersonalityCard({ option, selected, onPress }) {
   const scale = useRef(new Animated.Value(1)).current;
-  const cardW = (W - 28 * 2 - 10) / 2; // 2 colunas com gap 10
+  const cardW = (W - 28 * 2 - 10) / 2;
 
   const handlePress = () => {
     Animated.sequence([
@@ -270,7 +358,6 @@ function PersonalityCard({ option, selected, onPress }) {
           selected && { borderColor: option.accent, backgroundColor: option.accent + '15' },
         ]}
       >
-        {/* Badge selecionado */}
         {selected && (
           <View style={[cs.pBadge, { backgroundColor: option.accent }]}>
             <Svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round">
@@ -299,8 +386,6 @@ function InfoSlide({ slide, onLogin }) {
       </View>
       <Text style={s.title}>{slide.title}</Text>
       <Text style={s.sub}>{slide.sub}</Text>
-
-      {/* "Já tenho conta" só no primeiro slide e só se não estiver autenticado */}
       {slide.showLogin && !slide.userLoggedIn && (
         <Pressable onPress={onLogin} style={s.alreadyHaveAccount}>
           <Text style={s.alreadyHaveAccountText}>Já tenho conta →</Text>
@@ -343,7 +428,7 @@ function ChoiceSlide({ slide, answers, setAnswer }) {
   );
 }
 
-// ─── PersonalitySlide — grelha 2×2 com dimensões fixas e ScrollView ───────────
+// ─── PersonalitySlide ─────────────────────────────────────────────────────────
 function PersonalitySlide({ slide, answers, setAnswer }) {
   const selected = answers[slide.key];
   const row1 = slide.options.slice(0, 2);
@@ -365,23 +450,19 @@ function PersonalitySlide({ slide, answers, setAnswer }) {
       <Text style={[s.title, { marginBottom: 6 }]}>{slide.title}</Text>
       <Text style={[s.sub, { marginBottom: 22 }]}>{slide.sub}</Text>
 
-      {/* Linha 1 */}
       <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10, width: '100%' }}>
         {row1.map((opt) => (
           <PersonalityCard
-            key={opt.id}
-            option={opt}
+            key={opt.id} option={opt}
             selected={selected === opt.id}
             onPress={(id) => setAnswer(slide.key, id)}
           />
         ))}
       </View>
-      {/* Linha 2 */}
       <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
         {row2.map((opt) => (
           <PersonalityCard
-            key={opt.id}
-            option={opt}
+            key={opt.id} option={opt}
             selected={selected === opt.id}
             onPress={(id) => setAnswer(slide.key, id)}
           />
@@ -429,6 +510,10 @@ export default function OnboardingScreen({ navigation }) {
     if (slide.type === 'choice' || slide.type === 'personality') {
       return !!answers[slide.key];
     }
+    if (slide.type === 'number_input') {
+      // Slides de número são opcionais — pode avançar sem preencher
+      return true;
+    }
     return true;
   };
 
@@ -438,11 +523,21 @@ export default function OnboardingScreen({ navigation }) {
     } catch (_) {}
 
     if (dest === 'Done') {
-      // Utilizador já autenticado — marca onboarding completo no backend
       try {
-        await authAPI.completeOnboarding(answers);
+        // Usa o novo endpoint que guarda rendimento + objetivo
+        await onboardingAPI.save(answers);
+        updateUser({
+          onboarding_completo: true,
+          personalidade: answers.personalidade || 'calm',
+          objetivo: answers.objetivo,
+          orcamento_mensal: answers.orcamento_mensal ? parseFloat(answers.orcamento_mensal) : undefined,
+          rendimento_mensal: answers.rendimento_mensal ? parseFloat(answers.rendimento_mensal) : undefined,
+        });
+      } catch (_) {
+        // Fallback para endpoint antigo
+        try { await authAPI.completeOnboarding(answers); } catch (_) {}
         updateUser({ onboarding_completo: true, personalidade: answers.personalidade || 'calm' });
-      } catch (_) {}
+      }
     } else if (dest === 'Register') {
       navigation.replace('Register', { onboardingAnswers: answers });
     } else {
@@ -452,6 +547,8 @@ export default function OnboardingScreen({ navigation }) {
 
   const isLast  = current === SLIDES.length - 1;
   const blocked = !canProceed();
+  const slide   = SLIDES[current];
+  const isOptional = slide.type === 'number_input' && slide.optional;
 
   return (
     <View style={s.root}>
@@ -467,34 +564,29 @@ export default function OnboardingScreen({ navigation }) {
         scrollEnabled={false}
         style={{ flex: 1 }}
       >
-        {SLIDES.map((slide) => {
-          if (slide.type === 'info') {
+        {SLIDES.map((sl) => {
+          if (sl.type === 'info') {
             return (
               <InfoSlide
-                key={slide.id}
-                slide={{ ...slide, userLoggedIn: !!user }}
+                key={sl.id}
+                slide={{ ...sl, userLoggedIn: !!user }}
                 onLogin={() => navigation.replace('Login')}
               />
             );
           }
-          if (slide.type === 'choice') {
+          if (sl.type === 'choice') {
             return (
-              <ChoiceSlide
-                key={slide.id}
-                slide={slide}
-                answers={answers}
-                setAnswer={setAnswer}
-              />
+              <ChoiceSlide key={sl.id} slide={sl} answers={answers} setAnswer={setAnswer} />
             );
           }
-          if (slide.type === 'personality') {
+          if (sl.type === 'number_input') {
             return (
-              <PersonalitySlide
-                key={slide.id}
-                slide={slide}
-                answers={answers}
-                setAnswer={setAnswer}
-              />
+              <NumberInputSlide key={sl.id} slide={sl} answers={answers} setAnswer={setAnswer} />
+            );
+          }
+          if (sl.type === 'personality') {
+            return (
+              <PersonalitySlide key={sl.id} slide={sl} answers={answers} setAnswer={setAnswer} />
             );
           }
           return null;
@@ -538,19 +630,23 @@ export default function OnboardingScreen({ navigation }) {
               </View>
             </Pressable>
 
-            <Pressable
-              style={[s.btnNext, blocked && s.btnNextBlocked]}
-              onPress={() => !blocked && goTo(current + 1)}
-            >
-              <Text style={[s.btnPrimaryText, blocked && { opacity: 0.5 }]}>
-                {blocked ? 'Escolhe uma opção' : 'Seguinte'}
-              </Text>
-              {!blocked && (
+            <View style={{ alignItems: 'flex-end', gap: 4 }}>
+              {/* Label "opcional" em slides de número */}
+              {isOptional && (
+                <Pressable onPress={() => goTo(current + 1)}>
+                  <Text style={[s.skipText, { fontSize: 12, opacity: 0.6 }]}>Saltar →</Text>
+                </Pressable>
+              )}
+              <Pressable
+                style={[s.btnNext, blocked && !isOptional && s.btnNextBlocked]}
+                onPress={() => goTo(current + 1)}
+              >
+                <Text style={s.btnPrimaryText}>Seguinte</Text>
                 <Svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round">
                   <Polyline points="9 18 15 12 9 6" />
                 </Svg>
-              )}
-            </Pressable>
+              </Pressable>
+            </View>
           </View>
         )}
       </View>
@@ -561,16 +657,10 @@ export default function OnboardingScreen({ navigation }) {
 // ─── Estilos ──────────────────────────────────────────────────────────────────
 const cs = StyleSheet.create({
   option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 13,
-    paddingHorizontal: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: C.border,
-    backgroundColor: C.surface,
-    marginBottom: 8,
-    gap: 12,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 13, paddingHorizontal: 16,
+    borderRadius: 14, borderWidth: 1.5, borderColor: C.border,
+    backgroundColor: C.surface, marginBottom: 8, gap: 12,
   },
   optLabel: { fontSize: 14, fontWeight: '700', color: C.textMid },
   optSub:   { fontSize: 12, color: C.textMid, marginTop: 2, opacity: 0.75 },
@@ -579,17 +669,10 @@ const cs = StyleSheet.create({
     borderWidth: 1.5, borderColor: C.border,
     justifyContent: 'center', alignItems: 'center',
   },
-
-  // Personality cards — largura calculada, sem minHeight problemático
   pCard: {
-    borderWidth: 1.5,
-    borderColor: C.border,
-    backgroundColor: C.surface,
-    borderRadius: 18,
-    padding: 14,
-    alignItems: 'center',
-    gap: 7,
-    position: 'relative',
+    borderWidth: 1.5, borderColor: C.border,
+    backgroundColor: C.surface, borderRadius: 18,
+    padding: 14, alignItems: 'center', gap: 7, position: 'relative',
   },
   pBadge: {
     position: 'absolute', top: 10, right: 10,
@@ -599,38 +682,55 @@ const cs = StyleSheet.create({
   pEmoji: { fontSize: 28 },
   pName:  { fontSize: 13, fontWeight: '800', color: C.textMid, textAlign: 'center' },
   pDesc:  { fontSize: 11, color: C.textMid, textAlign: 'center', lineHeight: 16, opacity: 0.8 },
+  // Number input
+  numberInputWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    borderWidth: 2, borderRadius: 18,
+    backgroundColor: C.surface,
+    paddingHorizontal: 20, paddingVertical: 14,
+    marginBottom: 12, width: '100%', gap: 10,
+  },
+  numberInput: {
+    flex: 1, fontSize: 28, fontWeight: '800',
+    color: C.text,
+  },
+  numberSuffix: {
+    fontSize: 14, color: C.textMid, fontWeight: '600',
+  },
+  quickGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    gap: 8, width: '100%',
+  },
+  quickBtn: {
+    paddingVertical: 8, paddingHorizontal: 14,
+    borderRadius: 10, borderWidth: 1.5, borderColor: C.border,
+    backgroundColor: C.surface,
+  },
+  quickLabel: {
+    fontSize: 13, fontWeight: '700', color: C.textMid,
+  },
 });
 
 const s = StyleSheet.create({
   root: {
-    flex: 1,
-    backgroundColor: C.bg,
+    flex: 1, backgroundColor: C.bg,
     paddingBottom: Platform.OS === 'ios' ? 40 : 24,
   },
   slide: {
-    width: W,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: W, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 28,
   },
   glowCircle: {
-    position: 'absolute',
-    width: W * 0.8,
-    height: W * 0.8,
-    borderRadius: W * 0.4,
-    top: '5%',
+    position: 'absolute', width: W * 0.8, height: W * 0.8,
+    borderRadius: W * 0.4, top: '5%',
   },
   iconRing: {
-    width: 136, height: 136,
-    borderRadius: 38, borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 36,
+    width: 136, height: 136, borderRadius: 38, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 36,
   },
   iconRingSmall: {
-    width: 72, height: 72,
-    borderRadius: 22, borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 14,
+    width: 72, height: 72, borderRadius: 22, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
   },
   title: {
     fontSize: 26, fontWeight: '900', color: C.text,
@@ -640,57 +740,38 @@ const s = StyleSheet.create({
     fontSize: 14, color: C.textMid,
     textAlign: 'center', lineHeight: 22, maxWidth: 320,
   },
-
-  // "Já tenho conta" link no primeiro slide
   alreadyHaveAccount: {
-    marginTop: 28,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: C.borderHi,
+    marginTop: 28, paddingVertical: 10, paddingHorizontal: 20,
+    borderRadius: 12, borderWidth: 1, borderColor: C.borderHi,
   },
-  alreadyHaveAccountText: {
-    fontSize: 14, fontWeight: '700', color: C.textMid,
-  },
-
+  alreadyHaveAccountText: { fontSize: 14, fontWeight: '700', color: C.textMid },
   dots: {
     flexDirection: 'row', justifyContent: 'center',
     alignItems: 'center', gap: 5, paddingVertical: 14,
   },
   dot: { height: 5, borderRadius: 3 },
-
   footer: { paddingHorizontal: 24, paddingTop: 4 },
-
   btnPrimary: {
-    height: 52, borderRadius: 16,
-    backgroundColor: C.brand,
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 10,
-    shadowColor: C.brand,
-    shadowOffset: { width: 0, height: 6 },
+    height: 52, borderRadius: 16, backgroundColor: C.brand,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.4, shadowRadius: 12, elevation: 8,
   },
   btnSecondary: {
-    height: 48, borderRadius: 16,
-    borderWidth: 1.5, borderColor: C.borderHi,
+    height: 48, borderRadius: 16, borderWidth: 1.5, borderColor: C.borderHi,
     alignItems: 'center', justifyContent: 'center',
   },
   btnPrimaryText:   { fontSize: 16, fontWeight: '800', color: '#fff', letterSpacing: 0.2 },
   btnSecondaryText: { fontSize: 15, fontWeight: '700', color: C.textMid },
   skipText:         { fontSize: 14, fontWeight: '600', color: C.textMid },
-
   btnNext: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     height: 48, paddingHorizontal: 24, borderRadius: 14,
     backgroundColor: C.brand,
-    shadowColor: C.brand,
-    shadowOffset: { width: 0, height: 4 },
+    shadowColor: C.brand, shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35, shadowRadius: 10, elevation: 6,
   },
   btnNextBlocked: {
-    backgroundColor: C.surface2,
-    shadowOpacity: 0,
-    elevation: 0,
+    backgroundColor: C.surface2, shadowOpacity: 0, elevation: 0,
   },
 });

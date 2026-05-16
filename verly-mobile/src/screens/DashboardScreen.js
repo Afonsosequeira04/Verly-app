@@ -5,6 +5,7 @@ import {
   StatusBar, RefreshControl, Modal, TextInput, Alert,
   StyleSheet, Dimensions, KeyboardAvoidingView, Platform,
 } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -29,9 +30,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import {
   Bell, Plus, Search, X, TrendingUp, TrendingDown,
   Receipt, Camera, Upload, FileText, Zap,
-  ChevronRight, AlertCircle, Target, BarChart2, Settings,
+  ChevronRight, AlertCircle, Target, BarChart2,
 } from 'lucide-react-native';
-import { dashboardAPI, faturasAPI } from '../services/api';
+import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import {
@@ -563,8 +564,11 @@ function UploadSheet({ visible, onClose, onUploaded }) {
   const upload = async (uri, name, type) => {
     setUploading(true);
     try {
-      await faturasAPI.upload(uri, name, type);
+      const result = await faturasAPI.upload(uri, name, type);
       onClose();
+      if (result?.fatura) {
+        setTimeout(() => { setUploadResult(result.fatura); }, 300);
+      }
       setTimeout(() => { onUploaded(); }, 500);
     } catch (err) {
       Alert.alert('Erro no upload', err.message || 'Não foi possível fazer upload');
@@ -761,69 +765,6 @@ function FAB({ onPress }) {
   );
 }
 
-// ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ user, alertas, showAlerts, onBellPress, onUploadPress, navigation }) {
-  const dotScale  = useSharedValue(0);
-  const hasAlerts = alertas?.length > 0;
-
-  useEffect(() => {
-    if (hasAlerts) {
-      setTimeout(() => {
-        dotScale.value = withSpring(1, { damping: 12, stiffness: 200 });
-      }, 600);
-    }
-  }, [hasAlerts]);
-
-  const dotStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: dotScale.value }],
-  }));
-
-  const { animStyle: bellStyle, onPressIn: bellIn, onPressOut: bellOut } = useScalePress(0.88);
-
-  return (
-    <Animated.View
-      entering={FadeInDown.duration(380).springify()}
-      style={{
-        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: 6,
-      }}
-    >
-      {/* Esquerda — Definições */}
-      <Pressable
-        onPress={() => navigation.navigate('Configuracoes')}
-        style={s.iconBtn}
-        hitSlop={8}
-      >
-        <Settings size={18} color={C.textMid} strokeWidth={1.8} />
-      </Pressable>
-
-      {/* Centro — Logo */}
-      <Animated.View entering={FadeIn.delay(100).duration(300)} style={{ alignItems: 'center' }}>
-        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
-      </Animated.View>
-
-      {/* Direita — + e menu */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <Pressable
-          onPress={onUploadPress}
-          style={[s.iconBtn, { backgroundColor: C.brand, borderColor: C.brand }]}
-          hitSlop={4}
-        >
-          <Plus size={17} color="#fff" strokeWidth={2.5} />
-        </Pressable>
-
-        <Pressable
-          onPress={() => navigation.navigate('Menu')}
-          style={s.iconBtn}
-          hitSlop={4}
-        >
-          <Text style={{ color: C.text, fontSize: 17, fontWeight: '700' }}>☰</Text>
-        </Pressable>
-      </View>
-    </Animated.View>
-  );
-}
-
 // ─── Loading skeleton ─────────────────────────────────────────────────────────
 function LoadingSkeleton() {
   return (
@@ -848,6 +789,33 @@ export default function DashboardScreen({ navigation, route }) {
   const [showUpload, setUpload]  = useState(false);
   const [showSearch, setSearch]  = useState(false);
   const [showAlerts, setAlerts]  = useState(false);
+  const [notifOpen,  setNotifOpen]  = useState(false);
+  const [notifs,     setNotifs]     = useState([]);
+  const [notifCount, setNotifCount] = useState(0);
+  const [notifLoad,  setNotifLoad]  = useState(false);
+  const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
+  const [insights,   setInsights]   = useState([]);
+
+  const fetchNotifs = useCallback(async () => {
+    setNotifLoad(true);
+    try {
+      const data = await notificacoesAPI.listar();
+      setNotifs(data.notificacoes || []);
+      setNotifCount(data.urgentes || 0);
+    } catch (e) {}
+    finally { setNotifLoad(false); }
+  }, []);
+
+  useEffect(() => { fetchNotifs(); }, [fetchNotifs]);
+
+  const fetchInsights = useCallback(async () => {
+    try {
+      const data = await insightsAPI.get();
+      setInsights((data.insights || []).slice(0, 3));
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => { fetchInsights(); }, [fetchInsights]);
 
   // Abre upload quando o + do header é pressionado
   useEffect(() => {
@@ -874,36 +842,115 @@ export default function DashboardScreen({ navigation, route }) {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
-      {/* Header custom */}
-      <View style={{
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12,
-        backgroundColor: C.bg, borderBottomWidth: 1, borderBottomColor: C.border,
-      }}>
-        {/* Esquerda — definições */}
-        <TouchableOpacity onPress={() => navigation.navigate('Configuracoes')} hitSlop={8}>
-          <Settings size={20} color={C.textMid} strokeWidth={1.8} />
-        </TouchableOpacity>
-
-        {/* Centro — título */}
-        <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
-
-        {/* Direita — + e menu */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <TouchableOpacity
-            onPress={() => setUpload(true)}
-            style={{
-              width: 34, height: 34, borderRadius: 10,
-              backgroundColor: C.brand,
-              justifyContent: 'center', alignItems: 'center',
-            }}
-          >
-            <Plus size={18} color="#fff" strokeWidth={2.5} />
+      {/* Header custom com fade roxo */}
+      <View style={{ position: 'relative' }}>
+        {/* Gradiente roxo a desvanecer de cima para baixo */}
+        <LinearGradient
+          colors={['#7C6FE055', 'transparent']}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: insets.top + 70,
+            zIndex: 0,
+            pointerEvents: 'none',
+          }}
+        />
+        <View style={{
+          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+          paddingHorizontal: 16, paddingTop: insets.top + 8, paddingBottom: 12,
+          backgroundColor: 'transparent', borderBottomWidth: 1, borderBottomColor: C.border,
+          zIndex: 1,
+        }}>
+          {/* Esquerda — notificações rápidas */}
+          <TouchableOpacity onPress={() => { setNotifOpen(v => !v); if (!notifOpen) fetchNotifs(); }} hitSlop={8} style={{ position: 'relative' }}>
+            <Bell size={20} color={notifOpen ? C.brand : C.textMid} strokeWidth={1.8} />
+            {notifCount > 0 && (
+              <View style={{
+                position: 'absolute', top: -4, right: -4,
+                backgroundColor: '#FF4D6D', borderRadius: 8,
+                minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center',
+                paddingHorizontal: 3,
+              }}>
+                <Text style={{ color: '#fff', fontSize: 9, fontWeight: '800' }}>{notifCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('Menu')} hitSlop={8}>
-            <Text style={{ color: C.text, fontSize: 22 }}>☰</Text>
-          </TouchableOpacity>
+
+          {/* Centro — título */}
+          <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+
+          {/* Direita — + e menu */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <TouchableOpacity
+              onPress={() => setUpload(true)}
+              style={{
+                width: 34, height: 34, borderRadius: 10,
+                backgroundColor: C.brand,
+                justifyContent: 'center', alignItems: 'center',
+              }}
+            >
+              <Plus size={18} color="#fff" strokeWidth={2.5} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => navigation.navigate('Menu')} hitSlop={8}>
+              <Text style={{ color: C.text, fontSize: 22 }}>☰</Text>
+            </TouchableOpacity>
+          </View>
         </View>
+
+        {/* ── Painel de notificações rápidas ── */}
+        {notifOpen && (
+          <View style={{
+            position: 'absolute', top: insets.top + 70, left: 12, right: 12,
+            backgroundColor: C.surface2, borderRadius: 16, zIndex: 100,
+            borderWidth: 1, borderColor: C.border,
+            shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 12, elevation: 10,
+          }}>
+            {/* Header do painel */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: C.border }}>
+              <Text style={{ color: C.text, fontWeight: '700', fontSize: 15 }}>Notificações</Text>
+              <TouchableOpacity onPress={() => setNotifOpen(false)} hitSlop={8}>
+                <X size={18} color={C.textMid} />
+              </TouchableOpacity>
+            </View>
+
+            {notifLoad ? (
+              <View style={{ padding: 24, alignItems: 'center' }}>
+                <Text style={{ color: C.textSub, fontSize: 13 }}>A carregar...</Text>
+              </View>
+            ) : notifs.length === 0 ? (
+              <View style={{ padding: 24, alignItems: 'center' }}>
+                <Text style={{ fontSize: 28, marginBottom: 8 }}>✅</Text>
+                <Text style={{ color: C.text, fontWeight: '600', fontSize: 14 }}>Tudo em ordem!</Text>
+                <Text style={{ color: C.textSub, fontSize: 12, marginTop: 4 }}>Sem notificações por agora.</Text>
+              </View>
+            ) : (
+              notifs.map((n, i) => {
+                const urgColor = n.urgencia === 'alta' ? '#FF4D6D' : n.urgencia === 'media' ? '#FFB300' : C.brand;
+                return (
+                  <View key={i} style={{
+                    flexDirection: 'row', alignItems: 'flex-start', padding: 14,
+                    borderBottomWidth: i < notifs.length - 1 ? 1 : 0,
+                    borderBottomColor: C.border,
+                    borderLeftWidth: 3, borderLeftColor: urgColor,
+                  }}>
+                    <Text style={{ fontSize: 20, marginRight: 10, marginTop: 1 }}>{n.icone}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 13, marginBottom: 2 }}>{n.titulo}</Text>
+                      <Text style={{ color: C.textSub, fontSize: 12, lineHeight: 17 }}>{n.mensagem}</Text>
+                      <View style={{ marginTop: 5, alignSelf: 'flex-start', backgroundColor: `${urgColor}22`, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ color: urgColor, fontSize: 9, fontWeight: '800' }}>
+                          {n.urgencia === 'alta' ? 'URGENTE' : n.urgencia === 'media' ? 'ATENÇÃO' : 'INFO'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        )}
       </View>
 
       {showSearch && (
@@ -954,6 +1001,67 @@ export default function DashboardScreen({ navigation, route }) {
           </>
         )}
       </ScrollView>
+
+        {/* ── Modal resultado do upload ── */}
+        {uploadResult && (
+          <Modal transparent animationType="fade" visible={!!uploadResult} onRequestClose={() => setUploadResult(null)}>
+            <Pressable style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }} onPress={() => setUploadResult(null)}>
+              <Pressable style={{ backgroundColor: C.surface2, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 }} onPress={() => {}}>
+                <View style={{ width: 40, height: 4, backgroundColor: C.border, borderRadius: 2, alignSelf: 'center', marginBottom: 20 }} />
+                <Text style={{ color: C.text, fontWeight: '900', fontSize: 18, marginBottom: 4 }}>✅ Fatura adicionada!</Text>
+                <Text style={{ color: C.textSub, fontSize: 13, marginBottom: 20 }}>Aqui está o que extraímos automaticamente:</Text>
+
+                {uploadResult.loja ? (
+                  <View style={{ backgroundColor: C.surface3, borderRadius: 12, padding: 16, gap: 10 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: C.textMid, fontSize: 13 }}>Loja</Text>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>{uploadResult.loja}</Text>
+                    </View>
+                    <View style={{ height: 1, backgroundColor: C.border }} />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: C.textMid, fontSize: 13 }}>Total</Text>
+                      <Text style={{ color: C.brand, fontWeight: '900', fontSize: 16 }}>{(uploadResult.total || 0).toFixed(2)} €</Text>
+                    </View>
+                    <View style={{ height: 1, backgroundColor: C.border }} />
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: C.textMid, fontSize: 13 }}>Categoria</Text>
+                      <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>{uploadResult.categoria || 'Outros'}</Text>
+                    </View>
+                    {uploadResult.data_compra ? (
+                      <>
+                        <View style={{ height: 1, backgroundColor: C.border }} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: C.textMid, fontSize: 13 }}>Data</Text>
+                          <Text style={{ color: C.text, fontWeight: '700', fontSize: 13 }}>{uploadResult.data_compra}</Text>
+                        </View>
+                      </>
+                    ) : null}
+                    {uploadResult.data_garantia ? (
+                      <>
+                        <View style={{ height: 1, backgroundColor: C.border }} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: C.textMid, fontSize: 13 }}>Garantia até</Text>
+                          <Text style={{ color: '#00D68F', fontWeight: '700', fontSize: 13 }}>{uploadResult.data_garantia} 🛡️</Text>
+                        </View>
+                      </>
+                    ) : null}
+                  </View>
+                ) : (
+                  <View style={{ backgroundColor: C.surface3, borderRadius: 12, padding: 16 }}>
+                    <Text style={{ color: C.textSub, fontSize: 13, textAlign: 'center' }}>Fatura guardada. Abre o separador Faturas para ver os detalhes.</Text>
+                  </View>
+                )}
+
+                <Pressable
+                  onPress={() => setUploadResult(null)}
+                  style={{ marginTop: 20, backgroundColor: C.brand, borderRadius: 12, padding: 14, alignItems: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Fechar</Text>
+                </Pressable>
+              </Pressable>
+            </Pressable>
+          </Modal>
+        )}
     </View>
   );
 }

@@ -1,4 +1,3 @@
-// src/navigation/AppNavigator.js — Verly completo sem emojis no menu
 import 'react-native-gesture-handler';
 import React, { useRef, useEffect } from 'react';
 import {
@@ -27,12 +26,14 @@ import SubscricoesScreen       from '../screens/SubscricoesScreen';
 import PerfilScreen            from '../screens/PerfilScreen';
 import NotificacoesScreen      from '../screens/NotificacoesScreen';
 import MetasScreen             from '../screens/MetasScreen';
+import InsightsScreen          from '../screens/InsightsScreen';
 import EstatisticasScreen      from '../screens/EstatisticasScreen';
 import ScoreScreen             from '../screens/ScoreScreen';
 import RelatorioScreen         from '../screens/RelatorioScreen';
 import HistoricoScreen         from '../screens/HistoricoScreen';
 import CriarEmScreen           from '../screens/CriarEmScreen';
 import AmigosScreen            from '../screens/AmigosScreen';
+import ConfiguracoesScreen     from '../screens/ConfiguracoesScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
@@ -89,12 +90,10 @@ function TabIcon({ name, color, size = 22, focused }) {
           <Path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
         </Svg>
       );
-    case 'Metas':
+    case 'Insights':
       return (
         <Svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
-          <Circle cx="12" cy="12" r="10" />
-          <Circle cx="12" cy="12" r="6" />
-          <Circle cx="12" cy="12" r="2" />
+          <Path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </Svg>
       );
     case 'Perfil':
@@ -113,7 +112,7 @@ function TabIcon({ name, color, size = 22, focused }) {
   }
 }
 
-// ─── Ícones SVG para o menu lateral (sem emojis, sem Polygon) ─────────────────
+// ─── Ícones SVG para o menu lateral ──────────────────────────────────────────
 function MenuIcon({ name, color = C.textMid, size = 16 }) {
   const sw = '1.8';
   switch (name) {
@@ -162,7 +161,6 @@ function MenuIcon({ name, color = C.textMid, size = 16 }) {
         </Svg>
       );
     case 'star':
-      // Polygon não existe no react-native-svg — usar Path
       return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
           <Path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
@@ -179,6 +177,21 @@ function MenuIcon({ name, color = C.textMid, size = 16 }) {
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
           <Path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <Path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </Svg>
+      );
+    case 'target':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Circle cx="12" cy="12" r="10" />
+          <Circle cx="12" cy="12" r="6" />
+          <Circle cx="12" cy="12" r="2" />
+        </Svg>
+      );
+    case 'settings':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Circle cx="12" cy="12" r="3" />
+          <Path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </Svg>
       );
     case 'logout':
@@ -241,13 +254,14 @@ function MenuScreen({ navigation }) {
     {
       label: 'Social',
       items: [
-        { label: 'Amigos',               screen: 'Amigos',      icon: 'users'     },
-        { label: 'Playlists de compras',  screen: 'CriarEm',    icon: 'playlist'  },
+        { label: 'Amigos',               screen: 'Amigos',      icon: 'users'    },
+        { label: 'Playlists de compras',  screen: 'CriarEm',    icon: 'playlist' },
       ],
     },
     {
       label: 'Análise',
       items: [
+        { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
         { label: 'Estatísticas', screen: 'Estatisticas', icon: 'barchart'  },
         { label: 'Relatório',    screen: 'Relatorio',    icon: 'filereport'},
         { label: 'Histórico',    screen: 'Historico',    icon: 'clock'     },
@@ -263,7 +277,7 @@ function MenuScreen({ navigation }) {
     {
       label: 'Conta',
       items: [
-        { label: 'Notificações', screen: 'Notificacoes', icon: 'bell' },
+        { label: 'Configurações',  screen: 'Configuracoes', icon: 'settings' },
       ],
     },
   ];
@@ -451,19 +465,31 @@ function MainTabs({ navigation }) {
       tabBar={props => <CustomTabBar {...props} />}
       screenOptions={{ headerShown: true, ...hdrStyle }}
     >
-      {/*
-        Dashboard: headerShown: true agora, para que o botão do menu apareça.
-        O DashboardScreen gere o seu próprio espaçamento com useSafeAreaInsets.
-      */}
       <Tab.Screen
         name="Dashboard"
         component={DashboardScreen}
         options={{ tabBarLabel: 'Início', headerShown: false }}
       />
-      <Tab.Screen name="Faturas"   component={FaturasScreen}   options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }} />
-      <Tab.Screen name="Chat"      component={ChatScreen}      options={{ tabBarLabel: 'Chat IA', headerTitle: 'Chat IA' }} />
-      <Tab.Screen name="Metas"     component={MetasScreen}     options={{ tabBarLabel: 'Metas',   headerTitle: 'Metas'   }} />
-      <Tab.Screen name="Perfil"    component={PerfilScreen}    options={{ tabBarLabel: 'Perfil',  headerTitle: 'Perfil'  }} />
+      <Tab.Screen
+        name="Faturas"
+        component={FaturasScreen}
+        options={{ tabBarLabel: 'Faturas', headerTitle: 'Faturas' }}
+      />
+      <Tab.Screen
+        name="Chat"
+        component={ChatScreen}
+        options={{ tabBarLabel: 'Ask Verly', headerTitle: 'Ask Verly' }}
+      />
+      <Tab.Screen
+        name="Insights"
+        component={InsightsScreen}
+        options={{ tabBarLabel: 'Insights', headerTitle: 'Insights' }}
+      />
+      <Tab.Screen
+        name="Perfil"
+        component={PerfilScreen}
+        options={{ tabBarLabel: 'Perfil', headerTitle: 'Perfil' }}
+      />
     </Tab.Navigator>
   );
 }
@@ -487,6 +513,7 @@ function MainStackNav() {
       <MainStack.Screen name="Menu"          component={MenuScreen}          options={{ presentation: 'transparentModal' }} />
       <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...hdr, headerTitle: 'Fatura' }} />
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...hdr, headerTitle: 'Notificações' }} />
+      <MainStack.Screen name="Metas"         component={MetasScreen}         options={{ ...hdr, headerTitle: 'Metas' }} />
       <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...hdr, headerTitle: 'Subscrições' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...hdr, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Score de compra' }} />
@@ -494,6 +521,7 @@ function MainStackNav() {
       <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...hdr, headerTitle: 'Histórico' }} />
       <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...hdr, headerTitle: 'Playlists de compras' }} />
       <MainStack.Screen name="Amigos"        component={AmigosScreen}        options={{ ...hdr, headerTitle: 'Amigos' }} />
+      <MainStack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ ...hdr, headerTitle: 'Configurações' }} />
     </MainStack.Navigator>
   );
 }
