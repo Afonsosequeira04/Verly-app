@@ -3,11 +3,7 @@ app/api/insights.py — Insights da Verly com IA real
 
 GET /api/v1/insights
     Gera insights personalizados com base nos dados reais do utilizador.
-    Usa o LLM (Groq via LlamaIndex) que já existe no projeto.
-    Devolve até 6 insights categorizados por tipo: alerta, tendencia, positivo, dica.
-
-Registar em app/api/__init__.py:
-    from app.api import insights  # noqa
+    Inclui: score, tendência, categorias, metas, previsão, subscrições detetadas.
 """
 
 import json
@@ -46,24 +42,27 @@ def _build_context(user_id: int) -> dict:
     hoje = datetime.utcnow()
     mes_atual = hoje.month
     ano_atual = hoje.year
+    dia_atual = hoje.day
 
     faturas = Fatura.query.filter_by(user_id=user_id).all()
     metas = Meta.query.filter_by(user_id=user_id).all()
     user = User.query.get(user_id)
 
-    # ── Gastos do mês atual ───────────────────────────────────────────────────
     gastos_mes = defaultdict(float)
     gastos_mes_anterior = defaultdict(float)
     total_mes = 0.0
     total_mes_anterior = 0.0
     faturas_mes = []
 
+    # Histórico mensal (últimos 6 meses)
+    historico_mensal = defaultdict(float)
+
     for f in faturas:
         data = _get_data_obj(f)
         if not data:
             continue
         valor = f.total or 0
-        cat = f.categoria or 'Outros'
+        cat = (f.categoria or 'outros').lower()
 
         if data.month == mes_atual and data.year == ano_atual:
             gastos_mes[cat] += valor
@@ -74,17 +73,25 @@ def _build_context(user_id: int) -> dict:
                 'valor': round(valor, 2),
                 'data': data.strftime('%d/%m/%Y'),
             })
-        elif data.month == (mes_atual - 1 or 12) and data.year == (ano_atual if mes_atual > 1 else ano_atual - 1):
+
+        mes_ant = mes_atual - 1 if mes_atual > 1 else 12
+        ano_ant = ano_atual if mes_atual > 1 else ano_atual - 1
+        if data.month == mes_ant and data.year == ano_ant:
             gastos_mes_anterior[cat] += valor
             total_mes_anterior += valor
 
-    # ── Top categorias ────────────────────────────────────────────────────────
-    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:5]
+        # Histórico últimos 6 meses
+        chave = f"{data.year}-{data.month:02d}"
+        historico_mensal[chave] += valor
 
-    # ── Metas vs gastos ───────────────────────────────────────────────────────
+    # Top categorias
+    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:6]
+
+    # Metas vs gastos
     metas_info = []
     for m in metas:
-        gasto = gastos_mes.get(m.categoria, 0)
+        cat_lower = (m.categoria or '').lower()
+        gasto = gastos_mes.get(cat_lower, 0)
         pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
         metas_info.append({
             'categoria': m.categoria,
@@ -94,12 +101,62 @@ def _build_context(user_id: int) -> dict:
             'ultrapassou': gasto > m.valor_limite,
         })
 
-    # ── Variação mês anterior ─────────────────────────────────────────────────
+    # Variação mês anterior
     variacao_pct = None
     if total_mes_anterior > 0:
         variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
 
-    # ── Rendimento e orçamento ────────────────────────────────────────────────
+    # ── Previsão mensal ───────────────────────────────────────────────────────
+    # Extrapola o gasto atual para o fim do mês com base nos dias passados
+    dias_no_mes = 31  # aproximação
+    previsao_mensal = None
+    if dia_atual > 0 and total_mes > 0:
+        taxa_diaria = total_mes / dia_atual
+        previsao_mensal = round(taxa_diaria * dias_no_mes, 2)
+
+    # ── Subscrições detetadas ─────────────────────────────────────────────────
+    # Lojas que aparecem em múltiplos meses = subscrição provável
+    lojas_por_mes = defaultdict(set)
+    for f in faturas:
+        data = _get_data_obj(f)
+        if not data or not f.loja:
+            continue
+        chave_mes = f"{data.year}-{data.month:02d}"
+        lojas_por_mes[f.loja.lower()].add(chave_mes)
+
+    subscricoes_detetadas = []
+    for loja, meses in lojas_por_mes.items():
+        if len(meses) >= 2:  # aparece em 2+ meses = subscrição provável
+            # Calcular valor médio mensal
+            valores = [f.total or 0 for f in faturas if f.loja and f.loja.lower() == loja]
+            valor_medio = sum(valores) / len(valores) if valores else 0
+            if valor_medio > 0:
+                subscricoes_detetadas.append({
+                    'nome': loja.title(),
+                    'valor_mensal': round(valor_medio, 2),
+                    'meses_detetados': len(meses),
+                })
+
+    subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
+    total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
+
+    # ── Histórico 6 meses para gráfico ────────────────────────────────────────
+    historico_lista = []
+    for i in range(5, -1, -1):
+        mes = mes_atual - i
+        ano = ano_atual
+        if mes <= 0:
+            mes += 12
+            ano -= 1
+        chave = f"{ano}-{mes:02d}"
+        meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        historico_lista.append({
+            'mes': meses_pt[mes - 1],
+            'valor': round(historico_mensal.get(chave, 0), 2),
+        })
+
+    # Dados do utilizador
     rendimento = getattr(user, 'rendimento_mensal', None) or 0
     orcamento = getattr(user, 'orcamento_mensal', None) or 0
     nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
@@ -118,7 +175,12 @@ def _build_context(user_id: int) -> dict:
         'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
         'metas': metas_info,
         'num_faturas_mes': len(faturas_mes),
-        'faturas_recentes': faturas_mes[-5:],  # últimas 5
+        'faturas_recentes': faturas_mes[-5:],
+        'previsao_mensal': previsao_mensal,
+        'subscricoes_detetadas': subscricoes_detetadas,
+        'total_subscricoes': round(total_subscricoes, 2),
+        'historico_mensal': historico_lista,
+        'dia_atual': dia_atual,
     }
 
 
@@ -142,7 +204,6 @@ Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
 
     system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
 
-    # Construir resumo de metas para o prompt
     metas_txt = ''
     if ctx['metas']:
         linhas = []
@@ -166,30 +227,40 @@ Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
         pct_orc = round((ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100, 1)
         orcamento_txt = f"\nOrçamento mensal definido: {ctx['orcamento_mensal']}€ ({pct_orc}% usado)"
 
+    previsao_txt = ''
+    if ctx['previsao_mensal']:
+        previsao_txt = f"\nPrevisão de gasto até fim do mês: {ctx['previsao_mensal']}€ (baseado nos primeiros {ctx['dia_atual']} dias)"
+
+    subscricoes_txt = ''
+    if ctx['subscricoes_detetadas']:
+        linhas = [f"  - {s['nome']}: ~{s['valor_mensal']}€/mês" for s in ctx['subscricoes_detetadas']]
+        subscricoes_txt = f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês):\n" + '\n'.join(linhas)
+
     top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
 
     user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
 
 Total gasto: {ctx['total_gasto_mes']}€
 Número de faturas: {ctx['num_faturas_mes']}
-Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}
+Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}
 
 Top categorias de gasto:
-{top_cats_txt}{metas_txt}
+{top_cats_txt}{metas_txt}{subscricoes_txt}
 
-Gera exatamente 4 insights personalizados e relevantes com base nestes dados reais.
-Cada insight deve ter um tipo diferente se possível: alerta, tendencia, positivo, dica.
+Gera exatamente 5 insights personalizados e relevantes com base nestes dados reais.
+Tipos: alerta, tendencia, positivo, dica, previsao.
 
 Regras:
 - Usa os valores reais dos dados (não inventes números)
 - Sé específico — menciona categorias, valores, percentagens reais
-- Se não houver dados suficientes para um tipo, repete outro tipo
+- Se houver subscrições, comenta sobre o impacto mensal
+- Se houver previsão, usa-a num insight de tipo "previsao"
 - Adapta o tom à personalidade: {personalidade}
 
 Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
 [
   {{
-    "tipo": "alerta|tendencia|positivo|dica",
+    "tipo": "alerta|tendencia|positivo|dica|previsao",
     "texto": "frase do insight (máx 2 frases, tom adaptado à personalidade)",
     "valor": null ou número relevante
   }},
@@ -197,130 +268,58 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
 ]"""
 
     try:
-        from llama_index.core import Settings
-        llm = Settings.llm
-        response = llm.complete(user_prompt, system_prompt=system)
-        raw = str(response).strip()
-
-        # Limpar possível markdown
-        if raw.startswith('```'):
-            raw = raw.split('```')[1]
-            if raw.startswith('json'):
-                raw = raw[4:]
-        raw = raw.strip().rstrip('```').strip()
-
+        import os
+        from groq import Groq
+        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[
+                {'role': 'system', 'content': system},
+                {'role': 'user',   'content': user_prompt},
+            ],
+            max_tokens=800,
+            temperature=0.7,
+        )
+        raw = response.choices[0].message.content.strip()
+        import re
+        raw = re.sub(r'```json|```', '', raw).strip()
         insights = json.loads(raw)
-
-        # Validar e limpar
-        valid = []
-        for item in insights:
-            if isinstance(item, dict) and 'tipo' in item and 'texto' in item:
-                valid.append({
-                    'tipo': item.get('tipo', 'dica'),
-                    'texto': str(item.get('texto', '')),
-                    'valor': item.get('valor'),
-                })
-        return valid[:6]
-
+        if isinstance(insights, list):
+            return insights[:6]
+        return []
     except Exception as e:
-        # Fallback: insights estáticos baseados nos dados reais
-        return _fallback_insights(ctx)
-
-
-def _fallback_insights(ctx: dict) -> list:
-    """Insights determinísticos quando o LLM falha, baseados nos dados reais."""
-    insights = []
-
-    # 1. Variação vs mês anterior
-    if ctx['variacao_pct'] is not None:
-        if ctx['variacao_pct'] > 15:
+        import logging
+        logging.getLogger(__name__).error(f'Erro ao gerar insights LLM: {e}')
+        # Fallback com insights básicos
+        insights = []
+        if ctx['total_gasto_mes'] > 0:
             insights.append({
-                'tipo': 'alerta',
-                'texto': f"Gastaste {ctx['variacao_pct']}% mais do que no mês passado. Verifica o que aumentou nas tuas despesas.",
+                'tipo': 'dica',
+                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras.",
                 'valor': ctx['total_gasto_mes'],
             })
-        elif ctx['variacao_pct'] < -10:
-            insights.append({
-                'tipo': 'positivo',
-                'texto': f"Boa gestão! Reduziste os gastos em {abs(ctx['variacao_pct'])}% em relação ao mês anterior.",
-                'valor': ctx['total_gasto_mes'],
-            })
-
-    # 2. Orçamento
-    if ctx['orcamento_mensal'] > 0:
-        pct = (ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100
-        if pct > 90:
+        if ctx['orcamento_mensal'] > 0 and ctx['total_gasto_mes'] > ctx['orcamento_mensal']:
             insights.append({
                 'tipo': 'alerta',
-                'texto': f"Já usaste {round(pct, 0):.0f}% do teu orçamento mensal de {ctx['orcamento_mensal']}€.",
-                'valor': ctx['orcamento_mensal'] - ctx['total_gasto_mes'],
+                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€.",
+                'valor': ctx['total_gasto_mes'] - ctx['orcamento_mensal'],
             })
-        elif pct < 50:
+        if ctx['previsao_mensal']:
             insights.append({
-                'tipo': 'positivo',
-                'texto': f"Estás em boa forma — apenas {round(pct, 0):.0f}% do orçamento mensal usado.",
-                'valor': ctx['orcamento_mensal'] - ctx['total_gasto_mes'],
+                'tipo': 'previsao',
+                'texto': f"Ao ritmo atual, vais gastar cerca de {ctx['previsao_mensal']}€ este mês.",
+                'valor': ctx['previsao_mensal'],
             })
-
-    # 3. Rendimento
-    if ctx['rendimento_mensal'] > 0:
-        pct = (ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100
-        insights.append({
-            'tipo': 'tendencia',
-            'texto': f"Este mês usaste {round(pct, 1)}% do teu rendimento. O ideal é ficar abaixo de 70%.",
-            'valor': ctx['total_gasto_mes'],
-        })
-
-    # 4. Metas ultrapassadas
-    for m in ctx['metas']:
-        if m['ultrapassou']:
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"Ultrapassaste o limite de {m['categoria']} ({m['limite']}€). Gasto atual: {m['gasto']}€.",
-                'valor': m['gasto'],
-            })
-            break
-
-    # 5. Top categoria
-    if ctx['top_categorias']:
-        top = ctx['top_categorias'][0]
-        insights.append({
-            'tipo': 'dica',
-            'texto': f"A tua principal despesa este mês é {top['categoria']} com {top['valor']}€. Há espaço para reduzir?",
-            'valor': top['valor'],
-        })
-
-    # 6. Padrão de compras
-    if ctx['num_faturas_mes'] > 10:
-        insights.append({
-            'tipo': 'tendencia',
-            'texto': f"Fizeste {ctx['num_faturas_mes']} compras este mês. Consolida compras para poupar em portes e impulsos.",
-            'valor': None,
-        })
-    elif ctx['num_faturas_mes'] == 0:
-        insights.append({
-            'tipo': 'dica',
-            'texto': "Ainda não tens faturas este mês. Começa a registar as tuas despesas para insights mais precisos.",
-            'valor': None,
-        })
-
-    return insights[:6] if insights else [
-        {
-            'tipo': 'dica',
-            'texto': "Adiciona faturas e define um orçamento mensal para a Verly te dar insights personalizados.",
-            'valor': None,
-        }
-    ]
+        return insights
 
 
-# ── Endpoint principal ────────────────────────────────────────────────────────
+# ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @api_bp.route('/insights', methods=['GET'])
 @jwt_required()
 def get_insights():
     """
     Gera insights personalizados com IA para o utilizador autenticado.
-    Combina dados reais (gastos, metas, rendimento) com o LLM do projeto.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -336,14 +335,21 @@ def get_insights():
         'success': True,
         'insights': insights,
         'resumo': {
-            'total_gasto': ctx['total_gasto_mes'],
-            'num_faturas': ctx['num_faturas_mes'],
-            'variacao_pct': ctx['variacao_pct'],
-            'variacao_subiu': (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal': ctx['orcamento_mensal'],
+            'total_gasto':       ctx['total_gasto_mes'],
+            'num_faturas':       ctx['num_faturas_mes'],
+            'variacao_pct':      ctx['variacao_pct'],
+            'variacao_subiu':    (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':  ctx['orcamento_mensal'],
             'rendimento_mensal': ctx['rendimento_mensal'],
-            'pct_orcamento': round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1) if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento': round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1) if ctx['rendimento_mensal'] > 0 else None,
+            'pct_orcamento':     round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1) if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':    round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1) if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':    ctx['top_categorias'],
+            'metas':             ctx['metas'],
+            'previsao_mensal':   ctx['previsao_mensal'],
+            'subscricoes':       ctx['subscricoes_detetadas'],
+            'total_subscricoes': ctx['total_subscricoes'],
+            'historico_mensal':  ctx['historico_mensal'],
         },
         'personalidade': personalidade,
+        'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
     })
