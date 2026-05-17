@@ -371,11 +371,6 @@ def firebase_login():
 @api_bp.route('/auth/account', methods=['DELETE'])
 @jwt_required()
 def delete_account():
-    """
-    DELETE /api/v1/auth/account
-    Apaga permanentemente a conta do utilizador autenticado
-    e todos os dados associados via cascade.
-    """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
 
@@ -390,3 +385,12 @@ def delete_account():
         db.session.rollback()
         logger.error(f'Erro ao apagar conta {user_id}: {e}')
         return jsonify({'success': False, 'message': 'Erro ao apagar conta.'}), 500
+
+
+@api_bp.route('/test-fcm-columns', methods=['GET'])
+def test_fcm_columns():
+    from sqlalchemy import text
+    with db.engine.connect() as conn:
+        r = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name LIKE 'fcm%'"))
+        colunas = [row[0] for row in r]
+    return {'colunas_fcm': colunas}

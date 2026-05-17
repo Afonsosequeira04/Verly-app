@@ -1,1 +1,1 @@
-web: python migrate_prod.py && python migration_fcm_push.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+web: python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
