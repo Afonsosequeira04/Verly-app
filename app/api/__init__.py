@@ -18,3 +18,4 @@ from app.api import insights          # noqa
 from app.api import onboarding_mobile  # noqa
 from app.api import notificacoes_mobile  # noqa
 from app.api import perfil_mobile  # noqa
+from app.api import gmail          # noqa

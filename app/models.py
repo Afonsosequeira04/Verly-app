@@ -66,6 +66,9 @@ class Fatura(db.Model):
     data_devolucao = db.Column(db.String(50))
     notas = db.Column(db.Text)
     data_upload = db.Column(db.DateTime, default=datetime.utcnow)
+    # ── Gmail import ────────────────────────────────────────────────────────────
+    gmail_message_id = db.Column(db.String(100), unique=True)   # evita duplicados
+    fonte = db.Column(db.String(20), default='upload')          # 'upload' | 'gmail'
 
 
 class Conversa(db.Model):
@@ -167,3 +170,21 @@ class Amizade(db.Model):
 
     de_user   = db.relationship('User', foreign_keys=[de_user_id])
     para_user = db.relationship('User', foreign_keys=[para_user_id])
+
+
+# ── Gmail Integration ──────────────────────────────────────────────────────────
+
+class GmailConnection(db.Model):
+    __tablename__ = 'gmail_connections'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
+    gmail_email        = db.Column(db.String(200))
+    credentials_json   = db.Column(db.Text, nullable=False)   # JSON com token + refresh_token
+    ativa              = db.Column(db.Boolean, default=True)
+    ultima_sync        = db.Column(db.DateTime)
+    faturas_importadas = db.Column(db.Integer, default=0)
+    criado_em          = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('gmail_connection', uselist=False))

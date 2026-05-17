@@ -6,7 +6,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'http://192.168.1.3:5000/api/v1';
+const BASE_URL = 'http://192.168.1.7:5000/api/v1';
 
 const TOKEN_KEY = '@verly_token';
 
@@ -277,4 +277,14 @@ export const amigosAPI = {
 
   rejeitar: (id) =>
     apiFetch(`/amigos/${id}/rejeitar`, { method: 'POST' }),
+};
+
+// ── Gmail Import ───────────────────────────────────────────────────────────────
+
+export const gmailAPI = {
+  authUrl:    () => apiFetch('/gmail/auth-url'),
+  status:     () => apiFetch('/gmail/status'),
+  sync:       () => apiFetch('/gmail/sync', { method: 'POST' }),
+  syncStatus: () => apiFetch('/gmail/sync/status'),
+  disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
 };

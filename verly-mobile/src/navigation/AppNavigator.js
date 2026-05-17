@@ -34,6 +34,7 @@ import HistoricoScreen         from '../screens/HistoricoScreen';
 import CriarEmScreen           from '../screens/CriarEmScreen';
 import AmigosScreen            from '../screens/AmigosScreen';
 import ConfiguracoesScreen     from '../screens/ConfiguracoesScreen';
+import GmailScreen             from '../screens/GmailScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
@@ -194,6 +195,13 @@ function MenuIcon({ name, color = C.textMid, size = 16 }) {
           <Path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </Svg>
       );
+    case 'mail':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+          <Polyline points="22,6 12,13 2,6" />
+        </Svg>
+      );
     case 'logout':
       return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
@@ -251,6 +259,12 @@ function MenuScreen({ navigation }) {
     n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
   const groups = [
+    {
+      label: 'Importar',
+      items: [
+        { label: 'Importar Gmail',        screen: 'Gmail',       icon: 'mail'     },
+      ],
+    },
     {
       label: 'Social',
       items: [
@@ -522,6 +536,7 @@ function MainStackNav() {
       <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...hdr, headerTitle: 'Playlists de compras' }} />
       <MainStack.Screen name="Amigos"        component={AmigosScreen}        options={{ ...hdr, headerTitle: 'Amigos' }} />
       <MainStack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ ...hdr, headerTitle: 'Configurações' }} />
+      <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
     </MainStack.Navigator>
   );
 }
