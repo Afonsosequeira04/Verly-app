@@ -25,9 +25,30 @@ with app.app_context():
     print("A criar tabelas no PostgreSQL...")
     db.create_all()
     print("✅ Todas as tabelas criadas com sucesso!")
-    
+
     # Listar tabelas criadas
-    from sqlalchemy import inspect
+    from sqlalchemy import inspect, text
     inspector = inspect(db.engine)
     tables = inspector.get_table_names()
     print(f"Tabelas: {', '.join(tables)}")
+
+    # Migration FCM — colunas push notifications
+    try:
+        with db.engine.connect() as conn:
+            colunas_fcm = [
+                ('fcm_token',         'VARCHAR(512)'),
+                ('fcm_token_updated', 'TIMESTAMP'),
+                ('push_ativas',       'BOOLEAN DEFAULT TRUE'),
+            ]
+            for coluna, tipo in colunas_fcm:
+                try:
+                    conn.execute(text(f'ALTER TABLE users ADD COLUMN {coluna} {tipo}'))
+                    conn.commit()
+                    print(f'✅ FCM: coluna {coluna} adicionada.')
+                except Exception as e:
+                    if 'already exists' in str(e).lower() or 'duplicate' in str(e).lower():
+                        print(f'ℹ️ FCM: {coluna} já existe.')
+                    else:
+                        print(f'❌ FCM erro {coluna}: {e}')
+    except Exception as e:
+        print(f'❌ FCM migration falhou: {e}')
