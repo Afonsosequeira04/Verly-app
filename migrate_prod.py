@@ -42,13 +42,10 @@ with app.app_context():
             ]
             for coluna, tipo in colunas_fcm:
                 try:
-                    conn.execute(text(f'ALTER TABLE users ADD COLUMN {coluna} {tipo}'))
+                    conn.execute(text(f'ALTER TABLE users ADD COLUMN IF NOT EXISTS {coluna} {tipo}'))
                     conn.commit()
                     print(f'✅ FCM: coluna {coluna} adicionada.')
                 except Exception as e:
-                    if 'already exists' in str(e).lower() or 'duplicate' in str(e).lower():
-                        print(f'ℹ️ FCM: {coluna} já existe.')
-                    else:
-                        print(f'❌ FCM erro {coluna}: {e}')
+                    print(f'❌ FCM erro {coluna}: {e}')
     except Exception as e:
         print(f'❌ FCM migration falhou: {e}')
