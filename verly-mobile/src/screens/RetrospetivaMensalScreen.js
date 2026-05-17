@@ -108,7 +108,7 @@ function Histograma({ historico }) {
   );
 }
 
-export default function RetrospetivaMensalScreen() {
+export default function RetrospetivaMensalScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -186,7 +186,10 @@ export default function RetrospetivaMensalScreen() {
       {/* Header */}
       <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
         <View style={styles.headerTop}>
-          <View>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <View style={{ flex: 1 }}>
             <Text style={styles.headerLabel}>Retrospetiva de</Text>
             <Text style={styles.headerMes}>{nomeMesAnt}</Text>
           </View>
@@ -309,6 +312,7 @@ const styles = StyleSheet.create({
   content: { padding: SPACE.lg, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
 
+  backBtn: { padding: 4, marginRight: 8 },
   header: { marginBottom: SPACE.lg, paddingTop: 8 },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },

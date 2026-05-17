@@ -100,7 +100,7 @@ function GarantiaCard({ item, idx }) {
   );
 }
 
-export default function GarantiasScreen() {
+export default function GarantiasScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -153,7 +153,10 @@ export default function GarantiasScreen() {
       {/* Header */}
       <Animated.View entering={FadeIn.duration(400)}>
         <View style={styles.header}>
-          <Shield size={28} color={C.brand} />
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <Shield size={28} color={C.brand} style={{ marginLeft: 8 }} />
           <View style={{ marginLeft: 12 }}>
             <Text style={styles.headerTitle}>Centro de Garantias</Text>
             <Text style={styles.headerSub}>
@@ -243,6 +246,7 @@ const styles = StyleSheet.create({
   content: { padding: SPACE.lg, paddingBottom: 40 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
 
+  backBtn: { padding: 4, marginRight: 4 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
