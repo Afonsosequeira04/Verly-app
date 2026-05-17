@@ -35,6 +35,8 @@ import CriarEmScreen           from '../screens/CriarEmScreen';
 import AmigosScreen            from '../screens/AmigosScreen';
 import ConfiguracoesScreen     from '../screens/ConfiguracoesScreen';
 import GmailScreen             from '../screens/GmailScreen';
+import GarantiasScreen         from '../screens/GarantiasScreen';
+import RetrospetivaMensalScreen from '../screens/RetrospetivaMensalScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
@@ -537,6 +539,8 @@ function MainStackNav() {
       <MainStack.Screen name="Amigos"        component={AmigosScreen}        options={{ ...hdr, headerTitle: 'Amigos' }} />
       <MainStack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ ...hdr, headerTitle: 'Configurações' }} />
       <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
+      <MainStack.Screen name="Garantias"     component={GarantiasScreen}         options={{ headerShown: false }} />
+      <MainStack.Screen name="Retrospetiva"  component={RetrospetivaMensalScreen} options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

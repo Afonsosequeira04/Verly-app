@@ -288,3 +288,33 @@ export const gmailAPI = {
   syncStatus: () => apiFetch('/gmail/sync/status'),
   disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
 };
+
+// ── Garantias & Resumo ─────────────────────────────────────────────────────────
+
+export const garantiasAPI = {
+  resumo: () => apiFetch('/exportar/resumo'),
+};
+
+// ── Exportar PDF ───────────────────────────────────────────────────────────────
+
+export const exportarAPI = {
+  // Abre o PDF no browser (URL com token)
+  pdfUrl: async () => {
+    const token = await getToken();
+    const BASE = 'https://verly-app-production.up.railway.app/api/v1';
+    return `${BASE}/exportar/pdf?_token=${token}`;
+  },
+};
+
+// ── Push Notifications ─────────────────────────────────────────────────────────
+
+export const pushAPI = {
+  registarToken: (fcm_token) =>
+    apiFetch('/push/token', { method: 'POST', body: JSON.stringify({ fcm_token }) }),
+
+  removerToken: () =>
+    apiFetch('/push/token', { method: 'DELETE' }),
+
+  testar: () =>
+    apiFetch('/push/test', { method: 'POST' }),
+};

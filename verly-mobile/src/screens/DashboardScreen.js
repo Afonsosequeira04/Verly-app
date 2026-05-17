@@ -31,8 +31,9 @@ import {
   Bell, Plus, Search, X, TrendingUp, TrendingDown,
   Receipt, Camera, Upload, FileText, Zap,
   ChevronRight, AlertCircle, Target, BarChart2,
+  Shield, Flame, Calendar, Download,
 } from 'lucide-react-native';
-import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI } from '../services/api';
+import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import {
@@ -779,6 +780,134 @@ function LoadingSkeleton() {
   );
 }
 
+// ─── Streak Badge ─────────────────────────────────────────────────────────────
+function StreakBadge({ streak = 0 }) {
+  if (streak === 0) return null;
+  return (
+    <MotiView
+      from={{ scale: 0.8, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      transition={{ type: 'spring', delay: 400 }}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        backgroundColor: '#FF7340' + '22',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: '#FF7340' + '60',
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+      }}
+    >
+      <Flame size={14} color="#FF7340" />
+      <Text style={{ fontSize: 13, fontWeight: '900', color: '#FF7340' }}>
+        {streak} dia{streak !== 1 ? 's' : ''}
+      </Text>
+    </MotiView>
+  );
+}
+
+// ─── Previsão Card ────────────────────────────────────────────────────────────
+function PrevisaoCard({ previsao, orcamento, navigation }) {
+  if (!previsao || previsao === 0) return null;
+  const vaiUltrapassar = orcamento > 0 && previsao > orcamento;
+  const cor = vaiUltrapassar ? C.red : C.green;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(350).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <Pressable
+        onPress={() => navigation?.navigate('Retrospetiva')}
+        style={{
+          backgroundColor: C.surface,
+          borderRadius: RADIUS.lg,
+          borderWidth: 1,
+          borderColor: cor + '40',
+          padding: 14,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+        }}
+      >
+        <View style={{
+          width: 40, height: 40, borderRadius: 12,
+          backgroundColor: cor + '22',
+          justifyContent: 'center', alignItems: 'center',
+        }}>
+          <TrendingUp size={20} color={cor} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 11, color: C.textSub, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Previsão este mês
+          </Text>
+          <Text style={{ fontSize: 20, fontWeight: '900', color: cor, marginTop: 1 }}>
+            {fmt(previsao)} €
+          </Text>
+          {vaiUltrapassar && orcamento > 0 && (
+            <Text style={{ fontSize: 11, color: C.red, fontWeight: '600', marginTop: 2 }}>
+              Vai ultrapassar o orçamento de {fmt(orcamento)} €
+            </Text>
+          )}
+          {!vaiUltrapassar && orcamento > 0 && (
+            <Text style={{ fontSize: 11, color: C.green, fontWeight: '600', marginTop: 2 }}>
+              Dentro do orçamento de {fmt(orcamento)} €
+            </Text>
+          )}
+        </View>
+        <ChevronRight size={16} color={C.textSub} />
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// ─── Quick Links ──────────────────────────────────────────────────────────────
+function QuickLinks({ navigation, numGarantias = 0 }) {
+  return (
+    <Animated.View entering={FadeInDown.delay(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <Pressable
+          onPress={() => navigation?.navigate('Garantias')}
+          style={{
+            flex: 1,
+            backgroundColor: C.surface,
+            borderRadius: RADIUS.lg,
+            borderWidth: 1,
+            borderColor: numGarantias > 0 ? '#00D68F40' : C.border,
+            padding: 14,
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <Shield size={22} color={numGarantias > 0 ? '#00D68F' : C.textMid} />
+          <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>Garantias</Text>
+          <Text style={{ fontSize: 11, color: numGarantias > 0 ? '#00D68F' : C.textSub }}>
+            {numGarantias > 0 ? `${numGarantias} ativa${numGarantias !== 1 ? 's' : ''}` : 'Nenhuma'}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={() => navigation?.navigate('Retrospetiva')}
+          style={{
+            flex: 1,
+            backgroundColor: C.surface,
+            borderRadius: RADIUS.lg,
+            borderWidth: 1,
+            borderColor: C.brand + '40',
+            padding: 14,
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <Calendar size={22} color={C.brand} />
+          <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>Retrospetiva</Text>
+          <Text style={{ fontSize: 11, color: C.brand }}>Ver resumo</Text>
+        </Pressable>
+      </View>
+    </Animated.View>
+  );
+}
+
+
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
@@ -795,6 +924,10 @@ export default function DashboardScreen({ navigation, route }) {
   const [notifLoad,  setNotifLoad]  = useState(false);
   const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
   const [insights,   setInsights]   = useState([]);
+  const [streakDias,   setStreakDias]   = useState(0);
+  const [numGarantias, setNumGarantias] = useState(0);
+  const [previsao,     setPrevisao]     = useState(null);
+  const [orcamento,    setOrcamento]    = useState(0);
 
   const fetchNotifs = useCallback(async () => {
     setNotifLoad(true);
@@ -816,6 +949,26 @@ export default function DashboardScreen({ navigation, route }) {
   }, []);
 
   useEffect(() => { fetchInsights(); }, [fetchInsights]);
+
+  const fetchExtras = useCallback(async () => {
+    try {
+      const res = await apiFetch('/exportar/resumo');
+      if (res.success) {
+        setStreakDias(res.streak_dias || 0);
+        setOrcamento(res.orcamento_mensal || 0);
+        const ativas = (res.garantias_ativas || []).filter(g => g.dias_restantes >= 0);
+        setNumGarantias(ativas.length);
+      }
+      // Previsão vem do dashboard
+      const ins = await apiFetch('/insights');
+      if (ins.success && ins.resumo?.previsao_mensal) {
+        setPrevisao(ins.resumo.previsao_mensal);
+        if (ins.resumo.orcamento_mensal) setOrcamento(ins.resumo.orcamento_mensal);
+      }
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => { fetchExtras(); }, [fetchExtras]);
 
   // Abre upload quando o + do header é pressionado
   useEffect(() => {
@@ -878,8 +1031,11 @@ export default function DashboardScreen({ navigation, route }) {
             )}
           </TouchableOpacity>
 
-          {/* Centro — título */}
-          <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+          {/* Centro — título + streak */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+            <StreakBadge streak={streakDias} />
+          </View>
 
           {/* Direita — + e menu */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -973,6 +1129,8 @@ export default function DashboardScreen({ navigation, route }) {
           <>
             <HeroCard data={data} onSearchPress={() => setSearch(true)} />
             <MetricsRow data={data} />
+            <PrevisaoCard previsao={previsao} orcamento={orcamento} navigation={navigation} />
+            <QuickLinks navigation={navigation} numGarantias={numGarantias} />
             <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
             <InsightsSection mood={data?.mood} feed={data?.feed} />
 

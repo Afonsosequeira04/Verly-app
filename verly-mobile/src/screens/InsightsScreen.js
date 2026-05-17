@@ -1,4 +1,4 @@
-// src/screens/InsightsScreen.js — Verly Insights v5 — Magazine Premium
+// src/screens/InsightsScreen.js — Verly Insights v6 — Donut Chart PocketGuard Style
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, Pressable,
@@ -21,6 +21,7 @@ import {
   DollarSign, PieChart, Clock,
 } from 'lucide-react-native';
 import { insightsAPI } from '../services/api';
+import DonutCategorias from '../components/DonutCategorias';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
 const C = COLORS;
@@ -200,89 +201,6 @@ function HeroCard({ resumo }) {
 }
 
 // ─── Categoria Card interativo ────────────────────────────────────────────────
-function CategoriaCard({ categorias }) {
-  const [selected, setSelected] = useState(null);
-  if (!categorias?.length) return null;
-
-  const total = categorias.reduce((s, c) => s + c.valor, 0);
-
-  return (
-    <Animated.View entering={FadeInDown.delay(100).duration(500).springify()} style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionTitleRow}>
-          <PieChart size={16} color={C.brand} />
-          <Text style={styles.sectionTitle}>Distribuição de Gastos</Text>
-        </View>
-        <Text style={styles.sectionTotal}>{fmt(total)}€</Text>
-      </View>
-
-      <View style={styles.card}>
-        {/* Mini chart — barras empilhadas horizontais */}
-        <View style={styles.stackedBar}>
-          {categorias.slice(0, 6).map((cat, i) => {
-            const pct = total > 0 ? (cat.valor / total) * 100 : 0;
-            const color = CAT_COLORS[i % CAT_COLORS.length];
-            return (
-              <MotiView
-                key={cat.categoria}
-                from={{ width: '0%' }}
-                animate={{ width: `${pct}%` }}
-                transition={{ type: 'timing', duration: 700 + i * 80, easing: Easing.out(Easing.cubic) }}
-                style={[styles.stackedSegment, { backgroundColor: color }]}
-              />
-            );
-          })}
-        </View>
-
-        {/* Lista clicável */}
-        {categorias.slice(0, 6).map((cat, i) => {
-          const pct = total > 0 ? (cat.valor / total) * 100 : 0;
-          const color = CAT_COLORS[i % CAT_COLORS.length];
-          const emoji = CAT_ICONS[cat.categoria?.toLowerCase()] || '📦';
-          const isSelected = selected === cat.categoria;
-
-          return (
-            <Pressable
-              key={cat.categoria}
-              onPress={() => setSelected(isSelected ? null : cat.categoria)}
-              style={[styles.catRow, isSelected && { backgroundColor: color + '12' }]}
-            >
-              <View style={styles.catLeft}>
-                <View style={[styles.catDot, { backgroundColor: color }]} />
-                <Text style={styles.catEmoji}>{emoji}</Text>
-                <Text style={[styles.catName, isSelected && { color: color }]}>
-                  {cat.categoria}
-                </Text>
-              </View>
-              <View style={styles.catRight}>
-                <Text style={[styles.catPct, { color }]}>{Math.round(pct)}%</Text>
-                <Text style={styles.catVal}>{fmt(cat.valor)}€</Text>
-              </View>
-
-              {/* Barra horizontal animada */}
-              {isSelected && (
-                <Animated.View entering={FadeInDown.duration(200)} style={styles.catDetail}>
-                  <View style={styles.catBarBg}>
-                    <MotiView
-                      from={{ width: '0%' }}
-                      animate={{ width: `${pct}%` }}
-                      transition={{ type: 'timing', duration: 500 }}
-                      style={[styles.catBarFill, { backgroundColor: color }]}
-                    />
-                  </View>
-                  <Text style={[styles.catDetailText, { color }]}>
-                    {Math.round(pct)}% dos teus gastos este mês
-                  </Text>
-                </Animated.View>
-              )}
-            </Pressable>
-          );
-        })}
-      </View>
-    </Animated.View>
-  );
-}
-
 // ─── Histórico 6 meses sparkline ─────────────────────────────────────────────
 function HistoricoCard({ historico }) {
   if (!historico?.length) return null;
@@ -733,7 +651,12 @@ export default function InsightsScreen() {
 
           {/* Categorias interativas */}
           {resumo?.top_categorias?.length > 0 && (
-            <CategoriaCard categorias={resumo.top_categorias} />
+            <DonutCategorias
+              categorias={resumo.top_categorias}
+              insights={insights}
+              itensPorCategoria={resumo.itens_por_categoria}
+              delay={100}
+            />
           )}
 
           {/* Subscrições */}

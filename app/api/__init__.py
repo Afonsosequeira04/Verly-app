@@ -19,3 +19,5 @@ from app.api import onboarding_mobile  # noqa
 from app.api import notificacoes_mobile  # noqa
 from app.api import perfil_mobile  # noqa
 from app.api import gmail          # noqa
+from app.api import exportar_mobile    # noqa
+from app.api import push_notifications # noqa
