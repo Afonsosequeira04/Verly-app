@@ -134,13 +134,11 @@ def guardar_fcm_token():
     if not token:
         return jsonify({'success': False, 'message': 'Token em falta.'}), 400
 
-    # Guarda no campo fcm_token do User (adicionar migration se necessário)
     if hasattr(user, 'fcm_token'):
         user.fcm_token = token
         user.fcm_token_updated = datetime.utcnow()
         db.session.commit()
     else:
-        # Fallback: guarda em memória/log se ainda não há coluna
         logger.info(f'FCM token para user {user_id}: {token[:20]}...')
 
     return jsonify({'success': True})
@@ -162,7 +160,7 @@ def remover_fcm_token():
     return jsonify({'success': True})
 
 
-@api_pb.route('/push/test', methods=['POST'])
+@api_bp.route('/push/test', methods=['POST'])
 @jwt_required()
 def push_teste():
     """Envia uma push de teste ao próprio utilizador."""
