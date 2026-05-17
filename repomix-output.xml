@@ -375,10 +375,6 @@ def buscar_utilizadores():
     return jsonify({'utilizadores': [_user_pub(u) for u in users]})
 </file>
 
-<file path="app/api/exportar_mobile.py">
-
-</file>
-
 <file path="app/api/gmail.py">
 """
 app/api/gmail.py — Integração Gmail para importação automática de faturas
@@ -1821,10 +1817,6 @@ def perfil_mobile_update():
     db.session.commit()
 
     return jsonify({'success': True, 'message': 'Perfil atualizado.'})
-</file>
-
-<file path="app/api/push_notifications.py">
-
 </file>
 
 <file path="app/api/subscricoes.py">
@@ -3810,10 +3802,6 @@ RESUMO DE VALORES
 ================================================================================
 </file>
 
-<file path="enviar_alertas_push.py">
-
-</file>
-
 <file path="enviar_alertas.py">
 #!/usr/bin/env python3
 """
@@ -3935,42 +3923,6 @@ if __name__ == "__main__":
     main()
 </file>
 
-<file path="migrate_prod.py">
-"""
-migrate_prod.py — Cria todas as tabelas no PostgreSQL de produção.
-Corre uma vez após o deploy: python migrate_prod.py
-"""
-import os
-import sys
-
-# Forçar ambiente de produção
-os.environ['FLASK_ENV'] = 'production'
-
-from app import create_app, db
-from app.models import (
-    User, Fatura, Conversa, Meta, ContaBancaria,
-    Subscricao, Playlist, playlist_fatura, playlist_membro
-)
-
-try:
-    from app.models import GmailConnection
-except ImportError:
-    GmailConnection = None
-
-app = create_app()
-
-with app.app_context():
-    print("A criar tabelas no PostgreSQL...")
-    db.create_all()
-    print("✅ Todas as tabelas criadas com sucesso!")
-    
-    # Listar tabelas criadas
-    from sqlalchemy import inspect
-    inspector = inspect(db.engine)
-    tables = inspector.get_table_names()
-    print(f"Tabelas: {', '.join(tables)}")
-</file>
-
 <file path="migration_email_confirm.py">
 """
 migration_email_confirm.py — Adiciona campos de confirmação de email ao modelo User
@@ -4015,10 +3967,6 @@ with app.app_context():
         print(f'❌ Erro ao atualizar utilizadores: {e}')
 
     print('\n✅ Migração concluída!')
-</file>
-
-<file path="migration_fcm_push.py">
-
 </file>
 
 <file path="migration_gmail_fix.py">
@@ -9072,393 +9020,6 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/GarantiasScreen.js">
-// src/screens/GarantiasScreen.js
-// Centro de Garantias — todas as garantias ativas e expiradas num só sítio
-// Nenhuma app portuguesa tem isto. É a funcionalidade de diferenciação.
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, RefreshControl, Dimensions,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
-import {
-  Shield, ShieldCheck, ShieldOff, ShieldAlert,
-  ChevronRight, Package, Calendar, AlertTriangle,
-} from 'lucide-react-native';
-import { apiFetch } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-
-function diasLabel(dias) {
-  if (dias === 0) return 'Expira hoje!';
-  if (dias === 1) return 'Expira amanhã!';
-  if (dias < 0) return `Expirou há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`;
-  return `${dias} dias restantes`;
-}
-
-function diasColor(dias) {
-  if (dias < 0) return C.textSub;
-  if (dias <= 7) return C.red;
-  if (dias <= 30) return C.yellow;
-  return C.green;
-}
-
-function GarantiaCard({ item, idx }) {
-  const dias = item.dias_restantes;
-  const cor = diasColor(dias);
-  const expirou = dias < 0;
-
-  return (
-    <Animated.View entering={FadeInDown.delay(idx * 60).duration(350).springify()}>
-      <View style={[styles.card, expirou && { opacity: 0.55 }]}>
-        {/* Linha esquerda colorida */}
-        <View style={[styles.cardAccent, { backgroundColor: cor }]} />
-
-        <View style={{ flex: 1, paddingLeft: 14 }}>
-          {/* Header */}
-          <View style={styles.cardHeader}>
-            <View style={[styles.iconBox, { backgroundColor: cor + '22' }]}>
-              {expirou
-                ? <ShieldOff size={18} color={cor} />
-                : dias <= 7
-                  ? <ShieldAlert size={18} color={cor} />
-                  : <ShieldCheck size={18} color={cor} />
-              }
-            </View>
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={styles.cardLoja} numberOfLines={1}>{item.loja}</Text>
-              <Text style={[styles.cardDias, { color: cor }]}>{diasLabel(dias)}</Text>
-            </View>
-            {item.valor > 0 && (
-              <Text style={styles.cardValor}>{fmt(item.valor)} €</Text>
-            )}
-          </View>
-
-          {/* Detalhes */}
-          <View style={styles.cardDetails}>
-            <View style={styles.detailRow}>
-              <Calendar size={12} color={C.textSub} />
-              <Text style={styles.detailText}>
-                Válida até {item.data_garantia}
-              </Text>
-            </View>
-            {item.categoria && (
-              <View style={[styles.badge, { backgroundColor: C.brand + '22' }]}>
-                <Text style={[styles.badgeText, { color: C.brand }]}>{item.categoria}</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Barra de progresso restante */}
-          {!expirou && dias <= 365 && (
-            <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${Math.max(2, Math.min(100, (dias / 365) * 100))}%`,
-                    backgroundColor: cor,
-                  },
-                ]}
-              />
-            </View>
-          )}
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
-export default function GarantiasScreen() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [filtro, setFiltro] = useState('ativas'); // 'ativas' | 'todas' | 'urgentes'
-
-  const fetch = useCallback(async (isRefresh = false) => {
-    try {
-      const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
-    } catch (e) {
-      console.error('GarantiasScreen:', e);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
-
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const todas = data?.garantias_ativas || [];
-  const ativas = todas.filter(g => g.dias_restantes >= 0);
-  const urgentes = todas.filter(g => g.dias_restantes >= 0 && g.dias_restantes <= 30);
-  const expiradas = todas.filter(g => g.dias_restantes < 0);
-
-  const listaFiltrada =
-    filtro === 'ativas'   ? ativas :
-    filtro === 'urgentes' ? urgentes :
-    todas;
-
-  const totalAtivas = ativas.length;
-  const totalUrgentes = urgentes.length;
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-    >
-      {/* Header */}
-      <Animated.View entering={FadeIn.duration(400)}>
-        <View style={styles.header}>
-          <Shield size={28} color={C.brand} />
-          <View style={{ marginLeft: 12 }}>
-            <Text style={styles.headerTitle}>Centro de Garantias</Text>
-            <Text style={styles.headerSub}>
-              {totalAtivas} ativ{totalAtivas !== 1 ? 'as' : 'a'}
-              {totalUrgentes > 0 ? ` · ${totalUrgentes} urgente${totalUrgentes !== 1 ? 's' : ''}` : ''}
-            </Text>
-          </View>
-        </View>
-
-        {/* Stats rápidas */}
-        <View style={styles.statsRow}>
-          <View style={[styles.statCard, { borderColor: C.green + '40' }]}>
-            <ShieldCheck size={20} color={C.green} />
-            <Text style={[styles.statNum, { color: C.green }]}>{totalAtivas}</Text>
-            <Text style={styles.statLabel}>Ativas</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.yellow + '40' }]}>
-            <ShieldAlert size={20} color={C.yellow} />
-            <Text style={[styles.statNum, { color: C.yellow }]}>{urgentes.length}</Text>
-            <Text style={styles.statLabel}>30 dias</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.red + '40' }]}>
-            <AlertTriangle size={20} color={C.red} />
-            <Text style={[styles.statNum, { color: C.red }]}>{urgentes.filter(g => g.dias_restantes <= 7).length}</Text>
-            <Text style={styles.statLabel}>7 dias</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.textSub + '30' }]}>
-            <ShieldOff size={20} color={C.textSub} />
-            <Text style={[styles.statNum, { color: C.textSub }]}>{expiradas.length}</Text>
-            <Text style={styles.statLabel}>Expiradas</Text>
-          </View>
-        </View>
-
-        {/* Filtros */}
-        <View style={styles.filtros}>
-          {[
-            { key: 'ativas',   label: `Ativas (${ativas.length})` },
-            { key: 'urgentes', label: `Urgentes (${urgentes.length})` },
-            { key: 'todas',    label: `Todas (${todas.length})` },
-          ].map(f => (
-            <Pressable
-              key={f.key}
-              onPress={() => setFiltro(f.key)}
-              style={[styles.filtroBtn, filtro === f.key && styles.filtroBtnActive]}
-            >
-              <Text style={[styles.filtroText, filtro === f.key && styles.filtroTextActive]}>
-                {f.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      </Animated.View>
-
-      {/* Lista */}
-      {listaFiltrada.length === 0 ? (
-        <Animated.View entering={FadeIn.delay(200)} style={styles.emptyBox}>
-          <ShieldCheck size={48} color={C.green} style={{ marginBottom: 16 }} />
-          <Text style={styles.emptyTitle}>
-            {filtro === 'urgentes' ? 'Nenhuma garantia urgente' : 'Nenhuma garantia aqui'}
-          </Text>
-          <Text style={styles.emptySub}>
-            {filtro === 'urgentes'
-              ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
-              : 'Quando fizeres upload de faturas com garantia, aparecem aqui automaticamente.'}
-          </Text>
-        </Animated.View>
-      ) : (
-        listaFiltrada.map((item, idx) => (
-          <GarantiaCard key={`${item.loja}-${idx}`} item={item} idx={idx} />
-        ))
-      )}
-
-      {/* Dica */}
-      <Animated.View entering={FadeInDown.delay(400)} style={styles.dicaBox}>
-        <Package size={16} color={C.textSub} />
-        <Text style={styles.dicaText}>
-          A Verly extrai automaticamente datas de garantia das tuas faturas.
-          Guarda sempre o PDF original para reclamar quando necessário.
-        </Text>
-      </Animated.View>
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACE.lg,
-    paddingTop: 8,
-  },
-  headerTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
-  headerSub:   { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
-
-  statsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: SPACE.lg,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 4,
-  },
-  statNum:   { fontSize: FONT.lg, fontWeight: '900', color: C.text },
-  statLabel: { fontSize: 10, color: C.textSub, fontWeight: '600' },
-
-  filtros: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: SPACE.lg,
-  },
-  filtroBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.surface,
-  },
-  filtroBtnActive: {
-    backgroundColor: C.brandDim,
-    borderColor: C.brand + '60',
-  },
-  filtroText:       { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
-  filtroTextActive: { color: C.brand },
-
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    marginBottom: 12,
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  cardAccent: { width: 4, minHeight: '100%' },
-
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  iconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardLoja:  { fontSize: FONT.md, fontWeight: '700', color: C.text },
-  cardDias:  { fontSize: FONT.xs, fontWeight: '700', marginTop: 2 },
-  cardValor: { fontSize: FONT.sm, fontWeight: '800', color: C.text },
-
-  cardDetails: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 10,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  detailText: { fontSize: 11, color: C.textSub },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  badgeText: { fontSize: 10, fontWeight: '700' },
-
-  progressTrack: {
-    height: 3,
-    backgroundColor: C.surface3,
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginTop: 2,
-    marginBottom: 12,
-  },
-  progressFill: { height: '100%', borderRadius: 2 },
-
-  emptyBox: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 24,
-  },
-  emptyTitle: {
-    fontSize: FONT.lg,
-    fontWeight: '800',
-    color: C.text,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  emptySub: {
-    fontSize: FONT.sm,
-    color: C.textMid,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  dicaBox: {
-    flexDirection: 'row',
-    gap: 10,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: C.border,
-    marginTop: 16,
-    alignItems: 'flex-start',
-  },
-  dicaText: {
-    flex: 1,
-    fontSize: 11,
-    color: C.textSub,
-    lineHeight: 17,
-  },
-});
-</file>
-
 <file path="verly-mobile/src/screens/GmailScreen.js">
 /**
  * verly-mobile/src/screens/GmailScreen.js
@@ -10421,372 +9982,6 @@ const styles = StyleSheet.create({
   detalheCat:   { flex: 1, fontSize: 13, color: C.text, fontWeight: '600' },
   detalheCount: { fontSize: 12, color: C.textSub, minWidth: 24 },
   detalheTotal: { fontSize: 14, fontWeight: '800', color: C.brand, minWidth: 70, textAlign: 'right' },
-});
-</file>
-
-<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
-// src/screens/RetrospetivaMensalScreen.js
-// Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
-// Mostra: total gasto, categoria top, comparação com mês antes, streak, dica da Verly
-
-import React, { useState, useCallback, useRef } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, Dimensions,
-  Share, RefreshControl,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import Animated, {
-  FadeInDown, FadeIn, ZoomIn,
-  useSharedValue, useAnimatedStyle, withSpring,
-} from 'react-native-reanimated';
-import { MotiView } from 'moti';
-import {
-  TrendingUp, TrendingDown, Award, Flame, Target,
-  BarChart2, Download, Share2, Calendar, Zap,
-} from 'lucide-react-native';
-import { apiFetch } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
-
-const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-                  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-const MESES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-
-const CAT_COLORS = [
-  '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
-  '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
-];
-
-// ─── Mini bar chart horizontal ────────────────────────────────────────────────
-function MiniBarChart({ dados }) {
-  if (!dados || dados.length === 0) return null;
-  const maxVal = Math.max(...dados.map(d => d.total), 1);
-
-  return (
-    <View style={{ gap: 10 }}>
-      {dados.map((d, i) => {
-        const pct = d.total / maxVal;
-        const cor = CAT_COLORS[i % CAT_COLORS.length];
-        return (
-          <View key={i}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
-                {d.categoria}
-              </Text>
-              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
-            </View>
-            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-              <Animated.View
-                entering={FadeIn.delay(i * 80)}
-                style={{
-                  height: '100%',
-                  width: `${pct * 100}%`,
-                  backgroundColor: cor,
-                  borderRadius: 3,
-                }}
-              />
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Histograma de 6 meses ────────────────────────────────────────────────────
-function Histograma({ historico }) {
-  if (!historico || historico.length === 0) return null;
-  const maxVal = Math.max(...historico.map(d => d.total), 1);
-  const BAR_H = 80;
-
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: BAR_H + 30 }}>
-      {historico.map((d, i) => {
-        const h = Math.max((d.total / maxVal) * BAR_H, 4);
-        const isCurrent = i === historico.length - 1;
-        return (
-          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={{ fontSize: 9, color: C.textSub, marginBottom: 4 }}>
-              {d.total > 0 ? `${(d.total / 1000).toFixed(d.total >= 1000 ? 1 : 0)}${d.total >= 1000 ? 'k' : ''}` : ''}
-            </Text>
-            <MotiView
-              from={{ height: 4 }}
-              animate={{ height: h }}
-              transition={{ type: 'spring', delay: i * 60 }}
-              style={{
-                width: '100%',
-                backgroundColor: isCurrent ? C.brand : C.surface3,
-                borderRadius: 4,
-              }}
-            />
-            <Text style={{ fontSize: 9, color: isCurrent ? C.brand : C.textSub, marginTop: 5, fontWeight: isCurrent ? '800' : '500' }}>
-              {d.mes}
-            </Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-export default function RetrospetivaMensalScreen() {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const hoje = new Date();
-  const mesAtual = hoje.getMonth(); // 0-indexed
-  const nomesMesAtual = MESES_PT[mesAtual];
-
-  const fetch = useCallback(async (isRefresh = false) => {
-    try {
-      const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
-    } catch (e) {
-      console.error('RetrospetivaMensal:', e);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
-
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
-
-  const partilhar = async () => {
-    if (!data) return;
-    const historico = data.historico_mensal || [];
-    const mesRef = historico[historico.length - 2];
-    const total = mesRef?.total || 0;
-    const topCat = data.top_categorias?.[0];
-
-    try {
-      await Share.share({
-        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
-      });
-    } catch (e) {}
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const historico = data?.historico_mensal || [];
-  const mesAnterior = historico[historico.length - 2];
-  const mesAtualData = historico[historico.length - 1];
-  const mesAntAnterior = historico[historico.length - 3];
-
-  const totalMesAnt = mesAnterior?.total || 0;
-  const totalMesAntAnt = mesAntAnterior?.total || 0;
-  const variacao = totalMesAntAnt > 0
-    ? ((totalMesAnt - totalMesAntAnt) / totalMesAntAnt) * 100
-    : null;
-
-  const topCats = (data?.top_categorias || []).slice(0, 5);
-  const streak = data?.streak_dias || 0;
-  const rendimento = data?.rendimento_mensal || 0;
-  const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
-  const nome = data?.nome || 'utilizador';
-
-  const nomeMesAnt = mesAnterior?.mes
-    ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
-    : 'Mês anterior';
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-    >
-      {/* Header */}
-      <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
-        <View style={styles.headerTop}>
-          <View>
-            <Text style={styles.headerLabel}>Retrospetiva de</Text>
-            <Text style={styles.headerMes}>{nomeMesAnt}</Text>
-          </View>
-          <Pressable onPress={partilhar} style={styles.shareBtn}>
-            <Share2 size={16} color={C.brand} />
-          </Pressable>
-        </View>
-      </Animated.View>
-
-      {/* Hero — total gasto */}
-      <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Total gasto em {nomeMesAnt}</Text>
-        <Text style={styles.heroValor}>{fmt(totalMesAnt)} €</Text>
-
-        {variacao !== null && (
-          <View style={styles.variacaoRow}>
-            {variacao > 0
-              ? <TrendingUp size={14} color={C.red} />
-              : <TrendingDown size={14} color={C.green} />
-            }
-            <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
-              {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAntAnterior?.mes || 'mês anterior'}
-            </Text>
-          </View>
-        )}
-
-        {pctRendimento !== null && (
-          <Text style={styles.heroSub}>
-            {pctRendimento.toFixed(0)}% do teu rendimento mensal
-          </Text>
-        )}
-      </Animated.View>
-
-      {/* Histograma 6 meses */}
-      <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <BarChart2 size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
-        </View>
-        <Histograma historico={historico} />
-      </Animated.View>
-
-      {/* Top categorias */}
-      <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <Target size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-        </View>
-        <MiniBarChart dados={topCats} />
-      </Animated.View>
-
-      {/* Streak */}
-      {streak > 0 && (
-        <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
-          <View style={styles.cardTitleRow}>
-            <Flame size={18} color='#FF7340' />
-            <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
-          </View>
-          <Text style={styles.streakSub}>
-            Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
-            {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
-          </Text>
-        </Animated.View>
-      )}
-
-      {/* Dica da Verly para este mês */}
-      <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
-        <View style={styles.cardTitleRow}>
-          <Zap size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>O que melhorar em {nomesMesAtual}</Text>
-        </View>
-        {variacao !== null && variacao > 15 ? (
-          <Text style={styles.dicaText}>
-            Gastaste {variacao.toFixed(0)}% mais do que em {mesAntAnterior?.mes || 'mês anterior'}.
-            Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
-            Define um limite concreto para este mês.
-          </Text>
-        ) : variacao !== null && variacao < -10 ? (
-          <Text style={styles.dicaText}>
-            Excelente! Reduziu{Math.abs(variacao).toFixed(0)}% face ao mês anterior.
-            Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
-            (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
-          </Text>
-        ) : (
-          <Text style={styles.dicaText}>
-            Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-            A regra 50/30/20 de Elizabeth Warren sugere: 50% necessidades, 30% desejos, 20% poupança.
-            {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
-          </Text>
-        )}
-      </Animated.View>
-
-      {/* Botão exportar PDF */}
-      <Animated.View entering={FadeInDown.delay(500)}>
-        <Pressable
-          onPress={async () => {
-            try {
-              const { getToken } = await import('../services/api');
-              const token = await getToken();
-              const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-              // Abre o PDF no browser externo (RN não tem download direto sem expo-file-system)
-              const { Linking } = require('react-native');
-              Linking.openURL(`${BASE_URL}/exportar/pdf?token=${token}`);
-            } catch (e) {
-              console.error(e);
-            }
-          }}
-          style={styles.exportBtn}
-        >
-          <Download size={18} color="#fff" />
-          <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
-        </Pressable>
-      </Animated.View>
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  header: { marginBottom: SPACE.lg, paddingTop: 8 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
-  headerMes: { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2 },
-  shareBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  heroCard: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 24,
-    marginBottom: SPACE.lg,
-    alignItems: 'center',
-  },
-  heroLabel: { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor: { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
-  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
-  variacaoText: { fontSize: FONT.sm, fontWeight: '700' },
-  heroSub: { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: 16,
-    marginBottom: SPACE.md,
-  },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
-
-  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
-  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  dicaCard: { borderColor: C.brand + '30' },
-  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  exportBtn: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
 });
 </file>
 
@@ -12258,6 +11453,268 @@ RESUMO DE VALORES
   Pull & Bear - Servico ao Cliente: support@pull-e-bear.pt
 
 ================================================================================
+</file>
+
+<file path="enviar_alertas_push.py">
+#!/usr/bin/env python3
+"""
+enviar_alertas_push.py — Cron diário: envia push FCM reais a todos os utilizadores
+
+Agendar (crontab):
+    0 9 * * * cd /caminho/para/verly && python enviar_alertas_push.py
+
+Requer:
+    - firebase-service-account.json na raiz do projeto
+    - Coluna fcm_token na tabela users (ver migration abaixo)
+    - firebase-admin instalado: pip install firebase-admin
+
+Migration (executar uma vez):
+    ALTER TABLE users ADD COLUMN fcm_token VARCHAR(512);
+    ALTER TABLE users ADD COLUMN fcm_token_updated TIMESTAMP;
+    ALTER TABLE users ADD COLUMN push_ativas BOOLEAN DEFAULT TRUE;
+"""
+
+import os
+import sys
+import logging
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s — %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger('push_alertas')
+
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(str(date_str).strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def gerar_alertas_push(user, faturas, orcamento, hoje):
+    """
+    Gera lista de pushes a enviar para um utilizador.
+    Devolve lista de {'titulo': ..., 'corpo': ...}.
+    """
+    alertas = []
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+
+    # ── 1. Garantias a expirar em ≤7 dias ────────────────────────────────────
+    for f in faturas:
+        data_gar = _parse_date(f.data_garantia)
+        if data_gar and data_gar >= hoje:
+            dias = (data_gar - hoje).days
+            if dias <= 7:
+                loja = f.loja or f.nome_ficheiro or 'produto'
+                alertas.append({
+                    'titulo': f'🛡️ Garantia expira em {dias} dia{"s" if dias != 1 else ""}!',
+                    'corpo': f'A garantia de {loja} termina em {data_gar.strftime("%d/%m/%Y")}. Guarda bem o teu comprovativo.',
+                    'tipo': 'garantia',
+                })
+
+    # ── 2. Devoluções a expirar em ≤3 dias ───────────────────────────────────
+    for f in faturas:
+        data_dev = _parse_date(f.data_devolucao)
+        if data_dev and data_dev >= hoje:
+            dias = (data_dev - hoje).days
+            if dias <= 3:
+                loja = f.loja or f.nome_ficheiro or 'produto'
+                alertas.append({
+                    'titulo': f'↩️ Prazo de devolução termina em {dias} dia{"s" if dias != 1 else ""}!',
+                    'corpo': f'{loja}: tens até {data_dev.strftime("%d/%m")} para devolver.',
+                    'tipo': 'devolucao',
+                })
+
+    # ── 3. Orçamento a 80%+ ───────────────────────────────────────────────────
+    if orcamento > 0:
+        total_mes = sum(
+            f.total or 0 for f in faturas
+            if _parse_date(f.data_compra) and
+               _parse_date(f.data_compra).month == mes_atual and
+               _parse_date(f.data_compra).year == ano_atual
+        )
+        pct = (total_mes / orcamento) * 100 if orcamento > 0 else 0
+        if pct >= 100:
+            alertas.append({
+                'titulo': '🚨 Orçamento ultrapassado!',
+                'corpo': f'Gastaste {total_mes:.0f}€ de {orcamento:.0f}€ este mês ({pct:.0f}%). Hora de travar.',
+                'tipo': 'orcamento',
+            })
+        elif pct >= 80:
+            restante = orcamento - total_mes
+            alertas.append({
+                'titulo': f'⚠️ Já usaste {pct:.0f}% do orçamento',
+                'corpo': f'Restam {restante:.0f}€ do teu orçamento mensal de {orcamento:.0f}€. Atenção aos próximos gastos.',
+                'tipo': 'orcamento',
+            })
+
+    return alertas
+
+
+def main():
+    logger.info('=' * 60)
+    logger.info(f'Verly Push Alertas — {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    logger.info('=' * 60)
+
+    # Inicializar Firebase
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+        if not firebase_admin._apps:
+            cred = credentials.Certificate('firebase-service-account.json')
+            firebase_admin.initialize_app(cred)
+        logger.info('Firebase Admin SDK inicializado.')
+    except Exception as e:
+        logger.error(f'Erro Firebase: {e}')
+        logger.warning('Push não será enviada — continua com email.')
+
+    from app import create_app, db
+    from app.models import User, Fatura
+
+    app = create_app()
+    hoje = datetime.utcnow()
+
+    with app.app_context():
+        # Utilizadores com push ativas e FCM token
+        try:
+            utilizadores = User.query.filter(
+                User.fcm_token.isnot(None),
+                User.fcm_token != '',
+            ).all()
+        except Exception:
+            # Coluna fcm_token pode ainda não existir
+            logger.warning('Coluna fcm_token não encontrada. Executa a migration primeiro.')
+            utilizadores = []
+
+        logger.info(f'{len(utilizadores)} utilizador(es) com FCM token.')
+
+        enviados = 0
+        erros = 0
+
+        for user in utilizadores:
+            try:
+                faturas = Fatura.query.filter_by(user_id=user.id).all()
+                orcamento = getattr(user, 'orcamento_mensal', 0) or 0
+                alertas = gerar_alertas_push(user, faturas, orcamento, hoje)
+
+                if not alertas:
+                    continue
+
+                # Envia apenas o alerta mais urgente (para não spammar)
+                alerta = alertas[0]
+                nome = (user.nome or '').split()[0] or 'utilizador'
+
+                try:
+                    from firebase_admin import messaging
+                    msg = messaging.Message(
+                        notification=messaging.Notification(
+                            title=alerta['titulo'],
+                            body=alerta['corpo'],
+                        ),
+                        data={
+                            'tipo': alerta.get('tipo', 'alerta'),
+                            'user_id': str(user.id),
+                        },
+                        token=user.fcm_token,
+                        android=messaging.AndroidConfig(
+                            priority='high',
+                            notification=messaging.AndroidNotification(
+                                icon='ic_notification',
+                                color='#7C6FE0',
+                                channel_id='verly_alertas',
+                            ),
+                        ),
+                        apns=messaging.APNSConfig(
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(badge=len(alertas), sound='default'),
+                            ),
+                        ),
+                    )
+                    response = messaging.send(msg)
+                    logger.info(f'Push enviada para user {user.id}: {response}')
+                    enviados += 1
+
+                except Exception as e:
+                    logger.error(f'Erro ao enviar push para user {user.id}: {e}')
+                    erros += 1
+
+            except Exception as e:
+                logger.error(f'Erro ao processar user {user.id}: {e}')
+                erros += 1
+
+        logger.info(f'Concluído — Enviadas: {enviados} | Erros: {erros}')
+
+
+if __name__ == '__main__':
+    main()
+</file>
+
+<file path="migration_fcm_push.py">
+"""
+migration_fcm_push.py — Adiciona colunas de push notifications ao modelo User
+
+Executar:
+    python migration_fcm_push.py
+"""
+
+import os
+import sys
+import logging
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s — %(message)s')
+logger = logging.getLogger('migration_fcm')
+
+
+def main():
+    from app import create_app, db
+    from sqlalchemy import text
+
+    app = create_app()
+
+    with app.app_context():
+        with db.engine.connect() as conn:
+            # Verificar e adicionar colunas
+            colunas = [
+                ('fcm_token',         'VARCHAR(512)'),
+                ('fcm_token_updated', 'TIMESTAMP'),
+                ('push_ativas',       'BOOLEAN DEFAULT TRUE'),
+            ]
+
+            for coluna, tipo in colunas:
+                try:
+                    conn.execute(text(f'ALTER TABLE users ADD COLUMN {coluna} {tipo}'))
+                    conn.commit()
+                    logger.info(f'✅ Coluna users.{coluna} adicionada.')
+                except Exception as e:
+                    if 'duplicate column' in str(e).lower() or 'already exists' in str(e).lower():
+                        logger.info(f'ℹ️ Coluna users.{coluna} já existe.')
+                    else:
+                        logger.error(f'❌ Erro ao adicionar {coluna}: {e}')
+
+        logger.info('Migration FCM concluída.')
+
+
+if __name__ == '__main__':
+    main()
 </file>
 
 <file path="run.py">
@@ -14764,6 +14221,397 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/GarantiasScreen.js">
+// src/screens/GarantiasScreen.js
+// Centro de Garantias — todas as garantias ativas e expiradas num só sítio
+// Nenhuma app portuguesa tem isto. É a funcionalidade de diferenciação.
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, RefreshControl, Dimensions,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import {
+  Shield, ShieldCheck, ShieldOff, ShieldAlert,
+  ChevronRight, Package, Calendar, AlertTriangle,
+} from 'lucide-react-native';
+import { apiFetch } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+function diasLabel(dias) {
+  if (dias === 0) return 'Expira hoje!';
+  if (dias === 1) return 'Expira amanhã!';
+  if (dias < 0) return `Expirou há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`;
+  return `${dias} dias restantes`;
+}
+
+function diasColor(dias) {
+  if (dias < 0) return C.textSub;
+  if (dias <= 7) return C.red;
+  if (dias <= 30) return C.yellow;
+  return C.green;
+}
+
+function GarantiaCard({ item, idx }) {
+  const dias = item.dias_restantes;
+  const cor = diasColor(dias);
+  const expirou = dias < 0;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(idx * 60).duration(350).springify()}>
+      <View style={[styles.card, expirou && { opacity: 0.55 }]}>
+        {/* Linha esquerda colorida */}
+        <View style={[styles.cardAccent, { backgroundColor: cor }]} />
+
+        <View style={{ flex: 1, paddingLeft: 14 }}>
+          {/* Header */}
+          <View style={styles.cardHeader}>
+            <View style={[styles.iconBox, { backgroundColor: cor + '22' }]}>
+              {expirou
+                ? <ShieldOff size={18} color={cor} />
+                : dias <= 7
+                  ? <ShieldAlert size={18} color={cor} />
+                  : <ShieldCheck size={18} color={cor} />
+              }
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.cardLoja} numberOfLines={1}>{item.loja}</Text>
+              <Text style={[styles.cardDias, { color: cor }]}>{diasLabel(dias)}</Text>
+            </View>
+            {item.valor > 0 && (
+              <Text style={styles.cardValor}>{fmt(item.valor)} €</Text>
+            )}
+          </View>
+
+          {/* Detalhes */}
+          <View style={styles.cardDetails}>
+            <View style={styles.detailRow}>
+              <Calendar size={12} color={C.textSub} />
+              <Text style={styles.detailText}>
+                Válida até {item.data_garantia}
+              </Text>
+            </View>
+            {item.categoria && (
+              <View style={[styles.badge, { backgroundColor: C.brand + '22' }]}>
+                <Text style={[styles.badgeText, { color: C.brand }]}>{item.categoria}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Barra de progresso restante */}
+          {!expirou && dias <= 365 && (
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${Math.max(2, Math.min(100, (dias / 365) * 100))}%`,
+                    backgroundColor: cor,
+                  },
+                ]}
+              />
+            </View>
+          )}
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function GarantiasScreen({ navigation }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filtro, setFiltro] = useState('ativas'); // 'ativas' | 'todas' | 'urgentes'
+
+  const fetch = useCallback(async (isRefresh = false) => {
+    try {
+      const res = await apiFetch('/exportar/resumo');
+      if (res.success) setData(res);
+    } catch (e) {
+      console.error('GarantiasScreen:', e);
+    } finally {
+      setLoading(false);
+      if (isRefresh) setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
+
+  const onRefresh = () => { setRefreshing(true); fetch(true); };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const todas = data?.garantias_ativas || [];
+  const ativas = todas.filter(g => g.dias_restantes >= 0);
+  const urgentes = todas.filter(g => g.dias_restantes >= 0 && g.dias_restantes <= 30);
+  const expiradas = todas.filter(g => g.dias_restantes < 0);
+
+  const listaFiltrada =
+    filtro === 'ativas'   ? ativas :
+    filtro === 'urgentes' ? urgentes :
+    todas;
+
+  const totalAtivas = ativas.length;
+  const totalUrgentes = urgentes.length;
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+    >
+      {/* Header */}
+      <Animated.View entering={FadeIn.duration(400)}>
+        <View style={styles.header}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <Shield size={28} color={C.brand} style={{ marginLeft: 8 }} />
+          <View style={{ marginLeft: 12 }}>
+            <Text style={styles.headerTitle}>Centro de Garantias</Text>
+            <Text style={styles.headerSub}>
+              {totalAtivas} ativ{totalAtivas !== 1 ? 'as' : 'a'}
+              {totalUrgentes > 0 ? ` · ${totalUrgentes} urgente${totalUrgentes !== 1 ? 's' : ''}` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* Stats rápidas */}
+        <View style={styles.statsRow}>
+          <View style={[styles.statCard, { borderColor: C.green + '40' }]}>
+            <ShieldCheck size={20} color={C.green} />
+            <Text style={[styles.statNum, { color: C.green }]}>{totalAtivas}</Text>
+            <Text style={styles.statLabel}>Ativas</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.yellow + '40' }]}>
+            <ShieldAlert size={20} color={C.yellow} />
+            <Text style={[styles.statNum, { color: C.yellow }]}>{urgentes.length}</Text>
+            <Text style={styles.statLabel}>30 dias</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.red + '40' }]}>
+            <AlertTriangle size={20} color={C.red} />
+            <Text style={[styles.statNum, { color: C.red }]}>{urgentes.filter(g => g.dias_restantes <= 7).length}</Text>
+            <Text style={styles.statLabel}>7 dias</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.textSub + '30' }]}>
+            <ShieldOff size={20} color={C.textSub} />
+            <Text style={[styles.statNum, { color: C.textSub }]}>{expiradas.length}</Text>
+            <Text style={styles.statLabel}>Expiradas</Text>
+          </View>
+        </View>
+
+        {/* Filtros */}
+        <View style={styles.filtros}>
+          {[
+            { key: 'ativas',   label: `Ativas (${ativas.length})` },
+            { key: 'urgentes', label: `Urgentes (${urgentes.length})` },
+            { key: 'todas',    label: `Todas (${todas.length})` },
+          ].map(f => (
+            <Pressable
+              key={f.key}
+              onPress={() => setFiltro(f.key)}
+              style={[styles.filtroBtn, filtro === f.key && styles.filtroBtnActive]}
+            >
+              <Text style={[styles.filtroText, filtro === f.key && styles.filtroTextActive]}>
+                {f.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </Animated.View>
+
+      {/* Lista */}
+      {listaFiltrada.length === 0 ? (
+        <Animated.View entering={FadeIn.delay(200)} style={styles.emptyBox}>
+          <ShieldCheck size={48} color={C.green} style={{ marginBottom: 16 }} />
+          <Text style={styles.emptyTitle}>
+            {filtro === 'urgentes' ? 'Nenhuma garantia urgente' : 'Nenhuma garantia aqui'}
+          </Text>
+          <Text style={styles.emptySub}>
+            {filtro === 'urgentes'
+              ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
+              : 'Quando fizeres upload de faturas com garantia, aparecem aqui automaticamente.'}
+          </Text>
+        </Animated.View>
+      ) : (
+        listaFiltrada.map((item, idx) => (
+          <GarantiaCard key={`${item.loja}-${idx}`} item={item} idx={idx} />
+        ))
+      )}
+
+      {/* Dica */}
+      <Animated.View entering={FadeInDown.delay(400)} style={styles.dicaBox}>
+        <Package size={16} color={C.textSub} />
+        <Text style={styles.dicaText}>
+          A Verly extrai automaticamente datas de garantia das tuas faturas.
+          Guarda sempre o PDF original para reclamar quando necessário.
+        </Text>
+      </Animated.View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  content: { padding: SPACE.lg, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+
+  backBtn: { padding: 4, marginRight: 4 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACE.lg,
+    paddingTop: 8,
+  },
+  headerTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  headerSub:   { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+
+  statsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: SPACE.lg,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 4,
+  },
+  statNum:   { fontSize: FONT.lg, fontWeight: '900', color: C.text },
+  statLabel: { fontSize: 10, color: C.textSub, fontWeight: '600' },
+
+  filtros: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: SPACE.lg,
+  },
+  filtroBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+  },
+  filtroBtnActive: {
+    backgroundColor: C.brandDim,
+    borderColor: C.brand + '60',
+  },
+  filtroText:       { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
+  filtroTextActive: { color: C.brand },
+
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginBottom: 12,
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  cardAccent: { width: 4, minHeight: '100%' },
+
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  iconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardLoja:  { fontSize: FONT.md, fontWeight: '700', color: C.text },
+  cardDias:  { fontSize: FONT.xs, fontWeight: '700', marginTop: 2 },
+  cardValor: { fontSize: FONT.sm, fontWeight: '800', color: C.text },
+
+  cardDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  detailText: { fontSize: 11, color: C.textSub },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  badgeText: { fontSize: 10, fontWeight: '700' },
+
+  progressTrack: {
+    height: 3,
+    backgroundColor: C.surface3,
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 2,
+    marginBottom: 12,
+  },
+  progressFill: { height: '100%', borderRadius: 2 },
+
+  emptyBox: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: FONT.lg,
+    fontWeight: '800',
+    color: C.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptySub: {
+    fontSize: FONT.sm,
+    color: C.textMid,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+
+  dicaBox: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginTop: 16,
+    alignItems: 'flex-start',
+  },
+  dicaText: {
+    flex: 1,
+    fontSize: 11,
+    color: C.textSub,
+    lineHeight: 17,
+  },
+});
+</file>
+
 <file path="verly-mobile/src/screens/HistoricoScreen.js">
 import React from 'react';
 import { View, Text } from 'react-native';
@@ -15791,6 +15639,376 @@ const s = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
+// src/screens/RetrospetivaMensalScreen.js
+// Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
+// Mostra: total gasto, categoria top, comparação com mês antes, streak, dica da Verly
+
+import React, { useState, useCallback, useRef } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, Dimensions,
+  Share, RefreshControl,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, {
+  FadeInDown, FadeIn, ZoomIn,
+  useSharedValue, useAnimatedStyle, withSpring,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import {
+  TrendingUp, TrendingDown, Award, Flame, Target,
+  BarChart2, Download, Share2, Calendar, Zap,
+} from 'lucide-react-native';
+import { apiFetch } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
+
+const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+                  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const MESES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+const CAT_COLORS = [
+  '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
+  '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
+];
+
+// ─── Mini bar chart horizontal ────────────────────────────────────────────────
+function MiniBarChart({ dados }) {
+  if (!dados || dados.length === 0) return null;
+  const maxVal = Math.max(...dados.map(d => d.total), 1);
+
+  return (
+    <View style={{ gap: 10 }}>
+      {dados.map((d, i) => {
+        const pct = d.total / maxVal;
+        const cor = CAT_COLORS[i % CAT_COLORS.length];
+        return (
+          <View key={i}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
+                {d.categoria}
+              </Text>
+              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
+            </View>
+            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+              <Animated.View
+                entering={FadeIn.delay(i * 80)}
+                style={{
+                  height: '100%',
+                  width: `${pct * 100}%`,
+                  backgroundColor: cor,
+                  borderRadius: 3,
+                }}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+// ─── Histograma de 6 meses ────────────────────────────────────────────────────
+function Histograma({ historico }) {
+  if (!historico || historico.length === 0) return null;
+  const maxVal = Math.max(...historico.map(d => d.total), 1);
+  const BAR_H = 80;
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: BAR_H + 30 }}>
+      {historico.map((d, i) => {
+        const h = Math.max((d.total / maxVal) * BAR_H, 4);
+        const isCurrent = i === historico.length - 1;
+        return (
+          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={{ fontSize: 9, color: C.textSub, marginBottom: 4 }}>
+              {d.total > 0 ? `${(d.total / 1000).toFixed(d.total >= 1000 ? 1 : 0)}${d.total >= 1000 ? 'k' : ''}` : ''}
+            </Text>
+            <MotiView
+              from={{ height: 4 }}
+              animate={{ height: h }}
+              transition={{ type: 'spring', delay: i * 60 }}
+              style={{
+                width: '100%',
+                backgroundColor: isCurrent ? C.brand : C.surface3,
+                borderRadius: 4,
+              }}
+            />
+            <Text style={{ fontSize: 9, color: isCurrent ? C.brand : C.textSub, marginTop: 5, fontWeight: isCurrent ? '800' : '500' }}>
+              {d.mes}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+export default function RetrospetivaMensalScreen({ navigation }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const hoje = new Date();
+  const mesAtual = hoje.getMonth(); // 0-indexed
+  const nomesMesAtual = MESES_PT[mesAtual];
+
+  const fetch = useCallback(async (isRefresh = false) => {
+    try {
+      const res = await apiFetch('/exportar/resumo');
+      if (res.success) setData(res);
+    } catch (e) {
+      console.error('RetrospetivaMensal:', e);
+    } finally {
+      setLoading(false);
+      if (isRefresh) setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
+
+  const onRefresh = () => { setRefreshing(true); fetch(true); };
+
+  const partilhar = async () => {
+    if (!data) return;
+    const historico = data.historico_mensal || [];
+    const mesRef = historico[historico.length - 2];
+    const total = mesRef?.total || 0;
+    const topCat = data.top_categorias?.[0];
+
+    try {
+      await Share.share({
+        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
+      });
+    } catch (e) {}
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const historico = data?.historico_mensal || [];
+  const mesAnterior = historico[historico.length - 2];
+  const mesAtualData = historico[historico.length - 1];
+  const mesAntAnterior = historico[historico.length - 3];
+
+  const totalMesAnt = mesAnterior?.total || 0;
+  const totalMesAntAnt = mesAntAnterior?.total || 0;
+  const variacao = totalMesAntAnt > 0
+    ? ((totalMesAnt - totalMesAntAnt) / totalMesAntAnt) * 100
+    : null;
+
+  const topCats = (data?.top_categorias || []).slice(0, 5);
+  const streak = data?.streak_dias || 0;
+  const rendimento = data?.rendimento_mensal || 0;
+  const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
+  const nome = data?.nome || 'utilizador';
+
+  const nomeMesAnt = mesAnterior?.mes
+    ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
+    : 'Mês anterior';
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+    >
+      {/* Header */}
+      <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
+        <View style={styles.headerTop}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerLabel}>Retrospetiva de</Text>
+            <Text style={styles.headerMes}>{nomeMesAnt}</Text>
+          </View>
+          <Pressable onPress={partilhar} style={styles.shareBtn}>
+            <Share2 size={16} color={C.brand} />
+          </Pressable>
+        </View>
+      </Animated.View>
+
+      {/* Hero — total gasto */}
+      <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
+        <Text style={styles.heroLabel}>Total gasto em {nomeMesAnt}</Text>
+        <Text style={styles.heroValor}>{fmt(totalMesAnt)} €</Text>
+
+        {variacao !== null && (
+          <View style={styles.variacaoRow}>
+            {variacao > 0
+              ? <TrendingUp size={14} color={C.red} />
+              : <TrendingDown size={14} color={C.green} />
+            }
+            <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
+              {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAntAnterior?.mes || 'mês anterior'}
+            </Text>
+          </View>
+        )}
+
+        {pctRendimento !== null && (
+          <Text style={styles.heroSub}>
+            {pctRendimento.toFixed(0)}% do teu rendimento mensal
+          </Text>
+        )}
+      </Animated.View>
+
+      {/* Histograma 6 meses */}
+      <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <BarChart2 size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
+        </View>
+        <Histograma historico={historico} />
+      </Animated.View>
+
+      {/* Top categorias */}
+      <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <Target size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+        </View>
+        <MiniBarChart dados={topCats} />
+      </Animated.View>
+
+      {/* Streak */}
+      {streak > 0 && (
+        <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
+          <View style={styles.cardTitleRow}>
+            <Flame size={18} color='#FF7340' />
+            <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
+          </View>
+          <Text style={styles.streakSub}>
+            Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
+            {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
+          </Text>
+        </Animated.View>
+      )}
+
+      {/* Dica da Verly para este mês */}
+      <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
+        <View style={styles.cardTitleRow}>
+          <Zap size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>O que melhorar em {nomesMesAtual}</Text>
+        </View>
+        {variacao !== null && variacao > 15 ? (
+          <Text style={styles.dicaText}>
+            Gastaste {variacao.toFixed(0)}% mais do que em {mesAntAnterior?.mes || 'mês anterior'}.
+            Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
+            Define um limite concreto para este mês.
+          </Text>
+        ) : variacao !== null && variacao < -10 ? (
+          <Text style={styles.dicaText}>
+            Excelente! Reduziu{Math.abs(variacao).toFixed(0)}% face ao mês anterior.
+            Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
+            (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
+          </Text>
+        ) : (
+          <Text style={styles.dicaText}>
+            Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
+            A regra 50/30/20 de Elizabeth Warren sugere: 50% necessidades, 30% desejos, 20% poupança.
+            {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
+          </Text>
+        )}
+      </Animated.View>
+
+      {/* Botão exportar PDF */}
+      <Animated.View entering={FadeInDown.delay(500)}>
+        <Pressable
+          onPress={async () => {
+            try {
+              const { getToken } = await import('../services/api');
+              const token = await getToken();
+              const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+              // Abre o PDF no browser externo (RN não tem download direto sem expo-file-system)
+              const { Linking } = require('react-native');
+              Linking.openURL(`${BASE_URL}/exportar/pdf?token=${token}`);
+            } catch (e) {
+              console.error(e);
+            }
+          }}
+          style={styles.exportBtn}
+        >
+          <Download size={18} color="#fff" />
+          <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
+        </Pressable>
+      </Animated.View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  content: { padding: SPACE.lg, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+
+  backBtn: { padding: 4, marginRight: 8 },
+  header: { marginBottom: SPACE.lg, paddingTop: 8 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  headerMes: { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2 },
+  shareBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  heroCard: {
+    backgroundColor: C.brand,
+    borderRadius: RADIUS.lg,
+    padding: 24,
+    marginBottom: SPACE.lg,
+    alignItems: 'center',
+  },
+  heroLabel: { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroValor: { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
+  variacaoText: { fontSize: FONT.sm, fontWeight: '700' },
+  heroSub: { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 16,
+    marginBottom: SPACE.md,
+  },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+
+  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
+  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+
+  dicaCard: { borderColor: C.brand + '30' },
+  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+
+  exportBtn: {
+    backgroundColor: C.brand,
+    borderRadius: RADIUS.lg,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
+});
+</file>
+
 <file path="verly-mobile/src/screens/SubscricoesScreen.js">
 /**
  * src/screens/SubscricoesScreen.js
@@ -16162,6 +16380,496 @@ dados_reduzidos/
 *.pyc
 verly-mobile/node_modules/
 verly-mobile/.expo/
+</file>
+
+<file path="app/api/exportar_mobile.py">
+"""
+app/api/exportar_mobile.py
+Endpoints de exportação para o mobile.
+
+GET  /api/v1/exportar/resumo  → JSON com resumo completo (streak, garantias, previsão)
+GET  /api/v1/exportar/pdf     → PDF do relatório mensal
+"""
+
+import logging
+from datetime import datetime, date
+from calendar import monthrange
+from flask import request, jsonify, make_response
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import User, Fatura
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _get_garantias_ativas(faturas):
+    """Retorna lista de garantias ativas a partir das faturas."""
+    hoje = date.today()
+    garantias = []
+    for f in faturas:
+        if not f.garantia_meses or f.garantia_meses <= 0:
+            continue
+        if not f.data:
+            continue
+        data_fatura = f.data if isinstance(f.data, date) else f.data.date()
+        from dateutil.relativedelta import relativedelta
+        data_fim = data_fatura + relativedelta(months=f.garantia_meses)
+        dias_restantes = (data_fim - hoje).days
+        if dias_restantes >= 0:
+            garantias.append({
+                'id':              f.id,
+                'loja':            f.loja or 'Desconhecida',
+                'total':           float(f.total or 0),
+                'data':            data_fatura.isoformat(),
+                'data_fim':        data_fim.isoformat(),
+                'dias_restantes':  dias_restantes,
+                'garantia_meses':  f.garantia_meses,
+            })
+    garantias.sort(key=lambda x: x['dias_restantes'])
+    return garantias
+
+
+def _get_historico_mensal(faturas, meses=6):
+    """Retorna histórico de gastos dos últimos N meses."""
+    from collections import defaultdict
+    hoje = date.today()
+    historico = defaultdict(float)
+
+    for f in faturas:
+        if not f.data:
+            continue
+        data_f = f.data if isinstance(f.data, date) else f.data.date()
+        diff_meses = (hoje.year - data_f.year) * 12 + (hoje.month - data_f.month)
+        if 0 <= diff_meses < meses:
+            chave = data_f.strftime('%Y-%m')
+            historico[chave] += float(f.total or 0)
+
+    resultado = []
+    for i in range(meses - 1, -1, -1):
+        from dateutil.relativedelta import relativedelta
+        mes_data = hoje - relativedelta(months=i)
+        chave = mes_data.strftime('%Y-%m')
+        resultado.append({
+            'mes':   mes_data.strftime('%b'),
+            'chave': chave,
+            'total': round(historico.get(chave, 0), 2),
+        })
+    return resultado
+
+
+def _get_top_categorias(faturas, mes=None, ano=None):
+    """Retorna top categorias do mês."""
+    from collections import defaultdict
+    hoje = date.today()
+    mes = mes or hoje.month
+    ano = ano or hoje.year
+
+    categorias = defaultdict(float)
+    for f in faturas:
+        if not f.data:
+            continue
+        data_f = f.data if isinstance(f.data, date) else f.data.date()
+        if data_f.month == mes and data_f.year == ano:
+            cat = f.categoria or 'Outros'
+            categorias[cat] += float(f.total or 0)
+
+    return sorted(
+        [{'categoria': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        key=lambda x: x['total'],
+        reverse=True
+    )[:5]
+
+
+def _calcular_previsao(faturas, orcamento):
+    """Calcula previsão de gasto até fim do mês."""
+    hoje = date.today()
+    dias_no_mes = monthrange(hoje.year, hoje.month)[1]
+    dia_atual = hoje.day
+
+    total_mes = sum(
+        float(f.total or 0)
+        for f in faturas
+        if f.data and (
+            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
+            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
+        )
+    )
+
+    if dia_atual > 0:
+        previsao = (total_mes / dia_atual) * dias_no_mes
+    else:
+        previsao = total_mes
+
+    return {
+        'gasto_atual':    round(total_mes, 2),
+        'previsao_mes':   round(previsao, 2),
+        'orcamento':      float(orcamento or 0),
+        'vai_ultrapassar': previsao > float(orcamento or 0) if orcamento else False,
+        'percentagem':    round((total_mes / float(orcamento)) * 100, 1) if orcamento else 0,
+    }
+
+
+@api_bp.route('/exportar/resumo', methods=['GET'])
+@jwt_required()
+def exportar_resumo():
+    """
+    GET /api/v1/exportar/resumo
+    Retorna resumo completo: streak, garantias ativas, previsão, histórico, top categorias.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    faturas = Fatura.query.filter_by(utilizador_id=user_id).all()
+
+    garantias = _get_garantias_ativas(faturas)
+    historico = _get_historico_mensal(faturas)
+    top_cats  = _get_top_categorias(faturas)
+    previsao  = _calcular_previsao(faturas, user.orcamento_mensal)
+
+    return jsonify({
+        'streak_dias':      getattr(user, 'streak_dias', 0) or 0,
+        'garantias_ativas': garantias,
+        'num_garantias':    len(garantias),
+        'historico_mensal': historico,
+        'top_categorias':   top_cats,
+        'previsao':         previsao,
+        'orcamento_mensal': float(user.orcamento_mensal or 0),
+        'gerado_em':        datetime.utcnow().isoformat(),
+    })
+
+
+@api_bp.route('/exportar/pdf', methods=['GET'])
+@jwt_required(optional=True)
+def exportar_pdf():
+    """
+    GET /api/v1/exportar/pdf
+    Gera PDF do relatório mensal.
+    Aceita token via query param ?_token= para abrir no browser.
+    """
+    from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity as get_identity
+    from flask import current_app
+
+    # Suporte a token via query param (para abrir no browser)
+    _token = request.args.get('_token')
+    if _token:
+        try:
+            from flask_jwt_extended import decode_token
+            decoded = decode_token(_token)
+            user_id = int(decoded['sub'])
+        except Exception:
+            return jsonify({'error': 'Token inválido.'}), 401
+    else:
+        try:
+            verify_jwt_in_request()
+            user_id = int(get_identity())
+        except Exception:
+            return jsonify({'error': 'Autenticação necessária.'}), 401
+
+    user = User.query.get_or_404(user_id)
+    faturas = Fatura.query.filter_by(utilizador_id=user_id).order_by(Fatura.data.desc()).all()
+
+    hoje = date.today()
+    top_cats = _get_top_categorias(faturas)
+    garantias = _get_garantias_ativas(faturas)
+    previsao = _calcular_previsao(faturas, user.orcamento_mensal)
+
+    total_mes = sum(
+        float(f.total or 0)
+        for f in faturas
+        if f.data and (
+            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
+            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
+        )
+    )
+
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.units import cm
+        import io
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4,
+                                rightMargin=2*cm, leftMargin=2*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
+
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Título
+        title_style = ParagraphStyle('Title', parent=styles['Title'],
+                                     fontSize=24, textColor=colors.HexColor('#7C6FE0'),
+                                     spaceAfter=6)
+        story.append(Paragraph('Verly — Relatório Financeiro', title_style))
+        story.append(Paragraph(f'{user.nome} · {hoje.strftime("%B %Y")}', styles['Normal']))
+        story.append(Spacer(1, 0.5*cm))
+
+        # Resumo
+        story.append(Paragraph('Resumo do Mês', styles['Heading2']))
+        resumo_data = [
+            ['Total gasto', f'{total_mes:.2f} €'],
+            ['Orçamento', f'{float(user.orcamento_mensal or 0):.2f} €'],
+            ['Previsão fim do mês', f'{previsao["previsao_mes"]:.2f} €'],
+            ['Streak', f'{getattr(user, "streak_dias", 0) or 0} dias'],
+            ['Garantias ativas', str(len(garantias))],
+        ]
+        t = Table(resumo_data, colWidths=[8*cm, 8*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+            ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+            ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE',   (0, 0), (-1, -1), 11),
+            ('PADDING',    (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.5*cm))
+
+        # Top categorias
+        if top_cats:
+            story.append(Paragraph('Top Categorias', styles['Heading2']))
+            cat_data = [['Categoria', 'Total']] + [
+                [c['categoria'], f'{c["total"]:.2f} €'] for c in top_cats
+            ]
+            t2 = Table(cat_data, colWidths=[10*cm, 6*cm])
+            t2.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE',   (0, 0), (-1, -1), 11),
+                ('PADDING',    (0, 0), (-1, -1), 6),
+            ]))
+            story.append(t2)
+            story.append(Spacer(1, 0.5*cm))
+
+        # Garantias ativas
+        if garantias:
+            story.append(Paragraph('Garantias Ativas', styles['Heading2']))
+            gar_data = [['Loja', 'Expira em', 'Dias restantes']] + [
+                [g['loja'], g['data_fim'], str(g['dias_restantes'])] for g in garantias[:10]
+            ]
+            t3 = Table(gar_data, colWidths=[7*cm, 5*cm, 4*cm])
+            t3.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE',   (0, 0), (-1, -1), 10),
+                ('PADDING',    (0, 0), (-1, -1), 6),
+            ]))
+            story.append(t3)
+
+        doc.build(story)
+        buffer.seek(0)
+
+        response = make_response(buffer.read())
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=verly_{hoje.strftime("%Y%m")}.pdf'
+        return response
+
+    except ImportError:
+        # Fallback: retorna JSON se reportlab não estiver instalado
+        return jsonify({
+            'error': 'reportlab não instalado. Adiciona ao requirements.txt.',
+            'resumo': {
+                'total_mes': total_mes,
+                'previsao':  previsao,
+                'garantias': garantias,
+            }
+        }), 500
+    except Exception as e:
+        logger.error(f'Erro ao gerar PDF: {e}')
+        return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
+</file>
+
+<file path="app/api/push_notifications.py">
+"""
+app/api/push_notifications.py — Push notifications FCM reais via Firebase Admin SDK
+
+POST /api/v1/push/token      → guarda o FCM token do dispositivo
+DELETE /api/v1/push/token    → remove o token
+POST /api/v1/push/test       → envia push de teste ao próprio utilizador
+
+Cron (enviar_alertas_push.py) → envia alertas diários a todos os utilizadores
+"""
+
+import logging
+import os
+from datetime import datetime
+
+from flask import jsonify, request
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
+from app.api import api_bp
+from app.models import User
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _get_firebase_app():
+    """Inicializa o Firebase Admin SDK (singleton)."""
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+        if not firebase_admin._apps:
+            cred_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                'firebase-service-account.json',
+            )
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        return firebase_admin.get_app(), messaging
+    except Exception as e:
+        logger.error(f'Firebase init error: {e}')
+        return None, None
+
+
+def enviar_push(fcm_token: str, titulo: str, corpo: str, data: dict = None) -> bool:
+    """
+    Envia uma push notification FCM.
+    Devolve True se enviada com sucesso, False caso contrário.
+    """
+    _, messaging = _get_firebase_app()
+    if not messaging:
+        logger.warning('Firebase messaging não disponível — push não enviada.')
+        return False
+
+    try:
+        msg = messaging.Message(
+            notification=messaging.Notification(title=titulo, body=corpo),
+            data={k: str(v) for k, v in (data or {}).items()},
+            token=fcm_token,
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    icon='ic_notification',
+                    color='#7C6FE0',
+                    channel_id='verly_alertas',
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        badge=1,
+                        sound='default',
+                        content_available=True,
+                    ),
+                ),
+            ),
+        )
+        response = messaging.send(msg)
+        logger.info(f'Push enviada: {response}')
+        return True
+    except Exception as e:
+        logger.error(f'Erro ao enviar push: {e}')
+        return False
+
+
+def enviar_push_multiplos(tokens: list, titulo: str, corpo: str, data: dict = None) -> dict:
+    """
+    Envia push a múltiplos tokens de uma vez (multicast).
+    Devolve {'success': N, 'failure': M}.
+    """
+    if not tokens:
+        return {'success': 0, 'failure': 0}
+
+    _, messaging = _get_firebase_app()
+    if not messaging:
+        return {'success': 0, 'failure': len(tokens)}
+
+    try:
+        msg = messaging.MulticastMessage(
+            notification=messaging.Notification(title=titulo, body=corpo),
+            data={k: str(v) for k, v in (data or {}).items()},
+            tokens=tokens,
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    icon='ic_notification',
+                    color='#7C6FE0',
+                    channel_id='verly_alertas',
+                ),
+            ),
+        )
+        response = messaging.send_each_for_multicast(msg)
+        return {
+            'success': response.success_count,
+            'failure': response.failure_count,
+        }
+    except Exception as e:
+        logger.error(f'Erro multicast push: {e}')
+        return {'success': 0, 'failure': len(tokens)}
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@api_bp.route('/push/token', methods=['POST'])
+@jwt_required()
+def guardar_fcm_token():
+    """Guarda ou atualiza o FCM token do dispositivo do utilizador."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False}), 404
+
+    data = request.get_json() or {}
+    token = data.get('fcm_token', '').strip()
+
+    if not token:
+        return jsonify({'success': False, 'message': 'Token em falta.'}), 400
+
+    if hasattr(user, 'fcm_token'):
+        user.fcm_token = token
+        user.fcm_token_updated = datetime.utcnow()
+        db.session.commit()
+    else:
+        logger.info(f'FCM token para user {user_id}: {token[:20]}...')
+
+    return jsonify({'success': True})
+
+
+@api_bp.route('/push/token', methods=['DELETE'])
+@jwt_required()
+def remover_fcm_token():
+    """Remove o FCM token do utilizador (logout / desativar notificações)."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False}), 404
+
+    if hasattr(user, 'fcm_token'):
+        user.fcm_token = None
+        db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@api_bp.route('/push/test', methods=['POST'])
+@jwt_required()
+def push_teste():
+    """Envia uma push de teste ao próprio utilizador."""
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False}), 404
+
+    token = getattr(user, 'fcm_token', None)
+    if not token:
+        return jsonify({
+            'success': False,
+            'message': 'Sem FCM token registado. Abre a app primeiro.',
+        }), 400
+
+    nome = (user.nome or '').split()[0] or 'utilizador'
+    ok = enviar_push(
+        token,
+        titulo='👋 Olá da Verly!',
+        corpo=f'As tuas notificações estão ativas, {nome}. Vais receber alertas de garantias, orçamento e muito mais.',
+        data={'tipo': 'teste'},
+    )
+
+    return jsonify({'success': ok})
 </file>
 
 <file path="app/perfil.py">
@@ -16863,8 +17571,58 @@ def score_fatura(fatura_id):
     return jsonify({'success': True, 'resultado': resultado})
 </file>
 
-<file path="Procfile">
-web: python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+<file path="migrate_prod.py">
+"""
+migrate_prod.py — Cria todas as tabelas no PostgreSQL de produção.
+Corre uma vez após o deploy: python migrate_prod.py
+"""
+import os
+import sys
+
+# Forçar ambiente de produção
+os.environ['FLASK_ENV'] = 'production'
+
+from app import create_app, db
+from app.models import (
+    User, Fatura, Conversa, Meta, ContaBancaria,
+    Subscricao, Playlist, playlist_fatura, playlist_membro
+)
+
+try:
+    from app.models import GmailConnection
+except ImportError:
+    GmailConnection = None
+
+app = create_app()
+
+with app.app_context():
+    print("A criar tabelas no PostgreSQL...")
+    db.create_all()
+    print("✅ Todas as tabelas criadas com sucesso!")
+
+    # Listar tabelas criadas
+    from sqlalchemy import inspect, text
+    inspector = inspect(db.engine)
+    tables = inspector.get_table_names()
+    print(f"Tabelas: {', '.join(tables)}")
+
+    # Migration FCM — colunas push notifications
+    try:
+        with db.engine.connect() as conn:
+            colunas_fcm = [
+                ('fcm_token',         'VARCHAR(512)'),
+                ('fcm_token_updated', 'TIMESTAMP'),
+                ('push_ativas',       'BOOLEAN DEFAULT TRUE'),
+            ]
+            for coluna, tipo in colunas_fcm:
+                try:
+                    conn.execute(text(f'ALTER TABLE users ADD COLUMN IF NOT EXISTS {coluna} {tipo}'))
+                    conn.commit()
+                    print(f'✅ FCM: coluna {coluna} adicionada.')
+                except Exception as e:
+                    print(f'❌ FCM erro {coluna}: {e}')
+    except Exception as e:
+        print(f'❌ FCM migration falhou: {e}')
 </file>
 
 <file path="verly-mobile/App.js">
@@ -20688,135 +21446,6 @@ async function analisarExtrato(file) {
 {% endblock %}
 </file>
 
-<file path="verly-mobile/src/context/AuthContext.js">
-/**
- * src/context/AuthContext.js
- * Contexto global de autenticação — com Google Sign-In via Firebase
- */
-
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authAPI, saveToken, removeToken, getToken } from '../services/api';
-
-// ── Google Sign-In ────────────────────────────────────────────────────────────
-let GoogleSignin, statusCodes, firebaseAuth, GoogleAuthProvider;
-
-try {
-  const googleModule = require('@react-native-google-signin/google-signin');
-  GoogleSignin = googleModule.GoogleSignin;
-  statusCodes = googleModule.statusCodes;
-
-  const firebaseModule = require('@react-native-firebase/auth');
-  firebaseAuth = firebaseModule.default;
-  GoogleAuthProvider = firebaseModule.GoogleAuthProvider;
-
-  GoogleSignin.configure({
-    webClientId: '667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com',
-  });
-} catch (_) {
-  console.warn('[AuthContext] Firebase/Google Sign-In não instalado — funcionalidade desativada.');
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-const AuthContext = createContext(null);
-
-export function AuthProvider({ children }) {
-  const [user, setUser]       = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const token = await getToken();
-        if (token) {
-          const data = await authAPI.me();
-          setUser(data.user);
-        }
-      } catch {
-        await removeToken();
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
-
-  // ── Login com Email + Password ────────────────────────────────────────────
-  const login = async (email, password) => {
-    const data = await authAPI.login(email, password);
-    await saveToken(data.access_token);
-    setUser(data.user);
-    return data.user;
-  };
-
-  // ── Registo — NÃO faz login automático, envia email de confirmação ────────
-  const register = async (nome, email, password) => {
-    const data = await authAPI.register(nome, email, password);
-    return { email, message: data.message };
-  };
-
-  // ── Google Sign-In ────────────────────────────────────────────────────────
-  const loginWithGoogle = async () => {
-    if (!GoogleSignin || !firebaseAuth) {
-      throw new Error('Google Sign-In não está configurado.');
-    }
-
-    try {
-      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-
-      const result = await GoogleSignin.signIn();
-
-      // Compatibilidade com v12+ (retorna { data: { idToken } }) e versões anteriores
-      const idToken = result?.data?.idToken ?? result?.idToken;
-
-      if (!idToken) {
-        throw new Error('Não foi possível obter o token do Google.');
-      }
-
-      const googleCredential = GoogleAuthProvider.credential(idToken);
-      const firebaseUserCred = await firebaseAuth().signInWithCredential(googleCredential);
-
-      const firebaseToken = await firebaseUserCred.user.getIdToken();
-
-      const data = await authAPI.firebaseLogin(firebaseToken);
-      await saveToken(data.access_token);
-      setUser(data.user);
-      return data.user;
-    } catch (err) {
-      if (statusCodes && err.code === statusCodes.SIGN_IN_CANCELLED) {
-        throw new Error('LOGIN_CANCELADO');
-      }
-      throw err;
-    }
-  };
-
-  // ── Logout ────────────────────────────────────────────────────────────────
-  const logout = async () => {
-    await removeToken();
-    setUser(null);
-    try {
-      if (GoogleSignin) await GoogleSignin.signOut();
-    } catch (_) {}
-  };
-
-  // ── Atualizar user no contexto ────────────────────────────────────────────
-  const updateUser = (updates) => {
-    setUser(prev => prev ? { ...prev, ...updates } : prev);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, loginWithGoogle, updateUser }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider');
-  return ctx;
-}
-</file>
-
 <file path="verly-mobile/src/screens/PerfilScreen.js">
 // src/screens/PerfilScreen.js — Perfil com foto, Google/telefone, teclado corrigido
 import React, { useState, useCallback } from 'react';
@@ -21330,401 +21959,6 @@ const pf = StyleSheet.create({
   },
   logoutText: { fontSize: 15, fontWeight: '700', color: C.red },
 });
-</file>
-
-<file path="app/api/auth.py">
-"""
-app/api/auth.py — Endpoints de autenticação para o mobile
-
-POST  /api/v1/auth/login              → {access_token, user}
-POST  /api/v1/auth/register           → {message} (envia email de confirmação)
-POST  /api/v1/auth/confirm/<token>    → {access_token, user}
-POST  /api/v1/auth/resend-confirm     → reenvia email de confirmação
-GET   /api/v1/auth/me                 → {user}
-PATCH /api/v1/auth/me                 → atualiza perfil
-POST  /api/v1/auth/avatar             → upload de foto de perfil
-POST  /api/v1/auth/onboarding         → marca onboarding como completo
-POST  /api/v1/auth/firebase           → login com Google/Apple via Firebase
-"""
-
-import logging
-import re
-import base64
-import os
-import secrets
-from datetime import datetime, timedelta
-from flask import request, jsonify, current_app
-from flask_jwt_extended import (
-    create_access_token, jwt_required, get_jwt_identity,
-)
-from app.api import api_bp
-from app.models import User
-from app import db
-
-logger = logging.getLogger(__name__)
-
-
-def _user_to_dict(user):
-    return {
-        'id':                  user.id,
-        'nome':                user.nome,
-        'email':               user.email,
-        'avatar_url':          user.avatar_url or None,
-        'orcamento_mensal':    user.orcamento_mensal or 0,
-        'personalidade':       getattr(user, 'personalidade', 'calm') or 'calm',
-        'notificacoes_email':  getattr(user, 'notificacoes_email', False),
-        'onboarding_completo': getattr(user, 'onboarding_completo', False),
-        'streak_dias':         getattr(user, 'streak_dias', 0) or 0,
-        'email_confirmado':    getattr(user, 'email_confirmado', False),
-    }
-
-
-def _enviar_email_confirmacao(user):
-    """Envia email de confirmação via Resend."""
-    try:
-        import resend
-        resend.api_key = os.getenv('RESEND_API_KEY', '')
-        if not resend.api_key:
-            logger.warning('RESEND_API_KEY não definida — email de confirmação não enviado.')
-            return False
-
-        app_url    = os.getenv('APP_URL', 'https://verly.app')
-        from_email = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
-        confirm_url = f"{app_url}/api/v1/auth/confirm-web/{user.email_confirm_token}"
-
-        html = f"""
-        <div style="font-family:'Outfit',sans-serif;max-width:480px;margin:0 auto;background:#080810;color:#EEEEF8;border-radius:16px;padding:40px;">
-          <div style="text-align:center;margin-bottom:32px;">
-            <div style="width:52px;height:52px;background:#7C6FE0;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff;margin-bottom:16px;">V</div>
-            <h1 style="font-size:22px;font-weight:700;margin:0;color:#EEEEF8;">Confirma o teu email</h1>
-            <p style="color:#8888B0;margin-top:8px;">Olá {user.nome}! Só mais um passo.</p>
-          </div>
-          <p style="color:#EEEEF8;line-height:1.6;">Para ativares a tua conta Verly, clica no botão abaixo:</p>
-          <div style="text-align:center;margin:32px 0;">
-            <a href="{confirm_url}" style="background:#7C6FE0;color:#fff;padding:14px 32px;border-radius:12px;font-weight:700;font-size:16px;text-decoration:none;display:inline-block;">
-              Confirmar Email
-            </a>
-          </div>
-          <p style="color:#8888B0;font-size:13px;">Este link expira em 24 horas. Se não criaste uma conta, ignora este email.</p>
-        </div>
-        """
-
-        resend.Emails.send({
-            'from':    from_email,
-            'to':      [user.email],
-            'subject': 'Confirma o teu email — Verly',
-            'html':    html,
-        })
-        return True
-    except Exception as e:
-        logger.error(f'Erro ao enviar email de confirmação: {e}')
-        return False
-
-
-@api_bp.route('/auth/login', methods=['POST'])
-def login():
-    data     = request.get_json(silent=True) or {}
-    email    = (data.get('email') or '').strip().lower()
-    password = data.get('password') or ''
-
-    if not email or not password:
-        return jsonify({'error': 'Email e password são obrigatórios.'}), 400
-
-    user = User.query.filter_by(email=email).first()
-    if not user or not user.check_password(password):
-        return jsonify({'error': 'Credenciais inválidas.'}), 401
-
-    if not getattr(user, 'email_confirmado', True):
-        return jsonify({
-            'error': 'Confirma o teu email antes de entrar.',
-            'code':  'EMAIL_NOT_CONFIRMED',
-        }), 403
-
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
-
-
-@api_bp.route('/auth/register', methods=['POST'])
-def register():
-    data     = request.get_json(silent=True) or {}
-    nome     = (data.get('nome') or '').strip()
-    email    = (data.get('email') or '').strip().lower()
-    password = data.get('password') or ''
-
-    errors = []
-    if not nome or len(nome) < 2:
-        errors.append('Nome deve ter pelo menos 2 caracteres.')
-    if not email or not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
-        errors.append('Email inválido.')
-    if not password or len(password) < 8:
-        errors.append('Password deve ter pelo menos 8 caracteres.')
-    elif not re.search(r'[A-Za-z]', password) or not re.search(r'[0-9]', password):
-        errors.append('Password deve conter letras e números.')
-
-    if errors:
-        return jsonify({'error': errors[0]}), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify({'error': 'Este email já está registado.'}), 409
-
-    token = secrets.token_urlsafe(32)
-    user = User(
-        nome=nome,
-        email=email,
-        onboarding_completo=False,
-        email_confirmado=False,
-        email_confirm_token=token,
-        email_confirm_expiry=datetime.utcnow() + timedelta(hours=24),
-    )
-    user.set_password(password)
-    db.session.add(user)
-    db.session.commit()
-
-    _enviar_email_confirmacao(user)
-
-    return jsonify({
-        'message': 'Conta criada! Verifica o teu email para confirmar.',
-        'email':   email,
-    }), 201
-
-
-@api_bp.route('/auth/confirm/<token>', methods=['POST'])
-def confirm_email(token):
-    """Confirma o email via token (chamado pela app após deep link)."""
-    user = User.query.filter_by(email_confirm_token=token).first()
-
-    if not user:
-        return jsonify({'error': 'Token inválido.'}), 400
-
-    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
-        return jsonify({'error': 'Link expirado.', 'code': 'TOKEN_EXPIRED'}), 400
-
-    user.email_confirmado     = True
-    user.email_confirm_token  = None
-    user.email_confirm_expiry = None
-    db.session.commit()
-
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
-
-
-@api_bp.route('/auth/confirm-web/<token>', methods=['GET'])
-def confirm_email_web(token):
-    """Confirma o email via link no browser — redireciona para a app."""
-    user = User.query.filter_by(email_confirm_token=token).first()
-
-    if not user:
-        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link inválido ou já utilizado.</h2>', 400
-
-    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
-        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link expirado. Abre a app e pede um novo email.</h2>', 400
-
-    user.email_confirmado     = True
-    user.email_confirm_token  = None
-    user.email_confirm_expiry = None
-    db.session.commit()
-
-    deep_link = f"verly://confirm/{token}"
-    return f"""
-    <html>
-    <head><meta http-equiv="refresh" content="1;url={deep_link}"></head>
-    <body style="font-family:sans-serif;text-align:center;padding:40px;background:#080810;color:#EEEEF8;">
-      <div style="font-size:48px;margin-bottom:16px;">✅</div>
-      <h2>Email confirmado!</h2>
-      <p style="color:#8888B0;">A abrir a app Verly...</p>
-      <a href="{deep_link}" style="color:#7C6FE0;">Clica aqui se não abrir automaticamente</a>
-    </body>
-    </html>
-    """
-
-
-@api_bp.route('/auth/resend-confirm', methods=['POST'])
-def resend_confirm():
-    """Reenvia email de confirmação."""
-    data  = request.get_json(silent=True) or {}
-    email = (data.get('email') or '').strip().lower()
-
-    user = User.query.filter_by(email=email).first()
-    if not user:
-        return jsonify({'message': 'Se o email existir, receberás um novo link.'}), 200
-
-    if getattr(user, 'email_confirmado', True):
-        return jsonify({'message': 'Este email já está confirmado.'}), 200
-
-    user.email_confirm_token  = secrets.token_urlsafe(32)
-    user.email_confirm_expiry = datetime.utcnow() + timedelta(hours=24)
-    db.session.commit()
-
-    _enviar_email_confirmacao(user)
-    return jsonify({'message': 'Email de confirmação reenviado!'}), 200
-
-
-@api_bp.route('/auth/me', methods=['GET'])
-@jwt_required()
-def me():
-    user_id = int(get_jwt_identity())
-    user = User.query.get_or_404(user_id)
-    return jsonify({'user': _user_to_dict(user)})
-
-
-@api_bp.route('/auth/me', methods=['PATCH'])
-@jwt_required()
-def update_me():
-    user_id = int(get_jwt_identity())
-    user = User.query.get_or_404(user_id)
-    data = request.get_json(silent=True) or {}
-
-    PERSONALIDADES_VALIDAS = {'calm', 'pro', 'savage', 'sarcastic'}
-
-    if 'nome' in data and data['nome']:
-        user.nome = data['nome'].strip()[:100]
-    if 'orcamento_mensal' in data:
-        try:
-            user.orcamento_mensal = max(0, float(data['orcamento_mensal']))
-        except (ValueError, TypeError):
-            pass
-    if 'personalidade' in data and data['personalidade'] in PERSONALIDADES_VALIDAS:
-        user.personalidade = data['personalidade']
-    if 'notificacoes_email' in data:
-        user.notificacoes_email = bool(data['notificacoes_email'])
-
-    db.session.commit()
-    return jsonify({'user': _user_to_dict(user)})
-
-
-@api_bp.route('/auth/avatar', methods=['POST'])
-@jwt_required()
-def upload_avatar():
-    user_id = int(get_jwt_identity())
-    user = User.query.get_or_404(user_id)
-    data = request.get_json(silent=True) or {}
-
-    image_b64 = data.get('image_base64', '')
-    if not image_b64:
-        return jsonify({'error': 'Imagem não fornecida.'}), 400
-
-    if not image_b64.startswith('data:image/'):
-        return jsonify({'error': 'Formato de imagem inválido. Usa data URI.'}), 400
-
-    if len(image_b64) > 2_800_000:
-        return jsonify({'error': 'Imagem demasiado grande. Máximo ~2MB.'}), 400
-
-    try:
-        avatars_dir = os.path.join(current_app.static_folder, 'avatars')
-        os.makedirs(avatars_dir, exist_ok=True)
-
-        header, b64data = image_b64.split(',', 1)
-        ext = 'jpg' if 'jpeg' in header else ('png' if 'png' in header else 'jpg')
-        img_bytes = base64.b64decode(b64data)
-
-        filename = f'avatar_{user_id}.{ext}'
-        filepath = os.path.join(avatars_dir, filename)
-        with open(filepath, 'wb') as f:
-            f.write(img_bytes)
-
-        user.avatar_url = f'/static/avatars/{filename}'
-    except Exception as e:
-        logger.warning(f'Avatar disk save failed: {e}')
-        user.avatar_url = image_b64[:512000]
-
-    db.session.commit()
-    return jsonify({'success': True, 'avatar_url': user.avatar_url})
-
-
-@api_bp.route('/auth/onboarding', methods=['POST'])
-@jwt_required()
-def complete_onboarding():
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'error': 'Utilizador não encontrado.'}), 404
-
-    data = request.get_json(silent=True) or {}
-    personalidade = data.get('personalidade', 'calm')
-    if personalidade not in ('savage', 'sarcastic', 'calm', 'pro'):
-        personalidade = 'calm'
-
-    user.onboarding_completo = True
-    user.personalidade = personalidade
-    db.session.commit()
-
-    return jsonify({'success': True})
-
-
-@api_bp.route('/auth/firebase', methods=['POST'])
-def firebase_login():
-    """Login com Google/Apple via Firebase — email confirmado pelo Google."""
-    data     = request.get_json(silent=True) or {}
-    id_token = data.get('idToken', '').strip()
-
-    if not id_token:
-        return jsonify({'error': 'idToken é obrigatório.'}), 400
-
-    try:
-        from firebase_admin import auth as firebase_auth
-        decoded = firebase_auth.verify_id_token(id_token)
-    except Exception as e:
-        logger.warning(f'Firebase token inválido: {e}')
-        return jsonify({'error': 'Token Firebase inválido ou expirado.'}), 401
-
-    uid   = decoded.get('uid', '')
-    email = decoded.get('email', '').lower().strip()
-    nome  = decoded.get('name') or (email.split('@')[0] if email else 'Utilizador')
-    foto  = decoded.get('picture', '')
-
-    user = None
-    if uid:
-        user = User.query.filter_by(google_id=uid).first()
-    if not user and email:
-        user = User.query.filter_by(email=email).first()
-
-    if not user:
-        user = User(
-            nome=nome[:100],
-            email=email,
-            google_id=uid,
-            password_hash='',
-            onboarding_completo=False,
-            avatar_url=foto or None,
-            email_confirmado=True,
-        )
-        db.session.add(user)
-        db.session.flush()
-    else:
-        if uid and not user.google_id:
-            user.google_id = uid
-        if foto and not user.avatar_url:
-            user.avatar_url = foto
-        user.email_confirmado = True
-
-    db.session.commit()
-
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
-
-# ── Adicionar no final de app/api/auth.py ─────────────────────────────────────
-
-@api_bp.route('/auth/account', methods=['DELETE'])
-@jwt_required()
-def delete_account():
-    """
-    DELETE /api/v1/auth/account
-    Apaga permanentemente a conta do utilizador autenticado
-    e todos os dados associados via cascade.
-    """
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-
-    if not user:
-        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
-
-    try:
-        db.session.delete(user)
-        db.session.commit()
-        return jsonify({'success': True, 'message': 'Conta apagada com sucesso.'})
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f'Erro ao apagar conta {user_id}: {e}')
-        return jsonify({'success': False, 'message': 'Erro ao apagar conta.'}), 500
 </file>
 
 <file path="app/auth.py">
@@ -22355,6 +22589,10 @@ def dashboard():
         score_ultima=score_ultima,
         desperdicado_mes=desperdicado_mes,
     )
+</file>
+
+<file path="Procfile">
+web: python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
 </file>
 
 <file path="static/css/style.css">
@@ -23705,6 +23943,198 @@ a:hover { color: var(--brand); }
 </div>
 </body>
 </html>
+</file>
+
+<file path="verly-mobile/src/context/AuthContext.js">
+/**
+ * src/context/AuthContext.js
+ * Contexto global de autenticação — com Google Sign-In via Firebase
+ */
+
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authAPI, saveToken, removeToken, getToken } from '../services/api';
+
+// ── Google Sign-In ────────────────────────────────────────────────────────────
+let GoogleSignin, statusCodes, firebaseAuth, GoogleAuthProvider;
+
+try {
+  const googleModule = require('@react-native-google-signin/google-signin');
+  GoogleSignin = googleModule.GoogleSignin;
+  statusCodes = googleModule.statusCodes;
+
+  const firebaseModule = require('@react-native-firebase/auth');
+  firebaseAuth = firebaseModule.default;
+  GoogleAuthProvider = firebaseModule.GoogleAuthProvider;
+
+  GoogleSignin.configure({
+    webClientId: '667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com',
+  });
+} catch (_) {
+  console.warn('[AuthContext] Firebase/Google Sign-In não instalado — funcionalidade desativada.');
+}
+
+// ── FCM Push Notifications ────────────────────────────────────────────────────
+let messaging;
+try {
+  messaging = require('@react-native-firebase/messaging').default;
+} catch (_) {
+  console.warn('[AuthContext] Firebase Messaging não instalado — push desativado.');
+}
+
+async function registarTokenFCM(pushAPI) {
+  try {
+    if (!messaging) return;
+
+    const authStatus = await messaging().requestPermission();
+    const enabled =
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+    if (!enabled) {
+      console.log('[FCM] Permissão de notificações não concedida.');
+      return;
+    }
+
+    const token = await messaging().getToken();
+    if (token) {
+      await pushAPI.registarToken(token);
+      console.log('[FCM] Token registado com sucesso.');
+    }
+  } catch (e) {
+    console.warn('[FCM] Erro ao registar token:', e.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AuthContext = createContext(null);
+
+export function AuthProvider({ children }) {
+  const [user, setUser]       = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Importação lazy do pushAPI para evitar dependência circular
+  const getPushAPI = () => {
+    try {
+      return require('../services/api').pushAPI;
+    } catch (_) {
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const token = await getToken();
+        if (token) {
+          const data = await authAPI.me();
+          setUser(data.user);
+          // Re-registar token FCM ao arrancar (token pode ter mudado)
+          const pushAPI = getPushAPI();
+          if (pushAPI) registarTokenFCM(pushAPI);
+        }
+      } catch {
+        await removeToken();
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  // ── Login com Email + Password ────────────────────────────────────────────
+  const login = async (email, password) => {
+    const data = await authAPI.login(email, password);
+    await saveToken(data.access_token);
+    setUser(data.user);
+
+    // Registar token FCM após login
+    const pushAPI = getPushAPI();
+    if (pushAPI) registarTokenFCM(pushAPI);
+
+    return data.user;
+  };
+
+  // ── Registo — NÃO faz login automático, envia email de confirmação ────────
+  const register = async (nome, email, password) => {
+    const data = await authAPI.register(nome, email, password);
+    return { email, message: data.message };
+  };
+
+  // ── Google Sign-In ────────────────────────────────────────────────────────
+  const loginWithGoogle = async () => {
+    if (!GoogleSignin || !firebaseAuth) {
+      throw new Error('Google Sign-In não está configurado.');
+    }
+
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+
+      const result = await GoogleSignin.signIn();
+
+      // Compatibilidade com v12+ (retorna { data: { idToken } }) e versões anteriores
+      const idToken = result?.data?.idToken ?? result?.idToken;
+
+      if (!idToken) {
+        throw new Error('Não foi possível obter o token do Google.');
+      }
+
+      const googleCredential = GoogleAuthProvider.credential(idToken);
+      const firebaseUserCred = await firebaseAuth().signInWithCredential(googleCredential);
+
+      const firebaseToken = await firebaseUserCred.user.getIdToken();
+
+      const data = await authAPI.firebaseLogin(firebaseToken);
+      await saveToken(data.access_token);
+      setUser(data.user);
+
+      // Registar token FCM após login com Google
+      const pushAPI = getPushAPI();
+      if (pushAPI) registarTokenFCM(pushAPI);
+
+      return data.user;
+    } catch (err) {
+      if (statusCodes && err.code === statusCodes.SIGN_IN_CANCELLED) {
+        throw new Error('LOGIN_CANCELADO');
+      }
+      throw err;
+    }
+  };
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const logout = async () => {
+    // Remover token FCM do backend antes de fazer logout
+    try {
+      const pushAPI = getPushAPI();
+      if (pushAPI && messaging) {
+        const fcmToken = await messaging().getToken();
+        if (fcmToken) await pushAPI.removerToken(fcmToken);
+      }
+    } catch (_) {}
+
+    await removeToken();
+    setUser(null);
+    try {
+      if (GoogleSignin) await GoogleSignin.signOut();
+    } catch (_) {}
+  };
+
+  // ── Atualizar user no contexto ────────────────────────────────────────────
+  const updateUser = (updates) => {
+    setUser(prev => prev ? { ...prev, ...updates } : prev);
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, loading, login, register, logout, loginWithGoogle, updateUser }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth deve ser usado dentro de AuthProvider');
+  return ctx;
+}
 </file>
 
 <file path="verly-mobile/src/screens/auth/LoginScreen.js">
@@ -26294,6 +26724,396 @@ def extract_invoice_info(file_path, filename):
             return _fallback_result(filename)
     else:
         return _fallback_result(filename)
+</file>
+
+<file path="app/api/auth.py">
+"""
+app/api/auth.py — Endpoints de autenticação para o mobile
+
+POST  /api/v1/auth/login              → {access_token, user}
+POST  /api/v1/auth/register           → {message} (envia email de confirmação)
+POST  /api/v1/auth/confirm/<token>    → {access_token, user}
+POST  /api/v1/auth/resend-confirm     → reenvia email de confirmação
+GET   /api/v1/auth/me                 → {user}
+PATCH /api/v1/auth/me                 → atualiza perfil
+POST  /api/v1/auth/avatar             → upload de foto de perfil
+POST  /api/v1/auth/onboarding         → marca onboarding como completo
+POST  /api/v1/auth/firebase           → login com Google/Apple via Firebase
+"""
+
+import logging
+import re
+import base64
+import os
+import secrets
+from datetime import datetime, timedelta
+from flask import request, jsonify, current_app
+from flask_jwt_extended import (
+    create_access_token, jwt_required, get_jwt_identity,
+)
+from app.api import api_bp
+from app.models import User
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _user_to_dict(user):
+    return {
+        'id':                  user.id,
+        'nome':                user.nome,
+        'email':               user.email,
+        'avatar_url':          user.avatar_url or None,
+        'orcamento_mensal':    user.orcamento_mensal or 0,
+        'personalidade':       getattr(user, 'personalidade', 'calm') or 'calm',
+        'notificacoes_email':  getattr(user, 'notificacoes_email', False),
+        'onboarding_completo': getattr(user, 'onboarding_completo', False),
+        'streak_dias':         getattr(user, 'streak_dias', 0) or 0,
+        'email_confirmado':    getattr(user, 'email_confirmado', False),
+    }
+
+
+def _enviar_email_confirmacao(user):
+    """Envia email de confirmação via Resend."""
+    try:
+        import resend
+        resend.api_key = os.getenv('RESEND_API_KEY', '')
+        if not resend.api_key:
+            logger.warning('RESEND_API_KEY não definida — email de confirmação não enviado.')
+            return False
+
+        app_url    = os.getenv('APP_URL', 'https://verly.app')
+        from_email = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
+        confirm_url = f"{app_url}/api/v1/auth/confirm-web/{user.email_confirm_token}"
+
+        html = f"""
+        <div style="font-family:'Outfit',sans-serif;max-width:480px;margin:0 auto;background:#080810;color:#EEEEF8;border-radius:16px;padding:40px;">
+          <div style="text-align:center;margin-bottom:32px;">
+            <div style="width:52px;height:52px;background:#7C6FE0;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#fff;margin-bottom:16px;">V</div>
+            <h1 style="font-size:22px;font-weight:700;margin:0;color:#EEEEF8;">Confirma o teu email</h1>
+            <p style="color:#8888B0;margin-top:8px;">Olá {user.nome}! Só mais um passo.</p>
+          </div>
+          <p style="color:#EEEEF8;line-height:1.6;">Para ativares a tua conta Verly, clica no botão abaixo:</p>
+          <div style="text-align:center;margin:32px 0;">
+            <a href="{confirm_url}" style="background:#7C6FE0;color:#fff;padding:14px 32px;border-radius:12px;font-weight:700;font-size:16px;text-decoration:none;display:inline-block;">
+              Confirmar Email
+            </a>
+          </div>
+          <p style="color:#8888B0;font-size:13px;">Este link expira em 24 horas. Se não criaste uma conta, ignora este email.</p>
+        </div>
+        """
+
+        resend.Emails.send({
+            'from':    from_email,
+            'to':      [user.email],
+            'subject': 'Confirma o teu email — Verly',
+            'html':    html,
+        })
+        return True
+    except Exception as e:
+        logger.error(f'Erro ao enviar email de confirmação: {e}')
+        return False
+
+
+@api_bp.route('/auth/login', methods=['POST'])
+def login():
+    data     = request.get_json(silent=True) or {}
+    email    = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not email or not password:
+        return jsonify({'error': 'Email e password são obrigatórios.'}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user or not user.check_password(password):
+        return jsonify({'error': 'Credenciais inválidas.'}), 401
+
+    if not getattr(user, 'email_confirmado', True):
+        return jsonify({
+            'error': 'Confirma o teu email antes de entrar.',
+            'code':  'EMAIL_NOT_CONFIRMED',
+        }), 403
+
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/register', methods=['POST'])
+def register():
+    data     = request.get_json(silent=True) or {}
+    nome     = (data.get('nome') or '').strip()
+    email    = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    errors = []
+    if not nome or len(nome) < 2:
+        errors.append('Nome deve ter pelo menos 2 caracteres.')
+    if not email or not re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', email):
+        errors.append('Email inválido.')
+    if not password or len(password) < 8:
+        errors.append('Password deve ter pelo menos 8 caracteres.')
+    elif not re.search(r'[A-Za-z]', password) or not re.search(r'[0-9]', password):
+        errors.append('Password deve conter letras e números.')
+
+    if errors:
+        return jsonify({'error': errors[0]}), 400
+    if User.query.filter_by(email=email).first():
+        return jsonify({'error': 'Este email já está registado.'}), 409
+
+    token = secrets.token_urlsafe(32)
+    user = User(
+        nome=nome,
+        email=email,
+        onboarding_completo=False,
+        email_confirmado=False,
+        email_confirm_token=token,
+        email_confirm_expiry=datetime.utcnow() + timedelta(hours=24),
+    )
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+
+    _enviar_email_confirmacao(user)
+
+    return jsonify({
+        'message': 'Conta criada! Verifica o teu email para confirmar.',
+        'email':   email,
+    }), 201
+
+
+@api_bp.route('/auth/confirm/<token>', methods=['POST'])
+def confirm_email(token):
+    """Confirma o email via token (chamado pela app após deep link)."""
+    user = User.query.filter_by(email_confirm_token=token).first()
+
+    if not user:
+        return jsonify({'error': 'Token inválido.'}), 400
+
+    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
+        return jsonify({'error': 'Link expirado.', 'code': 'TOKEN_EXPIRED'}), 400
+
+    user.email_confirmado     = True
+    user.email_confirm_token  = None
+    user.email_confirm_expiry = None
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/confirm-web/<token>', methods=['GET'])
+def confirm_email_web(token):
+    """Confirma o email via link no browser — redireciona para a app."""
+    user = User.query.filter_by(email_confirm_token=token).first()
+
+    if not user:
+        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link inválido ou já utilizado.</h2>', 400
+
+    if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
+        return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link expirado. Abre a app e pede um novo email.</h2>', 400
+
+    user.email_confirmado     = True
+    user.email_confirm_token  = None
+    user.email_confirm_expiry = None
+    db.session.commit()
+
+    deep_link = f"verly://confirm/{token}"
+    return f"""
+    <html>
+    <head><meta http-equiv="refresh" content="1;url={deep_link}"></head>
+    <body style="font-family:sans-serif;text-align:center;padding:40px;background:#080810;color:#EEEEF8;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h2>Email confirmado!</h2>
+      <p style="color:#8888B0;">A abrir a app Verly...</p>
+      <a href="{deep_link}" style="color:#7C6FE0;">Clica aqui se não abrir automaticamente</a>
+    </body>
+    </html>
+    """
+
+
+@api_bp.route('/auth/resend-confirm', methods=['POST'])
+def resend_confirm():
+    """Reenvia email de confirmação."""
+    data  = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({'message': 'Se o email existir, receberás um novo link.'}), 200
+
+    if getattr(user, 'email_confirmado', True):
+        return jsonify({'message': 'Este email já está confirmado.'}), 200
+
+    user.email_confirm_token  = secrets.token_urlsafe(32)
+    user.email_confirm_expiry = datetime.utcnow() + timedelta(hours=24)
+    db.session.commit()
+
+    _enviar_email_confirmacao(user)
+    return jsonify({'message': 'Email de confirmação reenviado!'}), 200
+
+
+@api_bp.route('/auth/me', methods=['GET'])
+@jwt_required()
+def me():
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    return jsonify({'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/me', methods=['PATCH'])
+@jwt_required()
+def update_me():
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    data = request.get_json(silent=True) or {}
+
+    PERSONALIDADES_VALIDAS = {'calm', 'pro', 'savage', 'sarcastic'}
+
+    if 'nome' in data and data['nome']:
+        user.nome = data['nome'].strip()[:100]
+    if 'orcamento_mensal' in data:
+        try:
+            user.orcamento_mensal = max(0, float(data['orcamento_mensal']))
+        except (ValueError, TypeError):
+            pass
+    if 'personalidade' in data and data['personalidade'] in PERSONALIDADES_VALIDAS:
+        user.personalidade = data['personalidade']
+    if 'notificacoes_email' in data:
+        user.notificacoes_email = bool(data['notificacoes_email'])
+
+    db.session.commit()
+    return jsonify({'user': _user_to_dict(user)})
+
+
+@api_bp.route('/auth/avatar', methods=['POST'])
+@jwt_required()
+def upload_avatar():
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    data = request.get_json(silent=True) or {}
+
+    image_b64 = data.get('image_base64', '')
+    if not image_b64:
+        return jsonify({'error': 'Imagem não fornecida.'}), 400
+
+    if not image_b64.startswith('data:image/'):
+        return jsonify({'error': 'Formato de imagem inválido. Usa data URI.'}), 400
+
+    if len(image_b64) > 2_800_000:
+        return jsonify({'error': 'Imagem demasiado grande. Máximo ~2MB.'}), 400
+
+    try:
+        avatars_dir = os.path.join(current_app.static_folder, 'avatars')
+        os.makedirs(avatars_dir, exist_ok=True)
+
+        header, b64data = image_b64.split(',', 1)
+        ext = 'jpg' if 'jpeg' in header else ('png' if 'png' in header else 'jpg')
+        img_bytes = base64.b64decode(b64data)
+
+        filename = f'avatar_{user_id}.{ext}'
+        filepath = os.path.join(avatars_dir, filename)
+        with open(filepath, 'wb') as f:
+            f.write(img_bytes)
+
+        user.avatar_url = f'/static/avatars/{filename}'
+    except Exception as e:
+        logger.warning(f'Avatar disk save failed: {e}')
+        user.avatar_url = image_b64[:512000]
+
+    db.session.commit()
+    return jsonify({'success': True, 'avatar_url': user.avatar_url})
+
+
+@api_bp.route('/auth/onboarding', methods=['POST'])
+@jwt_required()
+def complete_onboarding():
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'Utilizador não encontrado.'}), 404
+
+    data = request.get_json(silent=True) or {}
+    personalidade = data.get('personalidade', 'calm')
+    if personalidade not in ('savage', 'sarcastic', 'calm', 'pro'):
+        personalidade = 'calm'
+
+    user.onboarding_completo = True
+    user.personalidade = personalidade
+    db.session.commit()
+
+    return jsonify({'success': True})
+
+
+@api_bp.route('/auth/firebase', methods=['POST'])
+def firebase_login():
+    """Login com Google/Apple via Firebase — email confirmado pelo Google."""
+    data     = request.get_json(silent=True) or {}
+    id_token = data.get('idToken', '').strip()
+
+    if not id_token:
+        return jsonify({'error': 'idToken é obrigatório.'}), 400
+
+    try:
+        from firebase_admin import auth as firebase_auth
+        decoded = firebase_auth.verify_id_token(id_token)
+    except Exception as e:
+        logger.warning(f'Firebase token inválido: {e}')
+        return jsonify({'error': 'Token Firebase inválido ou expirado.'}), 401
+
+    uid   = decoded.get('uid', '')
+    email = decoded.get('email', '').lower().strip()
+    nome  = decoded.get('name') or (email.split('@')[0] if email else 'Utilizador')
+    foto  = decoded.get('picture', '')
+
+    user = None
+    if uid:
+        user = User.query.filter_by(google_id=uid).first()
+    if not user and email:
+        user = User.query.filter_by(email=email).first()
+
+    if not user:
+        user = User(
+            nome=nome[:100],
+            email=email,
+            google_id=uid,
+            password_hash='',
+            onboarding_completo=False,
+            avatar_url=foto or None,
+            email_confirmado=True,
+        )
+        db.session.add(user)
+        db.session.flush()
+    else:
+        if uid and not user.google_id:
+            user.google_id = uid
+        if foto and not user.avatar_url:
+            user.avatar_url = foto
+        user.email_confirmado = True
+
+    db.session.commit()
+
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+
+# ── Adicionar no final de app/api/auth.py ─────────────────────────────────────
+
+@api_bp.route('/auth/account', methods=['DELETE'])
+@jwt_required()
+def delete_account():
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+
+    if not user:
+        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
+
+    try:
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({'success': True, 'message': 'Conta apagada com sucesso.'})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Erro ao apagar conta {user_id}: {e}')
+        return jsonify({'success': False, 'message': 'Erro ao apagar conta.'}), 500
 </file>
 
 <file path="app/chat.py">
@@ -29820,121 +30640,6 @@ def _migrate_db():
                 from app.api import notificacoes_mobile  # noqa
 </file>
 
-<file path="requirements.txt">
-aiohappyeyeballs==2.6.1
-aiohttp==3.13.5
-aiosignal==1.4.0
-aiosqlite==0.22.1
-annotated-doc==0.0.4
-annotated-types==0.7.0
-anyio==4.13.0
-attrs==26.1.0
-banks==2.4.2
-blinker==1.9.0
-certifi==2026.4.22
-cffi==2.0.0
-charset-normalizer==3.4.7
-click==8.3.3
-colorama==0.4.6
-cryptography==48.0.0
-dataclasses-json==0.6.7
-Deprecated==1.3.1
-dirtyjson==1.0.8
-distro==1.9.0
-filelock==3.29.0
-filetype==1.2.0
-Flask==3.1.3
-Flask-Cors==6.0.2
-Flask-JWT-Extended==4.7.3
-Flask-Limiter==4.1.1
-Flask-Login==0.6.3
-Flask-SQLAlchemy==3.1.1
-Flask-WTF==1.3.0
-frozenlist==1.8.0
-fsspec==2026.4.0
-greenlet==3.5.0
-griffe==2.0.2
-griffecli==2.0.2
-griffelib==2.0.2
-groq==1.2.0
-h11==0.16.0
-httpcore==1.0.9
-httpx==0.28.1
-huggingface_hub==0.30.0
-idna==3.13
-itsdangerous==2.2.0
-Jinja2==3.1.6
-jiter==0.14.0
-joblib==1.5.3
-llama-index-core==0.14.21
-llama-index-embeddings-huggingface==0.7.0
-llama-index-instrumentation==0.5.0
-llama-index-llms-groq==0.5.0
-llama-index-llms-openai==0.6.26
-llama-index-llms-openai-like==0.5.3
-llama-index-workflows==2.20.0
-markdown-it-py==4.2.0
-MarkupSafe==3.0.3
-marshmallow==3.26.2
-mdurl==0.1.2
-mpmath==1.3.0
-multidict==6.7.1
-mypy_extensions==1.1.0
-nest-asyncio==1.6.0
-networkx==3.6.1
-nltk==3.9.4
-numpy==2.4.4
-openai==2.36.0
-packaging==26.2
-pillow==12.2.0
-platformdirs==4.9.6
-propcache==0.5.2
-psycopg2-binary==2.9.12
-pycparser==3.0
-pydantic==2.13.4
-pydantic_core==2.46.4
-Pygments==2.20.0
-PyJWT==2.12.1
-python-dotenv==1.2.2
-PyYAML==6.0.3
-regex==2026.4.4
-reportlab==4.5.0
-requests==2.33.1
-resend==2.30.0
-rich==15.0.0
-safetensors==0.7.0
-scikit-learn==1.8.0
-scipy==1.17.1
-sentence-transformers==5.4.1
-setuptools==80.9.0
-shellingham==1.5.4
-sniffio==1.3.1
-SQLAlchemy==2.0.49
-sympy==1.14.0
-tenacity==9.1.4
-threadpoolctl==3.6.0
-tiktoken==0.12.0
-tinytag==2.2.1
-tokenizers==0.21.0
-torch==2.11.0
-tqdm==4.67.3
-transformers==4.51.3
-typer==0.25.1
-typing-inspect==0.9.0
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-werkzeug==3.1.8
-wrapt==2.1.2
-wtforms==3.2.2
-pdfplumber==0.11.4
-PyMuPDF==1.25.5
-firebase-admin>=6.0.0
-google-auth==2.53.0
-google-auth-oauthlib==1.4.0
-google-api-python-client==2.196.0
-gunicorn
-</file>
-
 <file path="verly-mobile/src/services/api.js">
 /**
  * src/services/api.js
@@ -30256,6 +30961,122 @@ export const pushAPI = {
   testar: () =>
     apiFetch('/push/test', { method: 'POST' }),
 };
+</file>
+
+<file path="requirements.txt">
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.5
+aiosignal==1.4.0
+aiosqlite==0.22.1
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+attrs==26.1.0
+banks==2.4.2
+blinker==1.9.0
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.3.3
+colorama==0.4.6
+cryptography==48.0.0
+dataclasses-json==0.6.7
+Deprecated==1.3.1
+dirtyjson==1.0.8
+distro==1.9.0
+filelock==3.29.0
+filetype==1.2.0
+Flask==3.1.3
+Flask-Cors==6.0.2
+Flask-JWT-Extended==4.7.3
+Flask-Limiter==4.1.1
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+Flask-WTF==1.3.0
+frozenlist==1.8.0
+fsspec==2026.4.0
+greenlet==3.5.0
+griffe==2.0.2
+griffecli==2.0.2
+griffelib==2.0.2
+groq==1.2.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==0.30.0
+idna==3.13
+itsdangerous==2.2.0
+Jinja2==3.1.6
+jiter==0.14.0
+joblib==1.5.3
+llama-index-core==0.14.21
+llama-index-embeddings-huggingface==0.7.0
+llama-index-instrumentation==0.5.0
+llama-index-llms-groq==0.5.0
+llama-index-llms-openai==0.6.26
+llama-index-llms-openai-like==0.5.3
+llama-index-workflows==2.20.0
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+marshmallow==3.26.2
+mdurl==0.1.2
+mpmath==1.3.0
+multidict==6.7.1
+mypy_extensions==1.1.0
+nest-asyncio==1.6.0
+networkx==3.6.1
+nltk==3.9.4
+numpy==2.4.4
+openai==2.36.0
+packaging==26.2
+pillow==12.2.0
+platformdirs==4.9.6
+propcache==0.5.2
+psycopg2-binary==2.9.12
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.20.0
+PyJWT==2.12.1
+python-dotenv==1.2.2
+PyYAML==6.0.3
+regex==2026.4.4
+reportlab==4.5.0
+requests==2.33.1
+resend==2.30.0
+rich==15.0.0
+safetensors==0.7.0
+scikit-learn==1.8.0
+scipy==1.17.1
+sentence-transformers==5.4.1
+setuptools==80.9.0
+shellingham==1.5.4
+sniffio==1.3.1
+SQLAlchemy==2.0.49
+sympy==1.14.0
+tenacity==9.1.4
+threadpoolctl==3.6.0
+tiktoken==0.12.0
+tinytag==2.2.1
+tokenizers==0.21.0
+torch==2.11.0
+tqdm==4.67.3
+transformers==4.51.3
+typer==0.25.1
+typing-inspect==0.9.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+werkzeug==3.1.8
+wrapt==2.1.2
+wtforms==3.2.2
+pdfplumber==0.11.4
+PyMuPDF==1.25.5
+firebase-admin>=6.0.0
+google-auth==2.53.0
+google-auth-oauthlib==1.4.0
+google-api-python-client==2.196.0
+gunicorn
+python-dateutil==2.9.0
 </file>
 
 </files>
