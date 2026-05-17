@@ -18,43 +18,57 @@ from app import db
 logger = logging.getLogger(__name__)
 
 
+def _parse_data(data_str):
+    """Converte string de data para objeto date. Aceita vários formatos."""
+    if not data_str:
+        return None
+    if isinstance(data_str, (date, datetime)):
+        return data_str.date() if isinstance(data_str, datetime) else data_str
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(data_str.strip(), fmt).date()
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
 def _get_garantias_ativas(faturas):
     """Retorna lista de garantias ativas a partir das faturas."""
     hoje = date.today()
     garantias = []
     for f in faturas:
-        if not f.garantia_meses or f.garantia_meses <= 0:
+        # O modelo usa data_garantia (string) como data de fim da garantia
+        data_fim = _parse_data(f.data_garantia)
+        if not data_fim:
             continue
-        if not f.data:
-            continue
-        data_fatura = f.data if isinstance(f.data, date) else f.data.date()
-        from dateutil.relativedelta import relativedelta
-        data_fim = data_fatura + relativedelta(months=f.garantia_meses)
         dias_restantes = (data_fim - hoje).days
-        if dias_restantes >= 0:
-            garantias.append({
-                'id':              f.id,
-                'loja':            f.loja or 'Desconhecida',
-                'total':           float(f.total or 0),
-                'data':            data_fatura.isoformat(),
-                'data_fim':        data_fim.isoformat(),
-                'dias_restantes':  dias_restantes,
-                'garantia_meses':  f.garantia_meses,
-            })
-    garantias.sort(key=lambda x: x['dias_restantes'])
+        data_compra = _parse_data(f.data_compra)
+        garantias.append({
+            'id':             f.id,
+            'loja':           f.loja or 'Desconhecida',
+            'total':          float(f.total or 0),
+            'data':           data_compra.isoformat() if data_compra else '',
+            'data_fim':       data_fim.isoformat(),
+            'data_garantia':  data_fim.isoformat(),
+            'dias_restantes': dias_restantes,
+            'categoria':      f.categoria or 'Outros',
+        })
+    # Primeiro as que expiram mais cedo (positivas primeiro, depois negativas)
+    garantias.sort(key=lambda x: x['dias_restantes'], reverse=False)
     return garantias
 
 
 def _get_historico_mensal(faturas, meses=6):
     """Retorna histórico de gastos dos últimos N meses."""
     from collections import defaultdict
+    from dateutil.relativedelta import relativedelta
     hoje = date.today()
     historico = defaultdict(float)
 
     for f in faturas:
-        if not f.data:
+        data_f = _parse_data(f.data_compra)
+        if not data_f:
             continue
-        data_f = f.data if isinstance(f.data, date) else f.data.date()
         diff_meses = (hoje.year - data_f.year) * 12 + (hoje.month - data_f.month)
         if 0 <= diff_meses < meses:
             chave = data_f.strftime('%Y-%m')
@@ -62,7 +76,6 @@ def _get_historico_mensal(faturas, meses=6):
 
     resultado = []
     for i in range(meses - 1, -1, -1):
-        from dateutil.relativedelta import relativedelta
         mes_data = hoje - relativedelta(months=i)
         chave = mes_data.strftime('%Y-%m')
         resultado.append({
@@ -82,9 +95,9 @@ def _get_top_categorias(faturas, mes=None, ano=None):
 
     categorias = defaultdict(float)
     for f in faturas:
-        if not f.data:
+        data_f = _parse_data(f.data_compra)
+        if not data_f:
             continue
-        data_f = f.data if isinstance(f.data, date) else f.data.date()
         if data_f.month == mes and data_f.year == ano:
             cat = f.categoria or 'Outros'
             categorias[cat] += float(f.total or 0)
@@ -105,23 +118,19 @@ def _calcular_previsao(faturas, orcamento):
     total_mes = sum(
         float(f.total or 0)
         for f in faturas
-        if f.data and (
-            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
-            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
-        )
+        if _parse_data(f.data_compra) and
+        _parse_data(f.data_compra).month == hoje.month and
+        _parse_data(f.data_compra).year == hoje.year
     )
 
-    if dia_atual > 0:
-        previsao = (total_mes / dia_atual) * dias_no_mes
-    else:
-        previsao = total_mes
+    previsao = (total_mes / dia_atual) * dias_no_mes if dia_atual > 0 else total_mes
 
     return {
-        'gasto_atual':    round(total_mes, 2),
-        'previsao_mes':   round(previsao, 2),
-        'orcamento':      float(orcamento or 0),
+        'gasto_atual':     round(total_mes, 2),
+        'previsao_mes':    round(previsao, 2),
+        'orcamento':       float(orcamento or 0),
         'vai_ultrapassar': previsao > float(orcamento or 0) if orcamento else False,
-        'percentagem':    round((total_mes / float(orcamento)) * 100, 1) if orcamento else 0,
+        'percentagem':     round((total_mes / float(orcamento)) * 100, 1) if orcamento else 0,
     }
 
 
@@ -134,12 +143,13 @@ def exportar_resumo():
     """
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
-    faturas = Fatura.query.filter_by(utilizador_id=user_id).all()
+    # CORRIGIDO: user_id em vez de utilizador_id
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
 
     garantias = _get_garantias_ativas(faturas)
-    historico = _get_historico_mensal(faturas)
-    top_cats  = _get_top_categorias(faturas)
-    previsao  = _calcular_previsao(faturas, user.orcamento_mensal)
+    historico  = _get_historico_mensal(faturas)
+    top_cats   = _get_top_categorias(faturas)
+    previsao   = _calcular_previsao(faturas, user.orcamento_mensal)
 
     return jsonify({
         'streak_dias':      getattr(user, 'streak_dias', 0) or 0,
@@ -162,9 +172,7 @@ def exportar_pdf():
     Aceita token via query param ?_token= para abrir no browser.
     """
     from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity as get_identity
-    from flask import current_app
 
-    # Suporte a token via query param (para abrir no browser)
     _token = request.args.get('_token')
     if _token:
         try:
@@ -181,20 +189,20 @@ def exportar_pdf():
             return jsonify({'error': 'Autenticação necessária.'}), 401
 
     user = User.query.get_or_404(user_id)
-    faturas = Fatura.query.filter_by(utilizador_id=user_id).order_by(Fatura.data.desc()).all()
+    # CORRIGIDO: user_id em vez de utilizador_id, sem order_by(Fatura.data)
+    faturas = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
 
     hoje = date.today()
-    top_cats = _get_top_categorias(faturas)
+    top_cats  = _get_top_categorias(faturas)
     garantias = _get_garantias_ativas(faturas)
-    previsao = _calcular_previsao(faturas, user.orcamento_mensal)
+    previsao  = _calcular_previsao(faturas, user.orcamento_mensal)
 
     total_mes = sum(
         float(f.total or 0)
         for f in faturas
-        if f.data and (
-            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
-            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
-        )
+        if _parse_data(f.data_compra) and
+        _parse_data(f.data_compra).month == hoje.month and
+        _parse_data(f.data_compra).year == hoje.year
     )
 
     try:
@@ -213,7 +221,6 @@ def exportar_pdf():
         styles = getSampleStyleSheet()
         story = []
 
-        # Título
         title_style = ParagraphStyle('Title', parent=styles['Title'],
                                      fontSize=24, textColor=colors.HexColor('#7C6FE0'),
                                      spaceAfter=6)
@@ -221,14 +228,13 @@ def exportar_pdf():
         story.append(Paragraph(f'{user.nome} · {hoje.strftime("%B %Y")}', styles['Normal']))
         story.append(Spacer(1, 0.5*cm))
 
-        # Resumo
         story.append(Paragraph('Resumo do Mês', styles['Heading2']))
         resumo_data = [
             ['Total gasto', f'{total_mes:.2f} €'],
             ['Orçamento', f'{float(user.orcamento_mensal or 0):.2f} €'],
             ['Previsão fim do mês', f'{previsao["previsao_mes"]:.2f} €'],
             ['Streak', f'{getattr(user, "streak_dias", 0) or 0} dias'],
-            ['Garantias ativas', str(len(garantias))],
+            ['Garantias ativas', str(len([g for g in garantias if g["dias_restantes"] >= 0]))],
         ]
         t = Table(resumo_data, colWidths=[8*cm, 8*cm])
         t.setStyle(TableStyle([
@@ -241,7 +247,6 @@ def exportar_pdf():
         story.append(t)
         story.append(Spacer(1, 0.5*cm))
 
-        # Top categorias
         if top_cats:
             story.append(Paragraph('Top Categorias', styles['Heading2']))
             cat_data = [['Categoria', 'Total']] + [
@@ -258,11 +263,11 @@ def exportar_pdf():
             story.append(t2)
             story.append(Spacer(1, 0.5*cm))
 
-        # Garantias ativas
-        if garantias:
+        ativas = [g for g in garantias if g['dias_restantes'] >= 0]
+        if ativas:
             story.append(Paragraph('Garantias Ativas', styles['Heading2']))
             gar_data = [['Loja', 'Expira em', 'Dias restantes']] + [
-                [g['loja'], g['data_fim'], str(g['dias_restantes'])] for g in garantias[:10]
+                [g['loja'], g['data_fim'], str(g['dias_restantes'])] for g in ativas[:10]
             ]
             t3 = Table(gar_data, colWidths=[7*cm, 5*cm, 4*cm])
             t3.setStyle(TableStyle([
@@ -283,14 +288,9 @@ def exportar_pdf():
         return response
 
     except ImportError:
-        # Fallback: retorna JSON se reportlab não estiver instalado
         return jsonify({
-            'error': 'reportlab não instalado. Adiciona ao requirements.txt.',
-            'resumo': {
-                'total_mes': total_mes,
-                'previsao':  previsao,
-                'garantias': garantias,
-            }
+            'error': 'reportlab não instalado.',
+            'resumo': {'total_mes': total_mes, 'previsao': previsao, 'garantias': garantias},
         }), 500
     except Exception as e:
         logger.error(f'Erro ao gerar PDF: {e}')

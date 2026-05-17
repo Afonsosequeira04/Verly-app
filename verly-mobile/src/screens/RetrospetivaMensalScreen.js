@@ -1,24 +1,23 @@
 // src/screens/RetrospetivaMensalScreen.js
 // Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
-// Mostra: total gasto, categoria top, comparação com mês antes, streak, dica da Verly
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, Pressable,
   StyleSheet, ActivityIndicator, Dimensions,
-  Share, RefreshControl,
+  Share, RefreshControl, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Animated, {
   FadeInDown, FadeIn, ZoomIn,
-  useSharedValue, useAnimatedStyle, withSpring,
 } from 'react-native-reanimated';
 import { MotiView } from 'moti';
 import {
   TrendingUp, TrendingDown, Award, Flame, Target,
   BarChart2, Download, Share2, Calendar, Zap,
+  ChevronRight,
 } from 'lucide-react-native';
-import { apiFetch } from '../services/api';
+import { apiFetch, getToken } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
 const C = COLORS;
@@ -35,6 +34,8 @@ const CAT_COLORS = [
   '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
   '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
 ];
+
+const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
 
 // ─── Mini bar chart horizontal ────────────────────────────────────────────────
 function MiniBarChart({ dados }) {
@@ -117,10 +118,10 @@ export default function RetrospetivaMensalScreen({ navigation }) {
   const mesAtual = hoje.getMonth(); // 0-indexed
   const nomesMesAtual = MESES_PT[mesAtual];
 
-  const fetch = useCallback(async (isRefresh = false) => {
+  const carregar = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
+      setData(res);
     } catch (e) {
       console.error('RetrospetivaMensal:', e);
     } finally {
@@ -129,9 +130,9 @@ export default function RetrospetivaMensalScreen({ navigation }) {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
 
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
+  const onRefresh = () => { setRefreshing(true); carregar(true); };
 
   const partilhar = async () => {
     if (!data) return;
@@ -145,6 +146,15 @@ export default function RetrospetivaMensalScreen({ navigation }) {
         message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
       });
     } catch (e) {}
+  };
+
+  const exportarPDF = async () => {
+    try {
+      const token = await getToken();
+      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
+    } catch (e) {
+      console.error('Exportar PDF:', e);
+    }
   };
 
   if (loading) {
@@ -170,7 +180,6 @@ export default function RetrospetivaMensalScreen({ navigation }) {
   const streak = data?.streak_dias || 0;
   const rendimento = data?.rendimento_mensal || 0;
   const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
-  const nome = data?.nome || 'utilizador';
 
   const nomeMesAnt = mesAnterior?.mes
     ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
@@ -238,7 +247,10 @@ export default function RetrospetivaMensalScreen({ navigation }) {
           <Target size={16} color={C.brand} />
           <Text style={styles.cardTitle}>Onde gastaste mais</Text>
         </View>
-        <MiniBarChart dados={topCats} />
+        {topCats.length > 0
+          ? <MiniBarChart dados={topCats} />
+          : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
+        }
       </Animated.View>
 
       {/* Streak */}
@@ -255,7 +267,7 @@ export default function RetrospetivaMensalScreen({ navigation }) {
         </Animated.View>
       )}
 
-      {/* Dica da Verly para este mês */}
+      {/* Dica da Verly */}
       <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
         <View style={styles.cardTitleRow}>
           <Zap size={16} color={C.brand} />
@@ -269,14 +281,14 @@ export default function RetrospetivaMensalScreen({ navigation }) {
           </Text>
         ) : variacao !== null && variacao < -10 ? (
           <Text style={styles.dicaText}>
-            Excelente! Reduziu{Math.abs(variacao).toFixed(0)}% face ao mês anterior.
+            Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
             Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
             (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
           </Text>
         ) : (
           <Text style={styles.dicaText}>
             Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-            A regra 50/30/20 de Elizabeth Warren sugere: 50% necessidades, 30% desejos, 20% poupança.
+            A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
             {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
           </Text>
         )}
@@ -284,21 +296,7 @@ export default function RetrospetivaMensalScreen({ navigation }) {
 
       {/* Botão exportar PDF */}
       <Animated.View entering={FadeInDown.delay(500)}>
-        <Pressable
-          onPress={async () => {
-            try {
-              const { getToken } = await import('../services/api');
-              const token = await getToken();
-              const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-              // Abre o PDF no browser externo (RN não tem download direto sem expo-file-system)
-              const { Linking } = require('react-native');
-              Linking.openURL(`${BASE_URL}/exportar/pdf?token=${token}`);
-            } catch (e) {
-              console.error(e);
-            }
-          }}
-          style={styles.exportBtn}
-        >
+        <Pressable onPress={exportarPDF} style={styles.exportBtn}>
           <Download size={18} color="#fff" />
           <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
         </Pressable>

@@ -1,6 +1,5 @@
 // src/screens/GarantiasScreen.js
 // Centro de Garantias — todas as garantias ativas e expiradas num só sítio
-// Nenhuma app portuguesa tem isto. É a funcionalidade de diferenciação.
 
 import React, { useState, useCallback } from 'react';
 import {
@@ -60,8 +59,9 @@ function GarantiaCard({ item, idx }) {
               <Text style={styles.cardLoja} numberOfLines={1}>{item.loja}</Text>
               <Text style={[styles.cardDias, { color: cor }]}>{diasLabel(dias)}</Text>
             </View>
-            {item.valor > 0 && (
-              <Text style={styles.cardValor}>{fmt(item.valor)} €</Text>
+            {/* CORRIGIDO: item.total em vez de item.valor */}
+            {item.total > 0 && (
+              <Text style={styles.cardValor}>{fmt(item.total)} €</Text>
             )}
           </View>
 
@@ -69,8 +69,9 @@ function GarantiaCard({ item, idx }) {
           <View style={styles.cardDetails}>
             <View style={styles.detailRow}>
               <Calendar size={12} color={C.textSub} />
+              {/* CORRIGIDO: item.data_fim em vez de item.data_garantia */}
               <Text style={styles.detailText}>
-                Válida até {item.data_garantia}
+                Válida até {item.data_fim}
               </Text>
             </View>
             {item.categoria && (
@@ -106,10 +107,10 @@ export default function GarantiasScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [filtro, setFiltro] = useState('ativas'); // 'ativas' | 'todas' | 'urgentes'
 
-  const fetch = useCallback(async (isRefresh = false) => {
+  const carregar = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
+      setData(res);
     } catch (e) {
       console.error('GarantiasScreen:', e);
     } finally {
@@ -118,9 +119,9 @@ export default function GarantiasScreen({ navigation }) {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
 
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
+  const onRefresh = () => { setRefreshing(true); carregar(true); };
 
   if (loading) {
     return (
@@ -220,12 +221,12 @@ export default function GarantiasScreen({ navigation }) {
           <Text style={styles.emptySub}>
             {filtro === 'urgentes'
               ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
-              : 'Quando fizeres upload de faturas com garantia, aparecem aqui automaticamente.'}
+              : 'Quando fizeres upload de faturas com data de garantia, aparecem aqui automaticamente.'}
           </Text>
         </Animated.View>
       ) : (
         listaFiltrada.map((item, idx) => (
-          <GarantiaCard key={`${item.loja}-${idx}`} item={item} idx={idx} />
+          <GarantiaCard key={`${item.id}-${idx}`} item={item} idx={idx} />
         ))
       )}
 
