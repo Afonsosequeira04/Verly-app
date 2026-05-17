@@ -25,6 +25,38 @@ try {
   console.warn('[AuthContext] Firebase/Google Sign-In não instalado — funcionalidade desativada.');
 }
 
+// ── FCM Push Notifications ────────────────────────────────────────────────────
+let messaging;
+try {
+  messaging = require('@react-native-firebase/messaging').default;
+} catch (_) {
+  console.warn('[AuthContext] Firebase Messaging não instalado — push desativado.');
+}
+
+async function registarTokenFCM(pushAPI) {
+  try {
+    if (!messaging) return;
+
+    const authStatus = await messaging().requestPermission();
+    const enabled =
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+    if (!enabled) {
+      console.log('[FCM] Permissão de notificações não concedida.');
+      return;
+    }
+
+    const token = await messaging().getToken();
+    if (token) {
+      await pushAPI.registarToken(token);
+      console.log('[FCM] Token registado com sucesso.');
+    }
+  } catch (e) {
+    console.warn('[FCM] Erro ao registar token:', e.message);
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const AuthContext = createContext(null);
@@ -33,6 +65,15 @@ export function AuthProvider({ children }) {
   const [user, setUser]       = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Importação lazy do pushAPI para evitar dependência circular
+  const getPushAPI = () => {
+    try {
+      return require('../services/api').pushAPI;
+    } catch (_) {
+      return null;
+    }
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -40,6 +81,9 @@ export function AuthProvider({ children }) {
         if (token) {
           const data = await authAPI.me();
           setUser(data.user);
+          // Re-registar token FCM ao arrancar (token pode ter mudado)
+          const pushAPI = getPushAPI();
+          if (pushAPI) registarTokenFCM(pushAPI);
         }
       } catch {
         await removeToken();
@@ -54,6 +98,11 @@ export function AuthProvider({ children }) {
     const data = await authAPI.login(email, password);
     await saveToken(data.access_token);
     setUser(data.user);
+
+    // Registar token FCM após login
+    const pushAPI = getPushAPI();
+    if (pushAPI) registarTokenFCM(pushAPI);
+
     return data.user;
   };
 
@@ -89,6 +138,11 @@ export function AuthProvider({ children }) {
       const data = await authAPI.firebaseLogin(firebaseToken);
       await saveToken(data.access_token);
       setUser(data.user);
+
+      // Registar token FCM após login com Google
+      const pushAPI = getPushAPI();
+      if (pushAPI) registarTokenFCM(pushAPI);
+
       return data.user;
     } catch (err) {
       if (statusCodes && err.code === statusCodes.SIGN_IN_CANCELLED) {
@@ -100,6 +154,15 @@ export function AuthProvider({ children }) {
 
   // ── Logout ────────────────────────────────────────────────────────────────
   const logout = async () => {
+    // Remover token FCM do backend antes de fazer logout
+    try {
+      const pushAPI = getPushAPI();
+      if (pushAPI && messaging) {
+        const fcmToken = await messaging().getToken();
+        if (fcmToken) await pushAPI.removerToken(fcmToken);
+      }
+    } catch (_) {}
+
     await removeToken();
     setUser(null);
     try {
