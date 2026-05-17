@@ -180,6 +180,21 @@ def _build_context(user_id: int) -> dict:
                 'valor': round(top_cat_val, 2),
             }
 
+    # Agrupar faturas do mês por categoria para drill-down
+    itens_por_categoria = {}
+    for fatura in faturas_mes:
+        cat = fatura['categoria']
+        if cat not in itens_por_categoria:
+            itens_por_categoria[cat] = []
+        itens_por_categoria[cat].append({
+            'loja': fatura['loja'],
+            'valor': fatura['valor'],
+            'data': fatura['data'],
+        })
+    # Ordenar por valor desc dentro de cada categoria
+    for cat in itens_por_categoria:
+        itens_por_categoria[cat].sort(key=lambda x: x['valor'], reverse=True)
+
     return {
         'nome': nome.split()[0] if nome else 'utilizador',
         'personalidade': personalidade,
@@ -200,6 +215,7 @@ def _build_context(user_id: int) -> dict:
         'dia_atual': dia_atual,
         'regra_5030_20': regra_5030_20,
         'risco_concentracao': risco_concentracao,
+        'itens_por_categoria': itens_por_categoria,
     }
 
 
@@ -417,6 +433,7 @@ def get_insights():
             'total_subscricoes':  ctx['total_subscricoes'],
             'historico_mensal':   ctx['historico_mensal'],
             'regra_5030_20':      ctx['regra_5030_20'],
+            'itens_por_categoria': ctx['itens_por_categoria'],
         },
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
