@@ -1,9 +1,10 @@
 """
-app/api/insights.py — Insights da Verly com IA real
+app/api/insights.py — Insights da Verly com IA real + princípios financeiros
 
 GET /api/v1/insights
     Gera insights personalizados com base nos dados reais do utilizador.
     Inclui: score, tendência, categorias, metas, previsão, subscrições detetadas.
+    Os insights citam estudos e princípios financeiros reais.
 """
 
 import json
@@ -33,7 +34,9 @@ def _get_data_obj(f):
     if d:
         return d
     if f.data_upload:
-        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(f.data_upload.date(), datetime.min.time())
+        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(
+            f.data_upload.date(), datetime.min.time()
+        )
     return None
 
 
@@ -54,7 +57,6 @@ def _build_context(user_id: int) -> dict:
     total_mes_anterior = 0.0
     faturas_mes = []
 
-    # Histórico mensal (últimos 6 meses)
     historico_mensal = defaultdict(float)
 
     for f in faturas:
@@ -80,14 +82,11 @@ def _build_context(user_id: int) -> dict:
             gastos_mes_anterior[cat] += valor
             total_mes_anterior += valor
 
-        # Histórico últimos 6 meses
         chave = f"{data.year}-{data.month:02d}"
         historico_mensal[chave] += valor
 
-    # Top categorias
     top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:6]
 
-    # Metas vs gastos
     metas_info = []
     for m in metas:
         cat_lower = (m.categoria or '').lower()
@@ -101,21 +100,16 @@ def _build_context(user_id: int) -> dict:
             'ultrapassou': gasto > m.valor_limite,
         })
 
-    # Variação mês anterior
     variacao_pct = None
     if total_mes_anterior > 0:
         variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
 
-    # ── Previsão mensal ───────────────────────────────────────────────────────
-    # Extrapola o gasto atual para o fim do mês com base nos dias passados
-    dias_no_mes = 31  # aproximação
+    dias_no_mes = 31
     previsao_mensal = None
     if dia_atual > 0 and total_mes > 0:
         taxa_diaria = total_mes / dia_atual
         previsao_mensal = round(taxa_diaria * dias_no_mes, 2)
 
-    # ── Subscrições detetadas ─────────────────────────────────────────────────
-    # Lojas que aparecem em múltiplos meses = subscrição provável
     lojas_por_mes = defaultdict(set)
     for f in faturas:
         data = _get_data_obj(f)
@@ -126,8 +120,7 @@ def _build_context(user_id: int) -> dict:
 
     subscricoes_detetadas = []
     for loja, meses in lojas_por_mes.items():
-        if len(meses) >= 2:  # aparece em 2+ meses = subscrição provável
-            # Calcular valor médio mensal
+        if len(meses) >= 2:
             valores = [f.total or 0 for f in faturas if f.loja and f.loja.lower() == loja]
             valor_medio = sum(valores) / len(valores) if valores else 0
             if valor_medio > 0:
@@ -140,7 +133,6 @@ def _build_context(user_id: int) -> dict:
     subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
     total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
 
-    # ── Histórico 6 meses para gráfico ────────────────────────────────────────
     historico_lista = []
     for i in range(5, -1, -1):
         mes = mes_atual - i
@@ -156,12 +148,37 @@ def _build_context(user_id: int) -> dict:
             'valor': round(historico_mensal.get(chave, 0), 2),
         })
 
-    # Dados do utilizador
     rendimento = getattr(user, 'rendimento_mensal', None) or 0
     orcamento = getattr(user, 'orcamento_mensal', None) or 0
     nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
     objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
     personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    # Calcular regra 50/30/20 se tiver rendimento
+    regra_5030_20 = None
+    if rendimento > 0:
+        necessidades_ideal = rendimento * 0.50
+        desejos_ideal = rendimento * 0.30
+        poupanca_ideal = rendimento * 0.20
+        regra_5030_20 = {
+            'necessidades_ideal': round(necessidades_ideal, 2),
+            'desejos_ideal': round(desejos_ideal, 2),
+            'poupanca_ideal': round(poupanca_ideal, 2),
+            'gasto_atual': round(total_mes, 2),
+            'pct_rendimento': round((total_mes / rendimento) * 100, 1),
+        }
+
+    # Análise de risco: concentração de gasto numa categoria
+    risco_concentracao = None
+    if top_cats and total_mes > 0:
+        top_cat_nome, top_cat_val = top_cats[0]
+        top_cat_pct = round((top_cat_val / total_mes) * 100, 1)
+        if top_cat_pct > 40:
+            risco_concentracao = {
+                'categoria': top_cat_nome,
+                'pct': top_cat_pct,
+                'valor': round(top_cat_val, 2),
+            }
 
     return {
         'nome': nome.split()[0] if nome else 'utilizador',
@@ -181,25 +198,32 @@ def _build_context(user_id: int) -> dict:
         'total_subscricoes': round(total_subscricoes, 2),
         'historico_mensal': historico_lista,
         'dia_atual': dia_atual,
+        'regra_5030_20': regra_5030_20,
+        'risco_concentracao': risco_concentracao,
     }
 
 
 def _gerar_insights_llm(ctx: dict, personalidade: str) -> list:
-    """Chama o LLM para gerar insights personalizados."""
+    """Chama o LLM para gerar insights personalizados com princípios financeiros reais."""
 
     SYSTEM_PROMPTS = {
         'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
 Analisa os dados financeiros e dá insights cortantes mas verdadeiros.
-Sem rodeios. Linguagem direta.""",
+Cita estudos e princípios financeiros reais (regra 50/30/20, Latte Factor, Lei de Parkinson, etc.)
+quando relevante para fundamentar as tuas observações.""",
 
         'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
-Analisa os dados financeiros com ironia inteligente mas construtiva.""",
+Analisa os dados com ironia inteligente mas construtiva.
+Usa referências a estudos financeiros reais com um toque irónico.""",
 
-        'calm': """És a Verly, uma coach financeira empática e construtiva.
-Analisa os dados financeiros com tom equilibrado e encorajador.""",
+        'calm': """És a Verly, uma coach financeira certificada, empática e construtiva.
+Analisa os dados financeiros com tom equilibrado.
+Cita princípios financeiros reconhecidos (Warren Buffett, regra 50/30/20, Latte Factor, etc.)
+de forma natural quando adicionam valor ao conselho.""",
 
-        'pro': """És a Verly, um CFO pessoal analítico.
-Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
+        'pro': """És a Verly, um CFO pessoal analítico e rigoroso.
+Analisa os dados com linguagem de negócio e rigor técnico.
+Cita estudos académicos e frameworks financeiros reconhecidos (CFPB, Fed Reserve, etc.).""",
     }
 
     system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
@@ -218,9 +242,19 @@ Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
         variacao_txt = f"\nVariação vs mês anterior: {sinal}{ctx['variacao_pct']}%"
 
     rendimento_txt = ''
+    regra_txt = ''
     if ctx['rendimento_mensal'] > 0:
         pct_rendimento = round((ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100, 1)
         rendimento_txt = f"\nRendimento mensal: {ctx['rendimento_mensal']}€ (gastou {pct_rendimento}% do rendimento)"
+        if ctx['regra_5030_20']:
+            r = ctx['regra_5030_20']
+            regra_txt = (
+                f"\nRegra 50/30/20 aplicada ao rendimento de {ctx['rendimento_mensal']}€:"
+                f"\n  - Necessidades (50%): ideal {r['necessidades_ideal']}€/mês"
+                f"\n  - Desejos (30%): ideal {r['desejos_ideal']}€/mês"
+                f"\n  - Poupança (20%): ideal {r['poupanca_ideal']}€/mês"
+                f"\n  - Gasto atual: {r['gasto_atual']}€ = {r['pct_rendimento']}% do rendimento"
+            )
 
     orcamento_txt = ''
     if ctx['orcamento_mensal'] > 0:
@@ -233,8 +267,17 @@ Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
 
     subscricoes_txt = ''
     if ctx['subscricoes_detetadas']:
+        custo_anual = ctx['total_subscricoes'] * 12
         linhas = [f"  - {s['nome']}: ~{s['valor_mensal']}€/mês" for s in ctx['subscricoes_detetadas']]
-        subscricoes_txt = f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês):\n" + '\n'.join(linhas)
+        subscricoes_txt = (
+            f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano):\n"
+            + '\n'.join(linhas)
+        )
+
+    concentracao_txt = ''
+    if ctx['risco_concentracao']:
+        r = ctx['risco_concentracao']
+        concentracao_txt = f"\nALERTA: {r['pct']}% dos gastos concentrados em '{r['categoria']}' ({r['valor']}€)"
 
     top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
 
@@ -242,26 +285,31 @@ Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
 
 Total gasto: {ctx['total_gasto_mes']}€
 Número de faturas: {ctx['num_faturas_mes']}
-Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}
+Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}{regra_txt}
 
 Top categorias de gasto:
-{top_cats_txt}{metas_txt}{subscricoes_txt}
+{top_cats_txt}{metas_txt}{subscricoes_txt}{concentracao_txt}
 
-Gera exatamente 5 insights personalizados e relevantes com base nestes dados reais.
+Gera exatamente 5 insights personalizados e muito relevantes com base nestes dados reais.
 Tipos: alerta, tendencia, positivo, dica, previsao.
 
-Regras:
+Regras IMPORTANTES:
 - Usa os valores reais dos dados (não inventes números)
 - Sé específico — menciona categorias, valores, percentagens reais
-- Se houver subscrições, comenta sobre o impacto mensal
-- Se houver previsão, usa-a num insight de tipo "previsao"
+- Para pelo menos 2 dos 5 insights, menciona um princípio financeiro real de forma natural
+  (exemplos: regra 50/30/20 de Elizabeth Warren, Latte Factor de David Bach, Lei de Parkinson,
+  fundo de emergência de 3-6 meses, efeito do juro composto, etc.)
+- Se houver subscrições, calcula o impacto anual e comenta
+- Se houver previsão de ultrapassar o orçamento, cria um insight de "alerta" específico
 - Adapta o tom à personalidade: {personalidade}
+- Se o gasto total for baixo/controlado, cria pelo menos 1 insight "positivo" genuíno
+- Máximo 2-3 frases por insight, linguagem natural, não robótica
 
 Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
 [
   {{
     "tipo": "alerta|tendencia|positivo|dica|previsao",
-    "texto": "frase do insight (máx 2 frases, tom adaptado à personalidade)",
+    "texto": "frase do insight (2-3 frases, tom adaptado, pode citar princípio financeiro)",
     "valor": null ou número relevante
   }},
   ...
@@ -277,8 +325,8 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
                 {'role': 'system', 'content': system},
                 {'role': 'user',   'content': user_prompt},
             ],
-            max_tokens=800,
-            temperature=0.7,
+            max_tokens=1000,
+            temperature=0.72,
         )
         raw = response.choices[0].message.content.strip()
         import re
@@ -290,19 +338,22 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f'Erro ao gerar insights LLM: {e}')
-        # Fallback com insights básicos
+        # Fallback com insights básicos mas mais informativos
         insights = []
         if ctx['total_gasto_mes'] > 0:
             insights.append({
                 'tipo': 'dica',
-                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras.",
+                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras. "
+                         f"A regra 50/30/20 sugere destinar 20% do rendimento a poupança.",
                 'valor': ctx['total_gasto_mes'],
             })
         if ctx['orcamento_mensal'] > 0 and ctx['total_gasto_mes'] > ctx['orcamento_mensal']:
+            excesso = ctx['total_gasto_mes'] - ctx['orcamento_mensal']
             insights.append({
                 'tipo': 'alerta',
-                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€.",
-                'valor': ctx['total_gasto_mes'] - ctx['orcamento_mensal'],
+                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€ em {excesso:.2f}€. "
+                         f"A Lei de Parkinson diz que os gastos tendem a expandir para o rendimento disponível — um orçamento mais rígido pode ajudar.",
+                'valor': excesso,
             })
         if ctx['previsao_mensal']:
             insights.append({
@@ -310,7 +361,21 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
                 'texto': f"Ao ritmo atual, vais gastar cerca de {ctx['previsao_mensal']}€ este mês.",
                 'valor': ctx['previsao_mensal'],
             })
-        return insights
+        if ctx['total_subscricoes'] > 0:
+            custo_anual = ctx['total_subscricoes'] * 12
+            insights.append({
+                'tipo': 'alerta',
+                'texto': f"As tuas subscrições custam {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano. "
+                         f"O Latte Factor de David Bach mostra como pequenos gastos recorrentes têm grande impacto a longo prazo.",
+                'valor': ctx['total_subscricoes'],
+            })
+        if ctx['variacao_pct'] is not None and not (ctx['variacao_pct'] > 0):
+            insights.append({
+                'tipo': 'positivo',
+                'texto': f"Gastaste {abs(ctx['variacao_pct'])}% menos que o mês anterior. Excelente progresso!",
+                'valor': None,
+            })
+        return insights[:5]
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -335,20 +400,23 @@ def get_insights():
         'success': True,
         'insights': insights,
         'resumo': {
-            'total_gasto':       ctx['total_gasto_mes'],
-            'num_faturas':       ctx['num_faturas_mes'],
-            'variacao_pct':      ctx['variacao_pct'],
-            'variacao_subiu':    (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal':  ctx['orcamento_mensal'],
-            'rendimento_mensal': ctx['rendimento_mensal'],
-            'pct_orcamento':     round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1) if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento':    round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1) if ctx['rendimento_mensal'] > 0 else None,
-            'top_categorias':    ctx['top_categorias'],
-            'metas':             ctx['metas'],
-            'previsao_mensal':   ctx['previsao_mensal'],
-            'subscricoes':       ctx['subscricoes_detetadas'],
-            'total_subscricoes': ctx['total_subscricoes'],
-            'historico_mensal':  ctx['historico_mensal'],
+            'total_gasto':        ctx['total_gasto_mes'],
+            'num_faturas':        ctx['num_faturas_mes'],
+            'variacao_pct':       ctx['variacao_pct'],
+            'variacao_subiu':     (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':   ctx['orcamento_mensal'],
+            'rendimento_mensal':  ctx['rendimento_mensal'],
+            'pct_orcamento':      round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
+                                  if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':     round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
+                                  if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':     ctx['top_categorias'],
+            'metas':              ctx['metas'],
+            'previsao_mensal':    ctx['previsao_mensal'],
+            'subscricoes':        ctx['subscricoes_detetadas'],
+            'total_subscricoes':  ctx['total_subscricoes'],
+            'historico_mensal':   ctx['historico_mensal'],
+            'regra_5030_20':      ctx['regra_5030_20'],
         },
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,

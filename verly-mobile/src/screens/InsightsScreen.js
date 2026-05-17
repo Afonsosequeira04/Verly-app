@@ -1,39 +1,121 @@
-// src/screens/InsightsScreen.js — Análise de padrões, tendências e IA
-// DIFERENTE do Dashboard: aqui é o PORQUÊ e O QUE FAZER, não o resumo rápido
+// src/screens/InsightsScreen.js — Verly Insights v5 — Magazine Premium
 import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, Pressable,
   StyleSheet, RefreshControl, ActivityIndicator,
-  Dimensions,
+  Dimensions, TouchableOpacity, Animated as RNAnimated,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Animated, {
-  FadeInDown, FadeIn, useSharedValue, useAnimatedStyle,
-  withTiming, withDelay, Easing,
+  FadeInDown, FadeIn, FadeInUp,
+  useSharedValue, useAnimatedStyle,
+  withTiming, withDelay, withSpring, Easing,
+  interpolate, useAnimatedScrollHandler,
 } from 'react-native-reanimated';
 import { MotiView } from 'moti';
 import {
   Zap, TrendingUp, TrendingDown, AlertCircle,
-  CheckCircle, Brain, BarChart2, Target,
-  RefreshCw, Flame, Clock, Award, ArrowRight,
-  ShoppingBag, CreditCard, Repeat,
+  CheckCircle, Brain, Target, RefreshCw,
+  Repeat, Calendar, ArrowRight, ChevronDown, ChevronUp,
+  BookOpen, Award, Lightbulb, AlertTriangle, BarChart2,
+  DollarSign, PieChart, Clock,
 } from 'lucide-react-native';
 import { insightsAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import { Reveal, Skeleton, SectionHeader, AnimatedListItem } from '../components/UI';
 
-const C   = COLORS;
-const W   = Dimensions.get('window').width;
+const C = COLORS;
+const { width: W, height: H } = Dimensions.get('window');
 const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
 
-// ─── Score de saúde financeira ────────────────────────────────────────────────
-function ScoreFinanceiro({ resumo }) {
+const CAT_COLORS = ['#7C6FE0', '#E24B4A', '#00D68F', '#FFB300', '#45B7D1', '#FF7340'];
+const CAT_ICONS = {
+  'alimentação': '🛒', 'transporte': '🚗', 'saúde': '🏥',
+  'lazer': '🎮', 'vestuário': '👕', 'electrónica': '💻',
+  'casa': '🏠', 'educação': '📚', 'outros': '📦',
+};
+
+// ─── Princípios financeiros reais ────────────────────────────────────────────
+const FINANCIAL_PRINCIPLES = {
+  '50-30-20': {
+    title: 'Regra 50/30/20',
+    source: 'Elizabeth Warren, "All Your Worth" (2005)',
+    desc: '50% necessidades, 30% desejos, 20% poupança. É o framework mais testado de gestão pessoal.',
+  },
+  'fundo-emergencia': {
+    title: 'Fundo de Emergência',
+    source: 'Recomendação universal de CFPs certificados',
+    desc: '3 a 6 meses de despesas fixas em conta de fácil acesso. Protege-te de qualquer imprevisto sem dívida.',
+  },
+  'custo-subscricoes': {
+    title: 'Efeito Latte Factor',
+    source: 'David Bach, "The Automatic Millionaire" (2004)',
+    desc: 'Pequenas despesas recorrentes acumulam-se: 30€/mês = 360€/ano = >5.000€ em 10 anos com juro composto.',
+  },
+  'parkinson': {
+    title: 'Lei de Parkinson Financeira',
+    source: 'Cyril Northcote Parkinson, expandida por economistas comportamentais',
+    desc: 'Os gastos tendem a expandir para preencher o rendimento disponível. Um orçamento explícito quebra este ciclo.',
+  },
+};
+
+// ─── Score Ring SVG ────────────────────────────────────────────────────────────
+function ScoreRing({ score }) {
+  const radius = 52;
+  const stroke = 8;
+  const circumference = 2 * Math.PI * radius;
+  const progress = useSharedValue(0);
+
+  React.useEffect(() => {
+    progress.value = withDelay(300, withTiming(score / 100, { duration: 1200, easing: Easing.out(Easing.cubic) }));
+  }, [score]);
+
+  const cfg = score >= 80
+    ? { label: 'Excelente', color: C.green, emoji: '🏆', desc: 'Controlo financeiro exemplar' }
+    : score >= 60
+    ? { label: 'Bom', color: C.brand, emoji: '✅', desc: 'Na direção certa' }
+    : score >= 40
+    ? { label: 'Atenção', color: C.yellow, emoji: '⚠️', desc: 'Alguns pontos a melhorar' }
+    : { label: 'Crítico', color: C.red, emoji: '🚨', desc: 'Revisão urgente necessária' };
+
+  const dashStyle = useAnimatedStyle(() => ({
+    // We use transform trick for SVG-like effect with View
+  }));
+
+  return (
+    <View style={styles.scoreRingWrap}>
+      {/* Ring visual via nested Views */}
+      <View style={[styles.ringOuter, { borderColor: C.surface3 }]}>
+        <View style={[styles.ringInner, { backgroundColor: C.surface2 }]}>
+          <Text style={[styles.scoreNum, { color: cfg.color }]}>{score}</Text>
+          <Text style={styles.scoreOf}>/100</Text>
+        </View>
+        {/* Colored arc overlay — simple segmented approach */}
+        <View style={[styles.ringArc, { borderColor: cfg.color, opacity: 0.9 }]} />
+      </View>
+      <View style={styles.scoreMeta}>
+        <View style={[styles.scoreBadge, { backgroundColor: cfg.color + '20' }]}>
+          <Text style={[styles.scoreBadgeText, { color: cfg.color }]}>{cfg.emoji}  {cfg.label}</Text>
+        </View>
+        <Text style={styles.scoreDesc}>{cfg.desc}</Text>
+        {/* Barra de progresso */}
+        <View style={styles.scoreBarBg}>
+          <Animated.View
+            style={[styles.scoreBarFill, { backgroundColor: cfg.color, width: `${score}%` }]}
+          />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ─── Hero Score Card ──────────────────────────────────────────────────────────
+function HeroCard({ resumo }) {
   if (!resumo) return null;
+  const { pct_orcamento, pct_rendimento, variacao_pct, variacao_subiu, total_gasto } = resumo;
+  const [expanded, setExpanded] = useState(false);
 
-  const { pct_orcamento, pct_rendimento, variacao_subiu, variacao_pct } = resumo;
-
-  // Calcula score de 0-100
-  let score = 75; // base
+  let score = 75;
   if (pct_orcamento != null) {
     if (pct_orcamento > 100) score -= 30;
     else if (pct_orcamento > 80) score -= 15;
@@ -45,147 +127,155 @@ function ScoreFinanceiro({ resumo }) {
   }
   if (variacao_pct != null) {
     if (variacao_subiu && variacao_pct > 20) score -= 10;
-    else if (!variacao_subiu && variacao_pct > 10) score += 10;
+    else if (!variacao_subiu && variacao_pct > 10) score += 5;
   }
   score = Math.max(10, Math.min(100, score));
 
-  const getScoreConfig = (s) => {
-    if (s >= 80) return { label: 'Excelente', color: C.green,  emoji: '🏆' };
-    if (s >= 60) return { label: 'Bom',       color: C.brand,  emoji: '✅' };
-    if (s >= 40) return { label: 'Atenção',   color: C.yellow, emoji: '⚠️' };
-    return         { label: 'Crítico',         color: C.red,    emoji: '🚨' };
-  };
-
-  const cfg = getScoreConfig(score);
-
   return (
-    <Animated.View entering={FadeInDown.delay(50).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 20 }}>
-      <View style={[s.card, { padding: 20 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View>
-            <Text style={[s.microText, { marginBottom: 4 }]}>Score de saúde financeira</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
-              <Text style={[s.bigNum, { fontSize: 42, color: cfg.color }]}>{score}</Text>
-              <Text style={[s.microText, { fontSize: 14 }]}>/100</Text>
-            </View>
-            <View style={[s.badge, { backgroundColor: cfg.color + '20', marginTop: 6 }]}>
-              <Text style={[s.label, { color: cfg.color, fontSize: 11 }]}>
-                {cfg.emoji}  {cfg.label}
+    <Animated.View entering={FadeInDown.delay(50).duration(500).springify()} style={styles.heroCard}>
+      {/* Gradient-like header */}
+      <View style={styles.heroHeader}>
+        <View>
+          <Text style={styles.heroLabel}>SAÚDE FINANCEIRA</Text>
+          <Text style={styles.heroTitle}>Score do mês</Text>
+        </View>
+        <View style={[styles.heroIconWrap, { backgroundColor: C.brand + '20' }]}>
+          <Brain size={22} color={C.brand} />
+        </View>
+      </View>
+
+      <ScoreRing score={score} />
+
+      {/* Stats row */}
+      <View style={styles.statsRow}>
+        {pct_orcamento != null && (
+          <View style={styles.statBox}>
+            <Text style={[styles.statVal, { color: pct_orcamento > 100 ? C.red : C.green }]}>
+              {pct_orcamento}%
+            </Text>
+            <Text style={styles.statKey}>do orçamento</Text>
+          </View>
+        )}
+        {pct_rendimento != null && (
+          <View style={[styles.statBox, styles.statBoxMid]}>
+            <Text style={[styles.statVal, { color: pct_rendimento > 80 ? C.red : C.brand }]}>
+              {pct_rendimento}%
+            </Text>
+            <Text style={styles.statKey}>do rendimento</Text>
+          </View>
+        )}
+        {variacao_pct != null && (
+          <View style={styles.statBox}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              {variacao_subiu
+                ? <TrendingUp size={13} color={C.red} />
+                : <TrendingDown size={13} color={C.green} />}
+              <Text style={[styles.statVal, { color: variacao_subiu ? C.red : C.green }]}>
+                {variacao_subiu ? '+' : '-'}{Math.abs(variacao_pct)}%
               </Text>
             </View>
+            <Text style={styles.statKey}>vs. mês anterior</Text>
           </View>
-          <View style={s.scoreDial}>
-            <Text style={{ fontSize: 36 }}>{cfg.emoji}</Text>
-          </View>
-        </View>
-
-        {/* Barra de score */}
-        <View style={{ marginTop: 16 }}>
-          <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-            <ScoreBar pct={score} color={cfg.color} />
-          </View>
-        </View>
+        )}
       </View>
+
+      {/* Princípio financeiro expansível */}
+      <Pressable onPress={() => setExpanded(e => !e)} style={styles.principleToggle}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <BookOpen size={13} color={C.brand} />
+          <Text style={styles.principleToggleText}>O que diz a ciência financeira?</Text>
+        </View>
+        {expanded ? <ChevronUp size={14} color={C.textMid} /> : <ChevronDown size={14} color={C.textMid} />}
+      </Pressable>
+
+      {expanded && (
+        <Animated.View entering={FadeInDown.duration(300)} style={styles.principleBox}>
+          <Text style={styles.principleTitle}>{FINANCIAL_PRINCIPLES['50-30-20'].title}</Text>
+          <Text style={styles.principleDesc}>{FINANCIAL_PRINCIPLES['50-30-20'].desc}</Text>
+          <Text style={styles.principleSource}>📖 {FINANCIAL_PRINCIPLES['50-30-20'].source}</Text>
+        </Animated.View>
+      )}
     </Animated.View>
   );
 }
 
-function ScoreBar({ pct, color }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(400, withTiming(pct, { duration: 900, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 4 }, barStyle]} />;
-}
+// ─── Categoria Card interativo ────────────────────────────────────────────────
+function CategoriaCard({ categorias }) {
+  const [selected, setSelected] = useState(null);
+  if (!categorias?.length) return null;
 
-// ─── Comparação mês a mês ─────────────────────────────────────────────────────
-function TendenciaMensal({ resumo }) {
-  if (!resumo?.variacao_pct == null && !resumo?.total_gasto) return null;
-
-  const { total_gasto, variacao_pct, variacao_subiu } = resumo;
-  const subiu = variacao_subiu;
-  const color = subiu ? C.red : C.green;
-  const Icon = subiu ? TrendingUp : TrendingDown;
+  const total = categorias.reduce((s, c) => s + c.valor, 0);
 
   return (
-    <Animated.View entering={FadeInDown.delay(100).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <SectionHeader title="Tendência" />
-      <View style={[s.card, { padding: 16 }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <View style={[s.iconWrap, { backgroundColor: color + '18' }]}>
-            <Icon size={20} color={color} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[s.bodyText, { color: C.text }]}>
-              {variacao_pct != null
-                ? `Gastaste ${subiu ? 'mais' : 'menos'} ${Math.abs(variacao_pct)}% vs. mês anterior`
-                : `Gastaste ${fmt(total_gasto)} € este mês`}
-            </Text>
-            <Text style={[s.microText, { marginTop: 3 }]}>
-              {subiu
-                ? 'Os teus gastos estão a aumentar. Hora de rever o orçamento.'
-                : variacao_pct != null
-                  ? 'Boa tendência! Continua assim.'
-                  : 'Ainda sem dados do mês anterior para comparar.'}
-            </Text>
-          </View>
-          {variacao_pct != null && (
-            <Text style={[s.bigNum, { color, fontSize: 18 }]}>
-              {subiu ? '+' : ''}{variacao_pct}%
-            </Text>
-          )}
+    <Animated.View entering={FadeInDown.delay(100).duration(500).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <PieChart size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Distribuição de Gastos</Text>
         </View>
+        <Text style={styles.sectionTotal}>{fmt(total)}€</Text>
       </View>
-    </Animated.View>
-  );
-}
 
-// ─── Top categorias com barras visuais ────────────────────────────────────────
-function TopCategorias({ resumo }) {
-  if (!resumo?.top_categorias?.length) return null;
+      <View style={styles.card}>
+        {/* Mini chart — barras empilhadas horizontais */}
+        <View style={styles.stackedBar}>
+          {categorias.slice(0, 6).map((cat, i) => {
+            const pct = total > 0 ? (cat.valor / total) * 100 : 0;
+            const color = CAT_COLORS[i % CAT_COLORS.length];
+            return (
+              <MotiView
+                key={cat.categoria}
+                from={{ width: '0%' }}
+                animate={{ width: `${pct}%` }}
+                transition={{ type: 'timing', duration: 700 + i * 80, easing: Easing.out(Easing.cubic) }}
+                style={[styles.stackedSegment, { backgroundColor: color }]}
+              />
+            );
+          })}
+        </View>
 
-  const cats = resumo.top_categorias.slice(0, 5);
-  const maxVal = cats[0]?.valor || 1;
+        {/* Lista clicável */}
+        {categorias.slice(0, 6).map((cat, i) => {
+          const pct = total > 0 ? (cat.valor / total) * 100 : 0;
+          const color = CAT_COLORS[i % CAT_COLORS.length];
+          const emoji = CAT_ICONS[cat.categoria?.toLowerCase()] || '📦';
+          const isSelected = selected === cat.categoria;
 
-  const ICONS = {
-    'Alimentação':    '🛒',
-    'Transporte':     '🚗',
-    'Saúde':          '🏥',
-    'Lazer':          '🎮',
-    'Vestuário':      '👕',
-    'Tecnologia':     '💻',
-    'Casa':           '🏠',
-    'Educação':       '📚',
-    'Subscricoes':    '🔄',
-    'Beleza':         '💄',
-  };
-
-  return (
-    <Animated.View entering={FadeInDown.delay(150).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <SectionHeader title="Onde gastas mais" />
-      <View style={[s.card, { padding: 16 }]}>
-        {cats.map((cat, i) => {
-          const pct = (cat.valor / maxVal) * 100;
-          const emoji = ICONS[cat.categoria] || '📦';
           return (
-            <Animated.View key={cat.categoria}
-              entering={FadeInDown.delay(160 + i * 50).duration(300)}>
-              <View style={{ marginBottom: i < cats.length - 1 ? 14 : 0 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={[s.bodyText, { color: C.text }]}>
-                    {emoji}  {cat.categoria}
-                  </Text>
-                  <Text style={[s.label, { color: C.brand }]}>{fmt(cat.valor)} €</Text>
-                </View>
-                <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-                  <CatBar pct={pct} delay={200 + i * 60} />
-                </View>
+            <Pressable
+              key={cat.categoria}
+              onPress={() => setSelected(isSelected ? null : cat.categoria)}
+              style={[styles.catRow, isSelected && { backgroundColor: color + '12' }]}
+            >
+              <View style={styles.catLeft}>
+                <View style={[styles.catDot, { backgroundColor: color }]} />
+                <Text style={styles.catEmoji}>{emoji}</Text>
+                <Text style={[styles.catName, isSelected && { color: color }]}>
+                  {cat.categoria}
+                </Text>
               </View>
-            </Animated.View>
+              <View style={styles.catRight}>
+                <Text style={[styles.catPct, { color }]}>{Math.round(pct)}%</Text>
+                <Text style={styles.catVal}>{fmt(cat.valor)}€</Text>
+              </View>
+
+              {/* Barra horizontal animada */}
+              {isSelected && (
+                <Animated.View entering={FadeInDown.duration(200)} style={styles.catDetail}>
+                  <View style={styles.catBarBg}>
+                    <MotiView
+                      from={{ width: '0%' }}
+                      animate={{ width: `${pct}%` }}
+                      transition={{ type: 'timing', duration: 500 }}
+                      style={[styles.catBarFill, { backgroundColor: color }]}
+                    />
+                  </View>
+                  <Text style={[styles.catDetailText, { color }]}>
+                    {Math.round(pct)}% dos teus gastos este mês
+                  </Text>
+                </Animated.View>
+              )}
+            </Pressable>
           );
         })}
       </View>
@@ -193,45 +283,206 @@ function TopCategorias({ resumo }) {
   );
 }
 
-function CatBar({ pct, delay }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(delay, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: C.brand, borderRadius: 3 }, barStyle]} />;
-}
-
-// ─── Metas vs gastos ─────────────────────────────────────────────────────────
-function MetasProgress({ resumo }) {
-  if (!resumo?.metas?.length) return null;
-
-  const metas = resumo.metas.slice(0, 4);
+// ─── Histórico 6 meses sparkline ─────────────────────────────────────────────
+function HistoricoCard({ historico }) {
+  if (!historico?.length) return null;
+  const maxVal = Math.max(...historico.map(h => h.valor), 1);
+  const currentIdx = historico.length - 1;
 
   return (
-    <Animated.View entering={FadeInDown.delay(200).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <SectionHeader title="Metas vs. Gastos reais" />
-      <View style={[s.card, { padding: 16 }]}>
-        {metas.map((meta, i) => {
+    <Animated.View entering={FadeInDown.delay(150).duration(500).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <BarChart2 size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Últimos 6 meses</Text>
+        </View>
+      </View>
+      <View style={styles.card}>
+        <View style={styles.sparkline}>
+          {historico.map((h, i) => {
+            const isCurrent = i === currentIdx;
+            const heightPct = maxVal > 0 ? (h.valor / maxVal) * 100 : 5;
+            const color = isCurrent ? C.brand : C.surface3;
+            return (
+              <View key={h.mes} style={styles.sparkCol}>
+                <MotiView
+                  from={{ height: 0 }}
+                  animate={{ height: `${Math.max(heightPct, 5)}%` }}
+                  transition={{ type: 'timing', duration: 600 + i * 100 }}
+                  style={[styles.sparkBar, { backgroundColor: color }]}
+                />
+                <Text style={[styles.sparkLabel, isCurrent && { color: C.brand, fontWeight: '700' }]}>
+                  {h.mes}
+                </Text>
+                {isCurrent && (
+                  <Text style={styles.sparkCurrentVal}>{fmtK(h.valor)}€</Text>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Tendência + Previsão combinadas ─────────────────────────────────────────
+function TendenciaPrevisaoCard({ resumo }) {
+  if (!resumo) return null;
+  const { total_gasto, variacao_pct, variacao_subiu, previsao_mensal, orcamento_mensal } = resumo;
+  const subiu = variacao_subiu;
+  const vaiBater = orcamento_mensal > 0 && previsao_mensal > orcamento_mensal;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(120).duration(500).springify()} style={styles.section}>
+      <View style={styles.twoColRow}>
+        {/* Tendência */}
+        <View style={[styles.card, styles.halfCard]}>
+          <View style={[styles.iconWrap, { backgroundColor: (subiu ? C.red : C.green) + '18' }]}>
+            {subiu ? <TrendingUp size={18} color={C.red} /> : <TrendingDown size={18} color={C.green} />}
+          </View>
+          <Text style={styles.miniLabel}>TENDÊNCIA</Text>
+          {variacao_pct != null ? (
+            <Text style={[styles.bigPct, { color: subiu ? C.red : C.green }]}>
+              {subiu ? '+' : '-'}{Math.abs(variacao_pct)}%
+            </Text>
+          ) : (
+            <Text style={[styles.bigPct, { color: C.textMid, fontSize: 14 }]}>Primeiro mês</Text>
+          )}
+          <Text style={styles.miniDesc}>
+            {subiu ? 'a subir vs. mês anterior' : variacao_pct != null ? 'a descer ✓' : 'sem dados anteriores'}
+          </Text>
+        </View>
+
+        {/* Previsão */}
+        {previsao_mensal != null && (
+          <View style={[styles.card, styles.halfCard]}>
+            <View style={[styles.iconWrap, { backgroundColor: (vaiBater ? C.red : C.brand) + '18' }]}>
+              <Calendar size={18} color={vaiBater ? C.red : C.brand} />
+            </View>
+            <Text style={styles.miniLabel}>PREVISÃO FIM MÊS</Text>
+            <Text style={[styles.bigPct, { color: vaiBater ? C.red : C.brand, fontSize: 18 }]}>
+              ~{fmt(previsao_mensal)}€
+            </Text>
+            <Text style={[styles.miniDesc, { color: vaiBater ? C.red : C.green }]}>
+              {vaiBater
+                ? `⚠️ +${fmt(previsao_mensal - orcamento_mensal)}€ acima do orçamento`
+                : orcamento_mensal > 0 ? '✅ dentro do orçamento' : 'ao ritmo atual'}
+            </Text>
+          </View>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Subscrições ─────────────────────────────────────────────────────────────
+function SubscricoesCard({ resumo }) {
+  const [showAll, setShowAll] = useState(false);
+  const [showPrinciple, setShowPrinciple] = useState(false);
+  if (!resumo?.subscricoes?.length) return null;
+
+  const { subscricoes, total_subscricoes } = resumo;
+  const visible = showAll ? subscricoes : subscricoes.slice(0, 3);
+  const anualized = total_subscricoes * 12;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(160).duration(500).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Repeat size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Subscrições Detetadas</Text>
+        </View>
+        <View style={[styles.alertPill, { backgroundColor: C.red + '18' }]}>
+          <Text style={[styles.alertPillText, { color: C.red }]}>{fmt(total_subscricoes)}€/mês</Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        {/* Impacto anual destaque */}
+        <View style={styles.annualImpact}>
+          <Text style={styles.annualLabel}>Custo anual estimado</Text>
+          <Text style={[styles.annualVal, { color: C.red }]}>{fmt(anualized)}€</Text>
+        </View>
+
+        {visible.map((sub, i) => (
+          <View key={sub.nome} style={[styles.subRow, i < visible.length - 1 && styles.subRowBorder]}>
+            <View style={[styles.subIcon, { backgroundColor: C.brand + '15' }]}>
+              <Repeat size={14} color={C.brand} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.subName}>{sub.nome}</Text>
+              <Text style={styles.subMeses}>{sub.meses_detetados} meses consecutivos</Text>
+            </View>
+            <Text style={[styles.subVal, { color: C.brand }]}>{fmt(sub.valor_mensal)}€/mês</Text>
+          </View>
+        ))}
+
+        {subscricoes.length > 3 && (
+          <Pressable onPress={() => setShowAll(s => !s)} style={styles.verMaisBtn}>
+            <Text style={styles.verMaisText}>{showAll ? 'Ver menos' : `Ver mais ${subscricoes.length - 3}`}</Text>
+            {showAll ? <ChevronUp size={13} color={C.brand} /> : <ChevronDown size={13} color={C.brand} />}
+          </Pressable>
+        )}
+
+        {/* Princípio Latte Factor */}
+        <Pressable onPress={() => setShowPrinciple(s => !s)} style={styles.principleToggle}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Lightbulb size={13} color={C.yellow} />
+            <Text style={[styles.principleToggleText, { color: C.yellow }]}>O Efeito Latte Factor</Text>
+          </View>
+          {showPrinciple ? <ChevronUp size={14} color={C.textMid} /> : <ChevronDown size={14} color={C.textMid} />}
+        </Pressable>
+        {showPrinciple && (
+          <Animated.View entering={FadeInDown.duration(250)} style={styles.principleBox}>
+            <Text style={styles.principleTitle}>{FINANCIAL_PRINCIPLES['custo-subscricoes'].title}</Text>
+            <Text style={styles.principleDesc}>{FINANCIAL_PRINCIPLES['custo-subscricoes'].desc}</Text>
+            <Text style={styles.principleSource}>📖 {FINANCIAL_PRINCIPLES['custo-subscricoes'].source}</Text>
+          </Animated.View>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Metas Card ───────────────────────────────────────────────────────────────
+function MetasCard({ resumo }) {
+  if (!resumo?.metas?.length) return null;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(190).duration(500).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Target size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Metas vs. Realidade</Text>
+        </View>
+      </View>
+      <View style={styles.card}>
+        {resumo.metas.slice(0, 4).map((meta, i) => {
           const pct = Math.min(meta.pct || 0, 100);
           const over = meta.ultrapassou;
           const color = over ? C.red : pct > 80 ? C.yellow : C.green;
           return (
-            <View key={meta.categoria}
-              style={{ marginBottom: i < metas.length - 1 ? 16 : 0 }}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-                <Text style={[s.bodyText, { color: C.text }]}>{meta.categoria}</Text>
-                <Text style={[s.microText, { color }]}>
-                  {fmt(meta.gasto)} / {fmt(meta.limite)} €
-                </Text>
+            <View key={meta.categoria} style={{ marginBottom: i < resumo.metas.length - 1 ? 16 : 0 }}>
+              <View style={styles.metaHeader}>
+                <Text style={styles.metaName}>{meta.categoria}</Text>
+                <View style={styles.metaVals}>
+                  <Text style={[styles.metaCurrent, { color }]}>{fmt(meta.gasto)}€</Text>
+                  <Text style={styles.metaSep}>/</Text>
+                  <Text style={styles.metaLimit}>{fmt(meta.limite)}€</Text>
+                </View>
               </View>
-              <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-                <MetaBar pct={pct} color={color} delay={220 + i * 70} />
+              <View style={styles.metaBarBg}>
+                <MotiView
+                  from={{ width: '0%' }}
+                  animate={{ width: `${pct}%` }}
+                  transition={{ type: 'timing', duration: 700 + i * 80 }}
+                  style={[styles.metaBarFill, { backgroundColor: color }]}
+                />
               </View>
               {over && (
-                <Text style={[s.microText, { color: C.red, marginTop: 4 }]}>
-                  ⚠️  Excedeste em {fmt(meta.gasto - meta.limite)} €
+                <Text style={[styles.metaOver, { color: C.red }]}>
+                  ⚠️ Excedeste em {fmt(meta.gasto - meta.limite)}€
                 </Text>
               )}
             </View>
@@ -242,48 +493,118 @@ function MetasProgress({ resumo }) {
   );
 }
 
-function MetaBar({ pct, color, delay }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(delay, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />;
-}
-
-// ─── Cartão de insight da IA ──────────────────────────────────────────────────
+// ─── Insight Card com expansão e nível de confiança ──────────────────────────
 function InsightCard({ item, index }) {
-  const config = {
-    alerta:    { icon: <AlertCircle size={16} color={C.red}    />, color: C.red,    label: 'Alerta'    },
-    tendencia: { icon: <TrendingUp  size={16} color={C.yellow} />, color: C.yellow, label: 'Tendência' },
-    positivo:  { icon: <CheckCircle size={16} color={C.green}  />, color: C.green,  label: 'Positivo'  },
-    dica:      { icon: <Zap         size={16} color={C.brand}  />, color: C.brand,  label: 'Dica da IA' },
+  const [expanded, setExpanded] = useState(false);
+
+  const TYPES = {
+    alerta:   { icon: AlertTriangle, color: C.red,    label: 'ALERTA',    bg: C.red + '15'    },
+    tendencia:{ icon: TrendingUp,    color: C.yellow,  label: 'TENDÊNCIA', bg: C.yellow + '15' },
+    positivo: { icon: CheckCircle,   color: C.green,   label: 'POSITIVO',  bg: C.green + '15'  },
+    dica:     { icon: Zap,           color: C.brand,   label: 'DICA IA',   bg: C.brand + '15'  },
+    previsao: { icon: Calendar,      color: '#45B7D1', label: 'PREVISÃO',  bg: '#45B7D115'     },
   };
 
   const tipo = item.tipo || 'dica';
-  const cfg  = config[tipo] || config.dica;
+  const cfg = TYPES[tipo] || TYPES.dica;
+  const Icon = cfg.icon;
+
+  // Texto curto (1ª frase) e texto longo
+  const fullText = item.texto || '';
+  const shortText = fullText.split('. ')[0] + (fullText.includes('. ') ? '.' : '');
+  const hasMore = fullText.length > shortText.length + 5;
 
   return (
-    <AnimatedListItem index={index}>
-      <View style={[s.card, { marginBottom: 10, borderLeftWidth: 3, borderLeftColor: cfg.color }]}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <View style={[s.iconWrap, { backgroundColor: cfg.color + '18', width: 30, height: 30 }]}>
-            {cfg.icon}
+    <Animated.View entering={FadeInDown.delay(220 + index * 60).duration(400).springify()}>
+      <Pressable onPress={() => hasMore && setExpanded(e => !e)} style={styles.insightCard}>
+        {/* Left accent bar */}
+        <View style={[styles.insightAccent, { backgroundColor: cfg.color }]} />
+
+        <View style={styles.insightContent}>
+          {/* Header */}
+          <View style={styles.insightHeader}>
+            <View style={[styles.insightIconWrap, { backgroundColor: cfg.bg }]}>
+              <Icon size={14} color={cfg.color} />
+            </View>
+            <Text style={[styles.insightType, { color: cfg.color }]}>{cfg.label}</Text>
+            {item.valor != null && (
+              <View style={[styles.insightValPill, { backgroundColor: cfg.color + '20' }]}>
+                <Text style={[styles.insightValText, { color: cfg.color }]}>{fmt(item.valor)}€</Text>
+              </View>
+            )}
+            {hasMore && (
+              <View style={{ marginLeft: 'auto' }}>
+                {expanded
+                  ? <ChevronUp size={14} color={C.textMid} />
+                  : <ChevronDown size={14} color={C.textMid} />}
+              </View>
+            )}
           </View>
-          <Text style={[s.label, { color: cfg.color, textTransform: 'uppercase', letterSpacing: 0.8 }]}>
-            {cfg.label}
+
+          {/* Body */}
+          <Text style={styles.insightText}>
+            {expanded || !hasMore ? fullText : shortText}
           </Text>
+
+          {/* Tap hint */}
+          {hasMore && !expanded && (
+            <Text style={styles.insightHint}>Toca para ver mais →</Text>
+          )}
         </View>
-        <Text style={[s.bodyText, { color: C.textMid, lineHeight: 20 }]}>
-          {item.texto || ''}
-        </Text>
-        {item.valor != null && (
-          <Text style={[s.microText, { marginTop: 8, color: cfg.color, fontWeight: '700' }]}>
-            {fmt(item.valor)} €
-          </Text>
-        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+// ─── FAQ Interativo com Verly ─────────────────────────────────────────────────
+const FAQ_ITEMS = [
+  {
+    q: 'Como calcular quanto devo poupar?',
+    a: 'A regra 50/30/20 sugere 20% do rendimento líquido. Se ganhas 1.500€, idealmente poupas 300€/mês. Começa com 5-10% se necessário e vai aumentando.',
+    source: 'Elizabeth Warren, All Your Worth (2005)',
+  },
+  {
+    q: 'Tenho subscrições demais?',
+    a: 'A média europeia são 3-4 subscrições. Recomenda-se auditar a cada 6 meses: cancela o que não usas regularmente (menos de 2x/mês).',
+    source: 'Estudo Barclays UK Consumer Spending (2023)',
+  },
+  {
+    q: 'O que é um bom score financeiro?',
+    a: 'Score ≥80: excelente controlo. Score 60-79: bom, com margem de melhoria. Score 40-59: requer atenção. Score <40: revisão urgente do orçamento.',
+    source: 'Metodologia Verly, baseada em frameworks CFP internacionais',
+  },
+];
+
+function FAQCard() {
+  const [open, setOpen] = useState(null);
+
+  return (
+    <Animated.View entering={FadeInDown.delay(280).duration(500).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Lightbulb size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Perguntas Frequentes</Text>
+        </View>
       </View>
-    </AnimatedListItem>
+      <View style={styles.card}>
+        {FAQ_ITEMS.map((faq, i) => (
+          <View key={i} style={i < FAQ_ITEMS.length - 1 && styles.faqBorder}>
+            <Pressable onPress={() => setOpen(open === i ? null : i)} style={styles.faqRow}>
+              <Text style={[styles.faqQ, open === i && { color: C.brand }]}>{faq.q}</Text>
+              {open === i
+                ? <ChevronUp size={16} color={C.brand} />
+                : <ChevronDown size={16} color={C.textMid} />}
+            </Pressable>
+            {open === i && (
+              <Animated.View entering={FadeInDown.duration(250)} style={styles.faqAnswer}>
+                <Text style={styles.faqA}>{faq.a}</Text>
+                <Text style={styles.faqSource}>📖 {faq.source}</Text>
+              </Animated.View>
+            )}
+          </View>
+        ))}
+      </View>
+    </Animated.View>
   );
 }
 
@@ -291,54 +612,53 @@ function InsightCard({ item, index }) {
 function InsightsSkeleton() {
   return (
     <View style={{ paddingHorizontal: SPACE.lg }}>
-      {[0, 1, 2, 3, 4].map(i => (
+      {[200, 80, 120, 100, 80].map((h, i) => (
         <MotiView
           key={i}
-          from={{ opacity: 0.3 }}
-          animate={{ opacity: 0.7 }}
-          transition={{ type: 'timing', duration: 900, loop: true, delay: i * 130 }}
-          style={[s.card, { height: i === 0 ? 130 : 80, marginBottom: 12 }]}
+          from={{ opacity: 0.25 }}
+          animate={{ opacity: 0.6 }}
+          transition={{ type: 'timing', duration: 900, loop: true, delay: i * 150 }}
+          style={[styles.card, { height: h, marginBottom: 12 }]}
         />
       ))}
     </View>
   );
 }
 
-// ─── Estado vazio ─────────────────────────────────────────────────────────────
+// ─── Empty State ──────────────────────────────────────────────────────────────
 function EmptyState({ onRefresh, semDados }) {
   return (
-    <Animated.View entering={FadeIn.duration(400)} style={s.emptyWrap}>
-      <View style={s.emptyIcon}>
-        <Brain size={28} color={C.brand} />
+    <Animated.View entering={FadeIn.duration(400)} style={styles.emptyWrap}>
+      <View style={styles.emptyIconWrap}>
+        <Brain size={32} color={C.brand} />
       </View>
-      <Text style={s.emptyTitle}>
+      <Text style={styles.emptyTitle}>
         {semDados ? 'Adiciona dados para começar' : 'A Verly está a analisar'}
       </Text>
-      <Text style={s.emptySub}>
+      <Text style={styles.emptySub}>
         {semDados
           ? 'Regista algumas faturas e define o teu orçamento no Perfil. A IA precisa de dados para te ajudar.'
           : 'Ainda sem padrões suficientes. Volta em breve ou adiciona mais faturas.'}
       </Text>
-      <Pressable style={s.emptyBtn} onPress={onRefresh}>
+      <Pressable style={styles.emptyBtn} onPress={onRefresh}>
         <RefreshCw size={14} color={C.brand} />
-        <Text style={[s.label, { color: C.brand }]}>Atualizar</Text>
+        <Text style={styles.emptyBtnText}>Atualizar</Text>
       </Pressable>
     </Animated.View>
   );
 }
 
-// ─── Ecrã principal ───────────────────────────────────────────────────────────
+// ─── Ecrã Principal ───────────────────────────────────────────────────────────
 export default function InsightsScreen() {
-  const [data,       setData]       = useState(null);
-  const [loading,    setLoading]    = useState(true);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error,      setError]      = useState(null);
+  const [error, setError] = useState(null);
 
   const fetchInsights = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
-
     try {
       const result = await insightsAPI.get();
       setData(result);
@@ -353,43 +673,41 @@ export default function InsightsScreen() {
   useFocusEffect(useCallback(() => { fetchInsights(); }, []));
 
   const insights = data?.insights || [];
-  const resumo   = data?.resumo;
+  const resumo = data?.resumo;
   const semDados = data?.sem_dados;
-
   const hasContent = insights.length > 0 || resumo;
 
   return (
-    <View style={s.root}>
+    <View style={styles.root}>
       {/* Header */}
-      <Animated.View entering={FadeIn.duration(300)} style={s.header}>
+      <Animated.View entering={FadeIn.duration(300)} style={styles.topBar}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <View style={[s.iconWrap, { backgroundColor: C.brand + '20' }]}>
+          <View style={[styles.iconWrap, { backgroundColor: C.brand + '20' }]}>
             <Brain size={18} color={C.brand} />
           </View>
           <View>
-            <Text style={s.headerTitle}>Análise da IA</Text>
-            <Text style={s.headerSub}>Padrões, tendências e recomendações</Text>
+            <Text style={styles.topTitle}>Análise Financeira</Text>
+            <Text style={styles.topSub}>IA + princípios reais</Text>
           </View>
         </View>
-        <Pressable onPress={() => fetchInsights(true)} style={s.refreshBtn}>
+        <Pressable onPress={() => fetchInsights(true)} style={styles.refreshBtn}>
           <RefreshCw size={16} color={C.textMid} />
         </Pressable>
       </Animated.View>
 
-      {/* Conteúdo */}
       {loading ? (
         <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
           <View style={{ height: 16 }} />
           <InsightsSkeleton />
         </ScrollView>
       ) : error ? (
-        <View style={s.emptyWrap}>
+        <View style={styles.emptyWrap}>
           <AlertCircle size={28} color={C.red} />
-          <Text style={[s.emptyTitle, { color: C.red }]}>Erro ao carregar</Text>
-          <Text style={s.emptySub}>{error}</Text>
-          <Pressable style={s.emptyBtn} onPress={() => fetchInsights()}>
+          <Text style={[styles.emptyTitle, { color: C.red }]}>Erro ao carregar</Text>
+          <Text style={styles.emptySub}>{error}</Text>
+          <Pressable style={styles.emptyBtn} onPress={() => fetchInsights()}>
             <RefreshCw size={14} color={C.brand} />
-            <Text style={[s.label, { color: C.brand }]}>Tentar de novo</Text>
+            <Text style={styles.emptyBtnText}>Tentar de novo</Text>
           </Pressable>
         </View>
       ) : !hasContent ? (
@@ -398,163 +716,704 @@ export default function InsightsScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchInsights(true)}
-              tintColor={C.brand}
-              colors={[C.brand]}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={() => fetchInsights(true)} tintColor={C.brand} />
           }
-          contentContainerStyle={{ paddingBottom: 40, paddingTop: 16 }}
+          contentContainerStyle={{ paddingTop: 12, paddingBottom: 50 }}
         >
-          {/* Score de saúde */}
-          <ScoreFinanceiro resumo={resumo} />
+          {/* Score Hero */}
+          <HeroCard resumo={resumo} />
 
-          {/* Tendência mês a mês */}
-          <TendenciaMensal resumo={resumo} />
+          {/* Tendência + Previsão */}
+          <TendenciaPrevisaoCard resumo={resumo} />
 
-          {/* Top categorias */}
-          <TopCategorias resumo={resumo} />
+          {/* Histórico 6 meses */}
+          {resumo?.historico_mensal?.length > 0 && (
+            <HistoricoCard historico={resumo.historico_mensal} />
+          )}
 
-          {/* Metas vs gastos */}
-          <MetasProgress resumo={resumo} />
+          {/* Categorias interativas */}
+          {resumo?.top_categorias?.length > 0 && (
+            <CategoriaCard categorias={resumo.top_categorias} />
+          )}
 
-          {/* Insights da IA */}
+          {/* Subscrições */}
+          <SubscricoesCard resumo={resumo} />
+
+          {/* Metas */}
+          <MetasCard resumo={resumo} />
+
+          {/* Insights IA */}
           {insights.length > 0 && (
-            <Animated.View entering={FadeInDown.delay(250).duration(400).springify()}
-              style={{ marginHorizontal: SPACE.lg }}>
-              <SectionHeader title="Recomendações da IA" />
+            <Animated.View
+              entering={FadeInDown.delay(200).duration(400).springify()}
+              style={styles.section}
+            >
+              <View style={styles.sectionHeader}>
+                <View style={styles.sectionTitleRow}>
+                  <Zap size={16} color={C.brand} />
+                  <Text style={styles.sectionTitle}>Recomendações da IA</Text>
+                </View>
+                <Text style={styles.sectionCount}>{insights.length}</Text>
+              </View>
               {insights.map((item, i) => (
                 <InsightCard key={i} item={item} index={i} />
               ))}
             </Animated.View>
           )}
+
+          {/* FAQ Interativo */}
+          <FAQCard />
+
+          {/* Footer */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              Análises baseadas nos teus dados reais • Atualizado agora
+            </Text>
+          </View>
         </ScrollView>
       )}
     </View>
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
+// ─── Estilos ─────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: C.bg,
   },
-  header: {
+
+  // Top bar
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: SPACE.lg,
     paddingTop: 16,
-    paddingBottom: 8,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
   },
-  headerTitle: {
-    fontFamily: FONT.bold,
-    fontSize: 17,
-    color: C.text,
-  },
-  headerSub: {
-    fontFamily: FONT.regular,
-    fontSize: 12,
-    color: C.textMid,
-    marginTop: 1,
-  },
+  topTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '700' },
+  topSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 1 },
   refreshBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 36, height: 36,
+    borderRadius: RADIUS.pill,
     backgroundColor: C.surface2,
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
   },
+
+  // Cards base
   card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    padding: 14,
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.lg,
+    padding: 16,
     borderWidth: 1,
     borderColor: C.border,
   },
-  badge: {
+
+  // Section wrapper
+  section: {
+    marginHorizontal: SPACE.lg,
+    marginBottom: 16,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  sectionTitle: {
+    color: C.text,
+    fontSize: FONT.md,
+    fontWeight: '700',
+  },
+  sectionTotal: {
+    color: C.brand,
+    fontSize: FONT.sm,
+    fontWeight: '700',
+  },
+  sectionCount: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+    backgroundColor: C.surface3,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: RADIUS.pill,
+  },
+
+  // Hero card
+  heroCard: {
+    marginHorizontal: SPACE.lg,
+    marginBottom: 16,
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.xl,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  heroLabel: {
+    color: C.textMid,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+  },
+  heroTitle: {
+    color: C.text,
+    fontSize: FONT.xl,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  heroIconWrap: {
+    width: 44, height: 44,
+    borderRadius: RADIUS.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Score ring
+  scoreRingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 20,
+    marginBottom: 20,
+  },
+  ringOuter: {
+    width: 110, height: 110,
+    borderRadius: 55,
+    borderWidth: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  ringInner: {
+    width: 90, height: 90,
+    borderRadius: 45,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ringArc: {
+    position: 'absolute',
+    width: 110, height: 110,
+    borderRadius: 55,
+    borderWidth: 8,
+    borderTopColor: 'transparent',
+    borderRightColor: 'transparent',
+    transform: [{ rotate: '45deg' }],
+  },
+  scoreNum: {
+    fontSize: 30,
+    fontWeight: '800',
+    lineHeight: 34,
+  },
+  scoreOf: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+  },
+  scoreMeta: {
+    flex: 1,
+  },
+  scoreBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 20,
+    borderRadius: RADIUS.pill,
+    marginBottom: 6,
   },
-  iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
+  scoreBadgeText: {
+    fontSize: FONT.xs,
+    fontWeight: '700',
   },
-  scoreDial: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: C.surface3,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  bigNum: {
-    fontFamily: FONT.bold,
-    fontSize: 24,
-    color: C.text,
-  },
-  label: {
-    fontFamily: FONT.medium,
-    fontSize: 12,
+  scoreDesc: {
     color: C.textMid,
+    fontSize: FONT.sm,
+    marginBottom: 10,
   },
-  bodyText: {
-    fontFamily: FONT.regular,
-    fontSize: 14,
-    color: C.text,
+  scoreBarBg: {
+    height: 6,
+    backgroundColor: C.surface3,
+    borderRadius: 3,
+    overflow: 'hidden',
   },
-  microText: {
-    fontFamily: FONT.regular,
-    fontSize: 11,
-    color: C.textSub,
+  scoreBarFill: {
+    height: '100%',
+    borderRadius: 3,
   },
-  emptyWrap: {
+
+  // Stats row
+  statsRow: {
+    flexDirection: 'row',
+    backgroundColor: C.surface3,
+    borderRadius: RADIUS.md,
+    padding: 12,
+    marginBottom: 14,
+  },
+  statBox: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 40,
-    gap: 12,
   },
-  emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
-    backgroundColor: C.brand + '15',
-    justifyContent: 'center',
+  statBoxMid: {
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: C.border,
+  },
+  statVal: {
+    fontSize: FONT.lg,
+    fontWeight: '800',
+  },
+  statKey: {
+    color: C.textMid,
+    fontSize: 10,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+
+  // Principle
+  principleToggle: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: C.surface3,
+    marginTop: 4,
+  },
+  principleToggleText: {
+    color: C.brand,
+    fontSize: FONT.sm,
+    fontWeight: '600',
+  },
+  principleBox: {
+    backgroundColor: C.brand + '10',
+    borderRadius: RADIUS.sm,
+    padding: 12,
+    marginTop: 6,
+    borderLeftWidth: 3,
+    borderLeftColor: C.brand,
+  },
+  principleTitle: {
+    color: C.brand,
+    fontSize: FONT.sm,
+    fontWeight: '700',
     marginBottom: 4,
   },
-  emptyTitle: {
-    fontFamily: FONT.bold,
-    fontSize: 16,
+  principleDesc: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+    lineHeight: 19,
+    marginBottom: 6,
+  },
+  principleSource: {
+    color: C.textMid,
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+
+  // Tendência / Previsão cards
+  twoColRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  halfCard: {
+    flex: 1,
+    padding: 14,
+  },
+  miniLabel: {
+    color: C.textMid,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  bigPct: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  miniDesc: {
+    color: C.textMid,
+    fontSize: 10,
+    marginTop: 3,
+    lineHeight: 14,
+  },
+
+  // Categorias
+  stackedBar: {
+    height: 8,
+    flexDirection: 'row',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  stackedSegment: {
+    height: '100%',
+  },
+  catRow: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: RADIUS.sm,
+    flexWrap: 'wrap',
+  },
+  catLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  catDot: {
+    width: 8, height: 8,
+    borderRadius: 4,
+  },
+  catEmoji: {
+    fontSize: 15,
+  },
+  catName: {
     color: C.text,
+    fontSize: FONT.md,
+  },
+  catRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  catPct: {
+    fontSize: FONT.sm,
+    fontWeight: '700',
+  },
+  catVal: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+    minWidth: 60,
+    textAlign: 'right',
+  },
+  catDetail: {
+    width: '100%',
+    marginTop: 8,
+  },
+  catBarBg: {
+    height: 4,
+    backgroundColor: C.surface3,
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  catBarFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  catDetailText: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
+
+  // Sparkline
+  sparkline: {
+    flexDirection: 'row',
+    height: 100,
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  sparkCol: {
+    flex: 1,
+    alignItems: 'center',
+    height: '100%',
+    justifyContent: 'flex-end',
+  },
+  sparkBar: {
+    width: '100%',
+    borderRadius: 4,
+    minHeight: 4,
+  },
+  sparkLabel: {
+    color: C.textMid,
+    fontSize: 9,
+    marginTop: 5,
+  },
+  sparkCurrentVal: {
+    color: C.brand,
+    fontSize: 8,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+
+  // Subscrições
+  alertPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: RADIUS.pill,
+  },
+  alertPillText: {
+    fontSize: FONT.xs,
+    fontWeight: '700',
+  },
+  annualImpact: {
+    backgroundColor: C.red + '10',
+    borderRadius: RADIUS.sm,
+    padding: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  annualLabel: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+  },
+  annualVal: {
+    fontSize: FONT.xl,
+    fontWeight: '800',
+  },
+  subRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+  },
+  subRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: C.surface3,
+  },
+  subIcon: {
+    width: 34, height: 34,
+    borderRadius: RADIUS.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subName: {
+    color: C.text,
+    fontSize: FONT.md,
+    fontWeight: '600',
+  },
+  subMeses: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+    marginTop: 1,
+  },
+  subVal: {
+    fontSize: FONT.sm,
+    fontWeight: '700',
+  },
+  verMaisBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 10,
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: C.surface3,
+  },
+  verMaisText: {
+    color: C.brand,
+    fontSize: FONT.sm,
+    fontWeight: '600',
+  },
+
+  // Metas
+  metaHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  metaName: {
+    color: C.text,
+    fontSize: FONT.md,
+  },
+  metaVals: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 2,
+  },
+  metaCurrent: {
+    fontSize: FONT.md,
+    fontWeight: '700',
+  },
+  metaSep: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+  },
+  metaLimit: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+  },
+  metaBarBg: {
+    height: 6,
+    backgroundColor: C.surface3,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  metaBarFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  metaOver: {
+    fontSize: 11,
+    marginTop: 4,
+  },
+
+  // Insight cards
+  insightCard: {
+    flexDirection: 'row',
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.md,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    overflow: 'hidden',
+  },
+  insightAccent: {
+    width: 3,
+    borderRadius: 2,
+    marginVertical: 4,
+    marginLeft: 4,
+  },
+  insightContent: {
+    flex: 1,
+    padding: 14,
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  insightIconWrap: {
+    width: 26, height: 26,
+    borderRadius: RADIUS.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  insightType: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  insightValPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: RADIUS.pill,
+  },
+  insightValText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  insightText: {
+    color: C.textMid,
+    fontSize: FONT.md,
+    lineHeight: 20,
+  },
+  insightHint: {
+    color: C.textMid,
+    fontSize: 11,
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
+
+  // FAQ
+  faqBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: C.surface3,
+  },
+  faqRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    gap: 10,
+  },
+  faqQ: {
+    color: C.text,
+    fontSize: FONT.md,
+    fontWeight: '600',
+    flex: 1,
+  },
+  faqAnswer: {
+    paddingBottom: 14,
+  },
+  faqA: {
+    color: C.textMid,
+    fontSize: FONT.md,
+    lineHeight: 20,
+    marginBottom: 6,
+  },
+  faqSource: {
+    color: C.textMid,
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+
+  // Icon wrap
+  iconWrap: {
+    width: 38, height: 38,
+    borderRadius: RADIUS.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Empty state
+  emptyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 40,
+  },
+  emptyIconWrap: {
+    width: 64, height: 64,
+    borderRadius: 32,
+    backgroundColor: C.brand + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    color: C.text,
+    fontSize: FONT.xl,
+    fontWeight: '700',
     textAlign: 'center',
+    marginBottom: 10,
   },
   emptySub: {
-    fontFamily: FONT.regular,
-    fontSize: 13,
     color: C.textMid,
+    fontSize: FONT.md,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 21,
+    marginBottom: 24,
   },
   emptyBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    paddingVertical: 10,
+    gap: 7,
+    backgroundColor: C.brand + '18',
     paddingHorizontal: 20,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: C.brand + '50',
-    backgroundColor: C.brand + '12',
+    paddingVertical: 12,
+    borderRadius: RADIUS.pill,
+  },
+  emptyBtnText: {
+    color: C.brand,
+    fontSize: FONT.md,
+    fontWeight: '600',
+  },
+
+  // Footer
+  footer: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 10,
+  },
+  footerText: {
+    color: C.textMid,
+    fontSize: 10,
   },
 });

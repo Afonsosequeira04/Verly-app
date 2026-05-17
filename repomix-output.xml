@@ -94,6 +94,7 @@ dados_utilizadores/3/pullbear_tshirts.txt
 dados_utilizadores/5/sephora_skincare.txt
 enviar_alertas.py
 firebase-service-account.json
+migrate_prod.py
 migration_email_confirm.py
 migration_gmail_fix.py
 migration_personalidade.py
@@ -1034,358 +1035,6 @@ def gmail_sync_status():
         'gmail_email':        conn.gmail_email,
         'ultima_sync':        conn.ultima_sync.isoformat() if conn.ultima_sync else None,
         'faturas_importadas': conn.faturas_importadas or 0,
-    })
-</file>
-
-<file path="app/api/insights.py">
-"""
-app/api/insights.py — Insights da Verly com IA real
-
-GET /api/v1/insights
-    Gera insights personalizados com base nos dados reais do utilizador.
-    Usa o LLM (Groq via LlamaIndex) que já existe no projeto.
-    Devolve até 6 insights categorizados por tipo: alerta, tendencia, positivo, dica.
-
-Registar em app/api/__init__.py:
-    from app.api import insights  # noqa
-"""
-
-import json
-from collections import defaultdict
-from datetime import datetime, timedelta
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import Fatura, User, Meta
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _parse_date(date_str):
-    if not date_str:
-        return None
-    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
-        try:
-            return datetime.strptime(str(date_str).strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _get_data_obj(f):
-    d = _parse_date(f.data_compra)
-    if d:
-        return d
-    if f.data_upload:
-        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(f.data_upload.date(), datetime.min.time())
-    return None
-
-
-def _build_context(user_id: int) -> dict:
-    """Recolhe todos os dados financeiros do utilizador para contexto do LLM."""
-    hoje = datetime.utcnow()
-    mes_atual = hoje.month
-    ano_atual = hoje.year
-
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
-    metas = Meta.query.filter_by(user_id=user_id).all()
-    user = User.query.get(user_id)
-
-    # ── Gastos do mês atual ───────────────────────────────────────────────────
-    gastos_mes = defaultdict(float)
-    gastos_mes_anterior = defaultdict(float)
-    total_mes = 0.0
-    total_mes_anterior = 0.0
-    faturas_mes = []
-
-    for f in faturas:
-        data = _get_data_obj(f)
-        if not data:
-            continue
-        valor = f.total or 0
-        cat = f.categoria or 'Outros'
-
-        if data.month == mes_atual and data.year == ano_atual:
-            gastos_mes[cat] += valor
-            total_mes += valor
-            faturas_mes.append({
-                'loja': f.loja or f.nome_ficheiro or 'Desconhecida',
-                'categoria': cat,
-                'valor': round(valor, 2),
-                'data': data.strftime('%d/%m/%Y'),
-            })
-        elif data.month == (mes_atual - 1 or 12) and data.year == (ano_atual if mes_atual > 1 else ano_atual - 1):
-            gastos_mes_anterior[cat] += valor
-            total_mes_anterior += valor
-
-    # ── Top categorias ────────────────────────────────────────────────────────
-    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:5]
-
-    # ── Metas vs gastos ───────────────────────────────────────────────────────
-    metas_info = []
-    for m in metas:
-        gasto = gastos_mes.get(m.categoria, 0)
-        pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
-        metas_info.append({
-            'categoria': m.categoria,
-            'limite': round(m.valor_limite, 2),
-            'gasto': round(gasto, 2),
-            'pct': round(pct, 1),
-            'ultrapassou': gasto > m.valor_limite,
-        })
-
-    # ── Variação mês anterior ─────────────────────────────────────────────────
-    variacao_pct = None
-    if total_mes_anterior > 0:
-        variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
-
-    # ── Rendimento e orçamento ────────────────────────────────────────────────
-    rendimento = getattr(user, 'rendimento_mensal', None) or 0
-    orcamento = getattr(user, 'orcamento_mensal', None) or 0
-    nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
-    objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
-    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
-
-    return {
-        'nome': nome.split()[0] if nome else 'utilizador',
-        'personalidade': personalidade,
-        'objetivo': objetivo,
-        'rendimento_mensal': round(rendimento, 2),
-        'orcamento_mensal': round(orcamento, 2),
-        'total_gasto_mes': round(total_mes, 2),
-        'total_gasto_mes_anterior': round(total_mes_anterior, 2),
-        'variacao_pct': variacao_pct,
-        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
-        'metas': metas_info,
-        'num_faturas_mes': len(faturas_mes),
-        'faturas_recentes': faturas_mes[-5:],  # últimas 5
-    }
-
-
-def _gerar_insights_llm(ctx: dict, personalidade: str) -> list:
-    """Chama o LLM para gerar insights personalizados."""
-
-    SYSTEM_PROMPTS = {
-        'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
-Analisa os dados financeiros e dá insights cortantes mas verdadeiros.
-Sem rodeios. Linguagem direta.""",
-
-        'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
-Analisa os dados financeiros com ironia inteligente mas construtiva.""",
-
-        'calm': """És a Verly, uma coach financeira empática e construtiva.
-Analisa os dados financeiros com tom equilibrado e encorajador.""",
-
-        'pro': """És a Verly, um CFO pessoal analítico.
-Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
-    }
-
-    system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
-
-    # Construir resumo de metas para o prompt
-    metas_txt = ''
-    if ctx['metas']:
-        linhas = []
-        for m in ctx['metas']:
-            status = 'ULTRAPASSOU' if m['ultrapassou'] else f"{m['pct']}% usado"
-            linhas.append(f"  - {m['categoria']}: limite {m['limite']}€, gasto {m['gasto']}€ ({status})")
-        metas_txt = '\nMetas:\n' + '\n'.join(linhas)
-
-    variacao_txt = ''
-    if ctx['variacao_pct'] is not None:
-        sinal = '+' if ctx['variacao_pct'] > 0 else ''
-        variacao_txt = f"\nVariação vs mês anterior: {sinal}{ctx['variacao_pct']}%"
-
-    rendimento_txt = ''
-    if ctx['rendimento_mensal'] > 0:
-        pct_rendimento = round((ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100, 1)
-        rendimento_txt = f"\nRendimento mensal: {ctx['rendimento_mensal']}€ (gastou {pct_rendimento}% do rendimento)"
-
-    orcamento_txt = ''
-    if ctx['orcamento_mensal'] > 0:
-        pct_orc = round((ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100, 1)
-        orcamento_txt = f"\nOrçamento mensal definido: {ctx['orcamento_mensal']}€ ({pct_orc}% usado)"
-
-    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
-
-    user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
-
-Total gasto: {ctx['total_gasto_mes']}€
-Número de faturas: {ctx['num_faturas_mes']}
-Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}
-
-Top categorias de gasto:
-{top_cats_txt}{metas_txt}
-
-Gera exatamente 4 insights personalizados e relevantes com base nestes dados reais.
-Cada insight deve ter um tipo diferente se possível: alerta, tendencia, positivo, dica.
-
-Regras:
-- Usa os valores reais dos dados (não inventes números)
-- Sé específico — menciona categorias, valores, percentagens reais
-- Se não houver dados suficientes para um tipo, repete outro tipo
-- Adapta o tom à personalidade: {personalidade}
-
-Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
-[
-  {{
-    "tipo": "alerta|tendencia|positivo|dica",
-    "texto": "frase do insight (máx 2 frases, tom adaptado à personalidade)",
-    "valor": null ou número relevante
-  }},
-  ...
-]"""
-
-    try:
-        from llama_index.core import Settings
-        llm = Settings.llm
-        response = llm.complete(user_prompt, system_prompt=system)
-        raw = str(response).strip()
-
-        # Limpar possível markdown
-        if raw.startswith('```'):
-            raw = raw.split('```')[1]
-            if raw.startswith('json'):
-                raw = raw[4:]
-        raw = raw.strip().rstrip('```').strip()
-
-        insights = json.loads(raw)
-
-        # Validar e limpar
-        valid = []
-        for item in insights:
-            if isinstance(item, dict) and 'tipo' in item and 'texto' in item:
-                valid.append({
-                    'tipo': item.get('tipo', 'dica'),
-                    'texto': str(item.get('texto', '')),
-                    'valor': item.get('valor'),
-                })
-        return valid[:6]
-
-    except Exception as e:
-        # Fallback: insights estáticos baseados nos dados reais
-        return _fallback_insights(ctx)
-
-
-def _fallback_insights(ctx: dict) -> list:
-    """Insights determinísticos quando o LLM falha, baseados nos dados reais."""
-    insights = []
-
-    # 1. Variação vs mês anterior
-    if ctx['variacao_pct'] is not None:
-        if ctx['variacao_pct'] > 15:
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"Gastaste {ctx['variacao_pct']}% mais do que no mês passado. Verifica o que aumentou nas tuas despesas.",
-                'valor': ctx['total_gasto_mes'],
-            })
-        elif ctx['variacao_pct'] < -10:
-            insights.append({
-                'tipo': 'positivo',
-                'texto': f"Boa gestão! Reduziste os gastos em {abs(ctx['variacao_pct'])}% em relação ao mês anterior.",
-                'valor': ctx['total_gasto_mes'],
-            })
-
-    # 2. Orçamento
-    if ctx['orcamento_mensal'] > 0:
-        pct = (ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100
-        if pct > 90:
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"Já usaste {round(pct, 0):.0f}% do teu orçamento mensal de {ctx['orcamento_mensal']}€.",
-                'valor': ctx['orcamento_mensal'] - ctx['total_gasto_mes'],
-            })
-        elif pct < 50:
-            insights.append({
-                'tipo': 'positivo',
-                'texto': f"Estás em boa forma — apenas {round(pct, 0):.0f}% do orçamento mensal usado.",
-                'valor': ctx['orcamento_mensal'] - ctx['total_gasto_mes'],
-            })
-
-    # 3. Rendimento
-    if ctx['rendimento_mensal'] > 0:
-        pct = (ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100
-        insights.append({
-            'tipo': 'tendencia',
-            'texto': f"Este mês usaste {round(pct, 1)}% do teu rendimento. O ideal é ficar abaixo de 70%.",
-            'valor': ctx['total_gasto_mes'],
-        })
-
-    # 4. Metas ultrapassadas
-    for m in ctx['metas']:
-        if m['ultrapassou']:
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"Ultrapassaste o limite de {m['categoria']} ({m['limite']}€). Gasto atual: {m['gasto']}€.",
-                'valor': m['gasto'],
-            })
-            break
-
-    # 5. Top categoria
-    if ctx['top_categorias']:
-        top = ctx['top_categorias'][0]
-        insights.append({
-            'tipo': 'dica',
-            'texto': f"A tua principal despesa este mês é {top['categoria']} com {top['valor']}€. Há espaço para reduzir?",
-            'valor': top['valor'],
-        })
-
-    # 6. Padrão de compras
-    if ctx['num_faturas_mes'] > 10:
-        insights.append({
-            'tipo': 'tendencia',
-            'texto': f"Fizeste {ctx['num_faturas_mes']} compras este mês. Consolida compras para poupar em portes e impulsos.",
-            'valor': None,
-        })
-    elif ctx['num_faturas_mes'] == 0:
-        insights.append({
-            'tipo': 'dica',
-            'texto': "Ainda não tens faturas este mês. Começa a registar as tuas despesas para insights mais precisos.",
-            'valor': None,
-        })
-
-    return insights[:6] if insights else [
-        {
-            'tipo': 'dica',
-            'texto': "Adiciona faturas e define um orçamento mensal para a Verly te dar insights personalizados.",
-            'valor': None,
-        }
-    ]
-
-
-# ── Endpoint principal ────────────────────────────────────────────────────────
-
-@api_bp.route('/insights', methods=['GET'])
-@jwt_required()
-def get_insights():
-    """
-    Gera insights personalizados com IA para o utilizador autenticado.
-    Combina dados reais (gastos, metas, rendimento) com o LLM do projeto.
-    """
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
-
-    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
-
-    ctx = _build_context(user_id)
-    insights = _gerar_insights_llm(ctx, personalidade)
-
-    return jsonify({
-        'success': True,
-        'insights': insights,
-        'resumo': {
-            'total_gasto': ctx['total_gasto_mes'],
-            'num_faturas': ctx['num_faturas_mes'],
-            'variacao_pct': ctx['variacao_pct'],
-            'variacao_subiu': (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal': ctx['orcamento_mensal'],
-            'rendimento_mensal': ctx['rendimento_mensal'],
-            'pct_orcamento': round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1) if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento': round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1) if ctx['rendimento_mensal'] > 0 else None,
-        },
-        'personalidade': personalidade,
     })
 </file>
 
@@ -4267,6 +3916,42 @@ if __name__ == "__main__":
     main()
 </file>
 
+<file path="migrate_prod.py">
+"""
+migrate_prod.py — Cria todas as tabelas no PostgreSQL de produção.
+Corre uma vez após o deploy: python migrate_prod.py
+"""
+import os
+import sys
+
+# Forçar ambiente de produção
+os.environ['FLASK_ENV'] = 'production'
+
+from app import create_app, db
+from app.models import (
+    User, Fatura, Conversa, Meta, ContaBancaria,
+    Subscricao, Playlist, playlist_fatura, playlist_membro
+)
+
+try:
+    from app.models import GmailConnection
+except ImportError:
+    GmailConnection = None
+
+app = create_app()
+
+with app.app_context():
+    print("A criar tabelas no PostgreSQL...")
+    db.create_all()
+    print("✅ Todas as tabelas criadas com sucesso!")
+    
+    # Listar tabelas criadas
+    from sqlalchemy import inspect
+    inspector = inspect(db.engine)
+    tables = inspector.get_table_names()
+    print(f"Tabelas: {', '.join(tables)}")
+</file>
+
 <file path="migration_email_confirm.py">
 """
 migration_email_confirm.py — Adiciona campos de confirmação de email ao modelo User
@@ -5977,43 +5662,6 @@ apply plugin: 'com.google.gms.google-services'
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
 
     <application android:usesCleartextTraffic="true" tools:targetApi="28" tools:ignore="GoogleAppIndexingWarning" tools:replace="android:usesCleartextTraffic" />
-</manifest>
-</file>
-
-<file path="verly-mobile/android/app/src/main/AndroidManifest.xml">
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-  <uses-permission android:name="android.permission.INTERNET"/>
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-  <uses-permission android:name="android.permission.VIBRATE"/>
-  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-  <queries>
-    <intent>
-      <action android:name="android.intent.action.VIEW"/>
-      <category android:name="android.intent.category.BROWSABLE"/>
-      <data android:scheme="https"/>
-    </intent>
-  </queries>
-  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
-    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
-    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
-    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
-    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+verly-mobile"/>
-      </intent-filter>
-    </activity>
-  </application>
 </manifest>
 </file>
 
@@ -9618,8 +9266,7 @@ const styles = StyleSheet.create({
 
 <file path="verly-mobile/src/screens/InsightsScreen.js">
 // src/screens/InsightsScreen.js — Análise de padrões, tendências e IA
-// DIFERENTE do Dashboard: aqui é o PORQUÊ e O QUE FAZER, não o resumo rápido
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, Pressable,
   StyleSheet, RefreshControl, ActivityIndicator,
@@ -9633,9 +9280,8 @@ import Animated, {
 import { MotiView } from 'moti';
 import {
   Zap, TrendingUp, TrendingDown, AlertCircle,
-  CheckCircle, Brain, BarChart2, Target,
-  RefreshCw, Flame, Clock, Award, ArrowRight,
-  ShoppingBag, CreditCard, Repeat,
+  CheckCircle, Brain, Target, RefreshCw,
+  Repeat, Calendar, ArrowRight,
 } from 'lucide-react-native';
 import { insightsAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
@@ -9645,14 +9291,29 @@ const C   = COLORS;
 const W   = Dimensions.get('window').width;
 const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
 
-// ─── Score de saúde financeira ────────────────────────────────────────────────
+const CAT_COLORS = [
+  '#7C6FE0', '#E24B4A', '#2ecc71', '#F4A261',
+  '#45B7D1', '#9B59B6',
+];
+
+const CAT_ICONS = {
+  'alimentação':  '🛒',
+  'transporte':   '🚗',
+  'saúde':        '🏥',
+  'lazer':        '🎮',
+  'vestuário':    '👕',
+  'electrónica':  '💻',
+  'casa':         '🏠',
+  'educação':     '📚',
+  'outros':       '📦',
+};
+
+// ─── Score ────────────────────────────────────────────────────────────────────
 function ScoreFinanceiro({ resumo }) {
   if (!resumo) return null;
-
   const { pct_orcamento, pct_rendimento, variacao_subiu, variacao_pct } = resumo;
 
-  // Calcula score de 0-100
-  let score = 75; // base
+  let score = 75;
   if (pct_orcamento != null) {
     if (pct_orcamento > 100) score -= 30;
     else if (pct_orcamento > 80) score -= 15;
@@ -9668,24 +9329,29 @@ function ScoreFinanceiro({ resumo }) {
   }
   score = Math.max(10, Math.min(100, score));
 
-  const getScoreConfig = (s) => {
-    if (s >= 80) return { label: 'Excelente', color: C.green,  emoji: '🏆' };
-    if (s >= 60) return { label: 'Bom',       color: C.brand,  emoji: '✅' };
-    if (s >= 40) return { label: 'Atenção',   color: C.yellow, emoji: '⚠️' };
-    return         { label: 'Crítico',         color: C.red,    emoji: '🚨' };
-  };
+  const cfg = score >= 80
+    ? { label: 'Excelente', color: C.green,  emoji: '🏆' }
+    : score >= 60
+    ? { label: 'Bom',       color: C.brand,  emoji: '✅' }
+    : score >= 40
+    ? { label: 'Atenção',   color: C.yellow || '#F4A261', emoji: '⚠️' }
+    : { label: 'Crítico',   color: C.red,    emoji: '🚨' };
 
-  const cfg = getScoreConfig(score);
+  const width = useSharedValue(0);
+  React.useEffect(() => {
+    width.value = withDelay(400, withTiming(score, { duration: 900, easing: Easing.out(Easing.cubic) }));
+  }, [score]);
+  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
 
   return (
     <Animated.View entering={FadeInDown.delay(50).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 20 }}>
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
       <View style={[s.card, { padding: 20 }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <View>
-            <Text style={[s.microText, { marginBottom: 4 }]}>Score de saúde financeira</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
-              <Text style={[s.bigNum, { fontSize: 42, color: cfg.color }]}>{score}</Text>
+            <Text style={s.microText}>Score de saúde financeira</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+              <Text style={[s.bigNum, { fontSize: 44, color: cfg.color }]}>{score}</Text>
               <Text style={[s.microText, { fontSize: 14 }]}>/100</Text>
             </View>
             <View style={[s.badge, { backgroundColor: cfg.color + '20', marginTop: 6 }]}>
@@ -9694,35 +9360,117 @@ function ScoreFinanceiro({ resumo }) {
               </Text>
             </View>
           </View>
-          <View style={s.scoreDial}>
-            <Text style={{ fontSize: 36 }}>{cfg.emoji}</Text>
-          </View>
+          <Text style={{ fontSize: 48 }}>{cfg.emoji}</Text>
         </View>
-
-        {/* Barra de score */}
-        <View style={{ marginTop: 16 }}>
-          <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-            <ScoreBar pct={score} color={cfg.color} />
-          </View>
+        <View style={{ marginTop: 16, height: 8, backgroundColor: C.surface3 || '#2a2a3e', borderRadius: 4, overflow: 'hidden' }}>
+          <Animated.View style={[{ height: '100%', backgroundColor: cfg.color, borderRadius: 4 }, barStyle]} />
         </View>
       </View>
     </Animated.View>
   );
 }
 
-function ScoreBar({ pct, color }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(400, withTiming(pct, { duration: 900, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 4 }, barStyle]} />;
+// ─── Gráfico de Pizza (SVG manual) ───────────────────────────────────────────
+function GraficoPizza({ categorias }) {
+  if (!categorias?.length) return null;
+
+  const total = categorias.reduce((s, c) => s + c.valor, 0);
+  if (total === 0) return null;
+
+  const size = W - SPACE.lg * 2 - 32;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 10;
+  const innerR = r * 0.55;
+
+  // Calcular arcos SVG
+  let currentAngle = -90;
+  const slices = categorias.slice(0, 6).map((cat, i) => {
+    const pct = cat.valor / total;
+    const angle = pct * 360;
+    const startAngle = currentAngle;
+    const endAngle = currentAngle + angle;
+    currentAngle += angle;
+
+    const toRad = (deg) => (deg * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(toRad(startAngle));
+    const y1 = cy + r * Math.sin(toRad(startAngle));
+    const x2 = cx + r * Math.cos(toRad(endAngle));
+    const y2 = cy + r * Math.sin(toRad(endAngle));
+    const xi1 = cx + innerR * Math.cos(toRad(startAngle));
+    const yi1 = cy + innerR * Math.sin(toRad(startAngle));
+    const xi2 = cx + innerR * Math.cos(toRad(endAngle));
+    const yi2 = cy + innerR * Math.sin(toRad(endAngle));
+    const largeArc = angle > 180 ? 1 : 0;
+
+    const path = [
+      `M ${xi1} ${yi1}`,
+      `L ${x1} ${y1}`,
+      `A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`,
+      `L ${xi2} ${yi2}`,
+      `A ${innerR} ${innerR} 0 ${largeArc} 0 ${xi1} ${yi1}`,
+      'Z',
+    ].join(' ');
+
+    return {
+      path,
+      color: CAT_COLORS[i % CAT_COLORS.length],
+      pct: Math.round(pct * 100),
+      label: cat.categoria,
+      valor: cat.valor,
+    };
+  });
+
+  const { View: RNView } = require('react-native');
+  const Svg = require('react-native-svg');
+
+  // Fallback sem SVG — barras horizontais
+  return (
+    <Animated.View entering={FadeInDown.delay(150).duration(400).springify()}
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
+      <SectionHeader title="Distribuição por categoria" />
+      <View style={[s.card, { padding: 16 }]}>
+        {categorias.slice(0, 6).map((cat, i) => {
+          const pct = total > 0 ? (cat.valor / total) * 100 : 0;
+          const color = CAT_COLORS[i % CAT_COLORS.length];
+          const emoji = CAT_ICONS[cat.categoria?.toLowerCase()] || '📦';
+          const width = useSharedValue(0);
+          React.useEffect(() => {
+            width.value = withDelay(200 + i * 80, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
+          }, [pct]);
+          const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
+
+          return (
+            <View key={cat.categoria} style={{ marginBottom: i < categorias.length - 1 ? 14 : 0 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6, alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <View style={[s.colorDot, { backgroundColor: color }]} />
+                  <Text style={[s.bodyText, { color: C.text }]}>{emoji} {cat.categoria}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                  <Text style={[s.microText, { color: color }]}>{Math.round(pct)}%</Text>
+                  <Text style={[s.label, { color: C.brand }]}>{fmt(cat.valor)}€</Text>
+                </View>
+              </View>
+              <View style={{ height: 6, backgroundColor: C.surface3 || '#2a2a3e', borderRadius: 3, overflow: 'hidden' }}>
+                <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
+              </View>
+            </View>
+          );
+        })}
+        {/* Total */}
+        <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: C.surface3 || '#2a2a3e', flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={[s.label, { color: C.textMid }]}>Total</Text>
+          <Text style={[s.label, { color: C.brand, fontWeight: '700' }]}>{fmt(total)}€</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
 }
 
-// ─── Comparação mês a mês ─────────────────────────────────────────────────────
+// ─── Tendência ────────────────────────────────────────────────────────────────
 function TendenciaMensal({ resumo }) {
-  if (!resumo?.variacao_pct == null && !resumo?.total_gasto) return null;
-
+  if (!resumo) return null;
   const { total_gasto, variacao_pct, variacao_subiu } = resumo;
   const subiu = variacao_subiu;
   const color = subiu ? C.red : C.green;
@@ -9730,7 +9478,7 @@ function TendenciaMensal({ resumo }) {
 
   return (
     <Animated.View entering={FadeInDown.delay(100).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
       <SectionHeader title="Tendência" />
       <View style={[s.card, { padding: 16 }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
@@ -9741,7 +9489,7 @@ function TendenciaMensal({ resumo }) {
             <Text style={[s.bodyText, { color: C.text }]}>
               {variacao_pct != null
                 ? `Gastaste ${subiu ? 'mais' : 'menos'} ${Math.abs(variacao_pct)}% vs. mês anterior`
-                : `Gastaste ${fmt(total_gasto)} € este mês`}
+                : `Gastaste ${fmt(total_gasto)}€ este mês`}
             </Text>
             <Text style={[s.microText, { marginTop: 3 }]}>
               {subiu
@@ -9762,95 +9510,117 @@ function TendenciaMensal({ resumo }) {
   );
 }
 
-// ─── Top categorias com barras visuais ────────────────────────────────────────
-function TopCategorias({ resumo }) {
-  if (!resumo?.top_categorias?.length) return null;
-
-  const cats = resumo.top_categorias.slice(0, 5);
-  const maxVal = cats[0]?.valor || 1;
-
-  const ICONS = {
-    'Alimentação':    '🛒',
-    'Transporte':     '🚗',
-    'Saúde':          '🏥',
-    'Lazer':          '🎮',
-    'Vestuário':      '👕',
-    'Tecnologia':     '💻',
-    'Casa':           '🏠',
-    'Educação':       '📚',
-    'Subscricoes':    '🔄',
-    'Beleza':         '💄',
-  };
+// ─── Previsão Mensal ──────────────────────────────────────────────────────────
+function PrevisaoMensal({ resumo }) {
+  if (!resumo?.previsao_mensal) return null;
+  const { previsao_mensal, total_gasto, orcamento_mensal } = resumo;
+  const vaiBater = orcamento_mensal > 0 && previsao_mensal > orcamento_mensal;
+  const color = vaiBater ? C.red : C.brand;
 
   return (
-    <Animated.View entering={FadeInDown.delay(150).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <SectionHeader title="Onde gastas mais" />
+    <Animated.View entering={FadeInDown.delay(120).duration(400).springify()}
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
+      <SectionHeader title="Previsão do mês" />
       <View style={[s.card, { padding: 16 }]}>
-        {cats.map((cat, i) => {
-          const pct = (cat.valor / maxVal) * 100;
-          const emoji = ICONS[cat.categoria] || '📦';
-          return (
-            <Animated.View key={cat.categoria}
-              entering={FadeInDown.delay(160 + i * 50).duration(300)}>
-              <View style={{ marginBottom: i < cats.length - 1 ? 14 : 0 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={[s.bodyText, { color: C.text }]}>
-                    {emoji}  {cat.categoria}
-                  </Text>
-                  <Text style={[s.label, { color: C.brand }]}>{fmt(cat.valor)} €</Text>
-                </View>
-                <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-                  <CatBar pct={pct} delay={200 + i * 60} />
-                </View>
-              </View>
-            </Animated.View>
-          );
-        })}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          <View style={[s.iconWrap, { backgroundColor: color + '18' }]}>
+            <Calendar size={20} color={color} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[s.bodyText, { color: C.text }]}>
+              Ao ritmo atual, vais gastar
+            </Text>
+            <Text style={[s.bigNum, { color, fontSize: 22, marginTop: 2 }]}>
+              ~{fmt(previsao_mensal)}€
+            </Text>
+            {vaiBater && orcamento_mensal > 0 && (
+              <Text style={[s.microText, { color: C.red, marginTop: 4 }]}>
+                ⚠️ Acima do orçamento em {fmt(previsao_mensal - orcamento_mensal)}€
+              </Text>
+            )}
+            {!vaiBater && orcamento_mensal > 0 && (
+              <Text style={[s.microText, { color: C.green, marginTop: 4 }]}>
+                ✅ Dentro do orçamento de {fmt(orcamento_mensal)}€
+              </Text>
+            )}
+          </View>
+        </View>
       </View>
     </Animated.View>
   );
 }
 
-function CatBar({ pct, delay }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(delay, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: C.brand, borderRadius: 3 }, barStyle]} />;
-}
-
-// ─── Metas vs gastos ─────────────────────────────────────────────────────────
-function MetasProgress({ resumo }) {
-  if (!resumo?.metas?.length) return null;
-
-  const metas = resumo.metas.slice(0, 4);
+// ─── Subscrições Detetadas ────────────────────────────────────────────────────
+function SubscricoesDetetadas({ resumo }) {
+  if (!resumo?.subscricoes?.length) return null;
+  const { subscricoes, total_subscricoes } = resumo;
 
   return (
+    <Animated.View entering={FadeInDown.delay(160).duration(400).springify()}
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
+      <SectionHeader title="Subscrições detetadas" />
+      <View style={[s.card, { padding: 16 }]}>
+        {subscricoes.map((sub, i) => (
+          <View key={sub.nome} style={{
+            flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+            paddingVertical: 10,
+            borderBottomWidth: i < subscricoes.length - 1 ? 1 : 0,
+            borderBottomColor: C.surface3 || '#2a2a3e',
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <View style={[s.iconWrap, { backgroundColor: C.brand + '18', width: 32, height: 32 }]}>
+                <Repeat size={14} color={C.brand} />
+              </View>
+              <View>
+                <Text style={[s.bodyText, { color: C.text }]}>{sub.nome}</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>
+                  {sub.meses_detetados} meses consecutivos
+                </Text>
+              </View>
+            </View>
+            <Text style={[s.label, { color: C.brand }]}>{fmt(sub.valor_mensal)}€/mês</Text>
+          </View>
+        ))}
+        <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.surface3 || '#2a2a3e', flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={[s.label, { color: C.textMid }]}>Total subscrições</Text>
+          <Text style={[s.label, { color: C.red, fontWeight: '700' }]}>{fmt(total_subscricoes)}€/mês</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Metas ────────────────────────────────────────────────────────────────────
+function MetasProgress({ resumo }) {
+  if (!resumo?.metas?.length) return null;
+  return (
     <Animated.View entering={FadeInDown.delay(200).duration(400).springify()}
-      style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      style={{ marginHorizontal: SPACE.lg, marginBottom: 16 }}>
       <SectionHeader title="Metas vs. Gastos reais" />
       <View style={[s.card, { padding: 16 }]}>
-        {metas.map((meta, i) => {
+        {resumo.metas.slice(0, 4).map((meta, i) => {
           const pct = Math.min(meta.pct || 0, 100);
           const over = meta.ultrapassou;
-          const color = over ? C.red : pct > 80 ? C.yellow : C.green;
+          const color = over ? C.red : pct > 80 ? C.yellow || '#F4A261' : C.green;
+          const width = useSharedValue(0);
+          React.useEffect(() => {
+            width.value = withDelay(220 + i * 70, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
+          }, [pct]);
+          const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
           return (
-            <View key={meta.categoria}
-              style={{ marginBottom: i < metas.length - 1 ? 16 : 0 }}>
+            <View key={meta.categoria} style={{ marginBottom: i < resumo.metas.length - 1 ? 16 : 0 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
                 <Text style={[s.bodyText, { color: C.text }]}>{meta.categoria}</Text>
                 <Text style={[s.microText, { color }]}>
-                  {fmt(meta.gasto)} / {fmt(meta.limite)} €
+                  {fmt(meta.gasto)} / {fmt(meta.limite)}€
                 </Text>
               </View>
-              <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-                <MetaBar pct={pct} color={color} delay={220 + i * 70} />
+              <View style={{ height: 6, backgroundColor: C.surface3 || '#2a2a3e', borderRadius: 3, overflow: 'hidden' }}>
+                <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
               </View>
               {over && (
                 <Text style={[s.microText, { color: C.red, marginTop: 4 }]}>
-                  ⚠️  Excedeste em {fmt(meta.gasto - meta.limite)} €
+                  ⚠️ Excedeste em {fmt(meta.gasto - meta.limite)}€
                 </Text>
               )}
             </View>
@@ -9861,27 +9631,17 @@ function MetasProgress({ resumo }) {
   );
 }
 
-function MetaBar({ pct, color, delay }) {
-  const width = useSharedValue(0);
-  React.useEffect(() => {
-    width.value = withDelay(delay, withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }));
-  }, [pct]);
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-  return <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />;
-}
-
-// ─── Cartão de insight da IA ──────────────────────────────────────────────────
+// ─── Insight Card ─────────────────────────────────────────────────────────────
 function InsightCard({ item, index }) {
   const config = {
-    alerta:    { icon: <AlertCircle size={16} color={C.red}    />, color: C.red,    label: 'Alerta'    },
-    tendencia: { icon: <TrendingUp  size={16} color={C.yellow} />, color: C.yellow, label: 'Tendência' },
-    positivo:  { icon: <CheckCircle size={16} color={C.green}  />, color: C.green,  label: 'Positivo'  },
-    dica:      { icon: <Zap         size={16} color={C.brand}  />, color: C.brand,  label: 'Dica da IA' },
+    alerta:   { icon: <AlertCircle size={16} color={C.red}                />, color: C.red,                label: 'Alerta'     },
+    tendencia:{ icon: <TrendingUp  size={16} color={C.yellow || '#F4A261'}/>, color: C.yellow || '#F4A261', label: 'Tendência'  },
+    positivo: { icon: <CheckCircle size={16} color={C.green}              />, color: C.green,              label: 'Positivo'   },
+    dica:     { icon: <Zap         size={16} color={C.brand}              />, color: C.brand,              label: 'Dica da IA' },
+    previsao: { icon: <Calendar    size={16} color='#45B7D1'              />, color: '#45B7D1',            label: 'Previsão'   },
   };
-
   const tipo = item.tipo || 'dica';
   const cfg  = config[tipo] || config.dica;
-
   return (
     <AnimatedListItem index={index}>
       <View style={[s.card, { marginBottom: 10, borderLeftWidth: 3, borderLeftColor: cfg.color }]}>
@@ -9898,7 +9658,7 @@ function InsightCard({ item, index }) {
         </Text>
         {item.valor != null && (
           <Text style={[s.microText, { marginTop: 8, color: cfg.color, fontWeight: '700' }]}>
-            {fmt(item.valor)} €
+            {fmt(item.valor)}€
           </Text>
         )}
       </View>
@@ -9911,10 +9671,8 @@ function InsightsSkeleton() {
   return (
     <View style={{ paddingHorizontal: SPACE.lg }}>
       {[0, 1, 2, 3, 4].map(i => (
-        <MotiView
-          key={i}
-          from={{ opacity: 0.3 }}
-          animate={{ opacity: 0.7 }}
+        <MotiView key={i}
+          from={{ opacity: 0.3 }} animate={{ opacity: 0.7 }}
           transition={{ type: 'timing', duration: 900, loop: true, delay: i * 130 }}
           style={[s.card, { height: i === 0 ? 130 : 80, marginBottom: 12 }]}
         />
@@ -9923,13 +9681,11 @@ function InsightsSkeleton() {
   );
 }
 
-// ─── Estado vazio ─────────────────────────────────────────────────────────────
+// ─── Empty State ──────────────────────────────────────────────────────────────
 function EmptyState({ onRefresh, semDados }) {
   return (
     <Animated.View entering={FadeIn.duration(400)} style={s.emptyWrap}>
-      <View style={s.emptyIcon}>
-        <Brain size={28} color={C.brand} />
-      </View>
+      <View style={s.emptyIcon}><Brain size={28} color={C.brand} /></View>
       <Text style={s.emptyTitle}>
         {semDados ? 'Adiciona dados para começar' : 'A Verly está a analisar'}
       </Text>
@@ -9946,7 +9702,7 @@ function EmptyState({ onRefresh, semDados }) {
   );
 }
 
-// ─── Ecrã principal ───────────────────────────────────────────────────────────
+// ─── Ecrã Principal ───────────────────────────────────────────────────────────
 export default function InsightsScreen() {
   const [data,       setData]       = useState(null);
   const [loading,    setLoading]    = useState(true);
@@ -9957,7 +9713,6 @@ export default function InsightsScreen() {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     setError(null);
-
     try {
       const result = await insightsAPI.get();
       setData(result);
@@ -9974,12 +9729,10 @@ export default function InsightsScreen() {
   const insights = data?.insights || [];
   const resumo   = data?.resumo;
   const semDados = data?.sem_dados;
-
   const hasContent = insights.length > 0 || resumo;
 
   return (
     <View style={s.root}>
-      {/* Header */}
       <Animated.View entering={FadeIn.duration(300)} style={s.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <View style={[s.iconWrap, { backgroundColor: C.brand + '20' }]}>
@@ -9995,7 +9748,6 @@ export default function InsightsScreen() {
         </Pressable>
       </Animated.View>
 
-      {/* Conteúdo */}
       {loading ? (
         <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}>
           <View style={{ height: 16 }} />
@@ -10017,31 +9769,34 @@ export default function InsightsScreen() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchInsights(true)}
-              tintColor={C.brand}
-              colors={[C.brand]}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={() => fetchInsights(true)} tintColor={C.brand} />
           }
-          contentContainerStyle={{ paddingBottom: 40, paddingTop: 16 }}
+          contentContainerStyle={{ paddingTop: 16, paddingBottom: 40 }}
         >
-          {/* Score de saúde */}
+          {/* Score */}
           <ScoreFinanceiro resumo={resumo} />
 
-          {/* Tendência mês a mês */}
+          {/* Tendência */}
           <TendenciaMensal resumo={resumo} />
 
-          {/* Top categorias */}
-          <TopCategorias resumo={resumo} />
+          {/* Previsão */}
+          <PrevisaoMensal resumo={resumo} />
 
-          {/* Metas vs gastos */}
+          {/* Gráfico de categorias */}
+          {resumo?.top_categorias?.length > 0 && (
+            <GraficoPizza categorias={resumo.top_categorias} />
+          )}
+
+          {/* Subscrições */}
+          <SubscricoesDetetadas resumo={resumo} />
+
+          {/* Metas */}
           <MetasProgress resumo={resumo} />
 
-          {/* Insights da IA */}
+          {/* Insights IA */}
           {insights.length > 0 && (
             <Animated.View entering={FadeInDown.delay(250).duration(400).springify()}
-              style={{ marginHorizontal: SPACE.lg }}>
+              style={{ marginHorizontal: SPACE.lg, marginBottom: 8 }}>
               <SectionHeader title="Recomendações da IA" />
               {insights.map((item, i) => (
                 <InsightCard key={i} item={item} index={i} />
@@ -10054,127 +9809,51 @@ export default function InsightsScreen() {
   );
 }
 
-// ─── Estilos ──────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: C.bg,
-  },
+  root: { flex: 1, backgroundColor: COLORS.background },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: SPACE.lg,
-    paddingTop: 16,
-    paddingBottom: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: SPACE.lg, paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: COLORS.surface,
   },
-  headerTitle: {
-    fontFamily: FONT.bold,
-    fontSize: 17,
-    color: C.text,
-  },
-  headerSub: {
-    fontFamily: FONT.regular,
-    fontSize: 12,
-    color: C.textMid,
-    marginTop: 1,
-  },
-  refreshBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: C.surface2,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  headerTitle: { fontSize: FONT.md, fontWeight: '700', color: COLORS.text },
+  headerSub:   { fontSize: FONT.xs, color: COLORS.textMuted, marginTop: 1 },
+  refreshBtn:  { padding: 8 },
   card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: C.border,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
   },
   badge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: RADIUS.sm, alignSelf: 'flex-start',
   },
   iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 36, height: 36, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
   },
-  scoreDial: {
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: C.surface3,
-    justifyContent: 'center',
-    alignItems: 'center',
+  colorDot: {
+    width: 10, height: 10, borderRadius: 5,
   },
-  bigNum: {
-    fontFamily: FONT.bold,
-    fontSize: 24,
-    color: C.text,
-  },
-  label: {
-    fontFamily: FONT.medium,
-    fontSize: 12,
-    color: C.textMid,
-  },
-  bodyText: {
-    fontFamily: FONT.regular,
-    fontSize: 14,
-    color: C.text,
-  },
-  microText: {
-    fontFamily: FONT.regular,
-    fontSize: 11,
-    color: C.textSub,
-  },
+  bigNum:   { fontSize: 28, fontWeight: '800', color: COLORS.text },
+  bodyText: { fontSize: FONT.sm, color: COLORS.text, fontWeight: '500' },
+  label:    { fontSize: FONT.xs, fontWeight: '600', color: COLORS.textMuted },
+  microText:{ fontSize: FONT.xs, color: COLORS.textMuted },
   emptyWrap: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-    gap: 12,
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    padding: SPACE.xl,
   },
   emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
-    backgroundColor: C.brand + '15',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 4,
+    width: 64, height: 64, borderRadius: 20,
+    backgroundColor: COLORS.surface,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 16,
   },
-  emptyTitle: {
-    fontFamily: FONT.bold,
-    fontSize: 16,
-    color: C.text,
-    textAlign: 'center',
-  },
-  emptySub: {
-    fontFamily: FONT.regular,
-    fontSize: 13,
-    color: C.textMid,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
+  emptyTitle: { fontSize: FONT.lg, fontWeight: '700', color: COLORS.text, textAlign: 'center', marginBottom: 8 },
+  emptySub:   { fontSize: FONT.sm, color: COLORS.textMuted, textAlign: 'center', lineHeight: 22, marginBottom: 20 },
   emptyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: C.brand + '50',
-    backgroundColor: C.brand + '12',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 20, paddingVertical: 10,
+    backgroundColor: COLORS.surface, borderRadius: RADIUS.md,
   },
 });
 </file>
@@ -11189,6 +10868,364 @@ def upload_fatura():
         return jsonify({'error': 'Erro ao processar a fatura.'}), 500
 </file>
 
+<file path="app/api/insights.py">
+"""
+app/api/insights.py — Insights da Verly com IA real
+
+GET /api/v1/insights
+    Gera insights personalizados com base nos dados reais do utilizador.
+    Inclui: score, tendência, categorias, metas, previsão, subscrições detetadas.
+"""
+
+import json
+from collections import defaultdict
+from datetime import datetime, timedelta
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, User, Meta
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(str(date_str).strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _get_data_obj(f):
+    d = _parse_date(f.data_compra)
+    if d:
+        return d
+    if f.data_upload:
+        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(f.data_upload.date(), datetime.min.time())
+    return None
+
+
+def _build_context(user_id: int) -> dict:
+    """Recolhe todos os dados financeiros do utilizador para contexto do LLM."""
+    hoje = datetime.utcnow()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+    dia_atual = hoje.day
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    metas = Meta.query.filter_by(user_id=user_id).all()
+    user = User.query.get(user_id)
+
+    gastos_mes = defaultdict(float)
+    gastos_mes_anterior = defaultdict(float)
+    total_mes = 0.0
+    total_mes_anterior = 0.0
+    faturas_mes = []
+
+    # Histórico mensal (últimos 6 meses)
+    historico_mensal = defaultdict(float)
+
+    for f in faturas:
+        data = _get_data_obj(f)
+        if not data:
+            continue
+        valor = f.total or 0
+        cat = (f.categoria or 'outros').lower()
+
+        if data.month == mes_atual and data.year == ano_atual:
+            gastos_mes[cat] += valor
+            total_mes += valor
+            faturas_mes.append({
+                'loja': f.loja or f.nome_ficheiro or 'Desconhecida',
+                'categoria': cat,
+                'valor': round(valor, 2),
+                'data': data.strftime('%d/%m/%Y'),
+            })
+
+        mes_ant = mes_atual - 1 if mes_atual > 1 else 12
+        ano_ant = ano_atual if mes_atual > 1 else ano_atual - 1
+        if data.month == mes_ant and data.year == ano_ant:
+            gastos_mes_anterior[cat] += valor
+            total_mes_anterior += valor
+
+        # Histórico últimos 6 meses
+        chave = f"{data.year}-{data.month:02d}"
+        historico_mensal[chave] += valor
+
+    # Top categorias
+    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:6]
+
+    # Metas vs gastos
+    metas_info = []
+    for m in metas:
+        cat_lower = (m.categoria or '').lower()
+        gasto = gastos_mes.get(cat_lower, 0)
+        pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
+        metas_info.append({
+            'categoria': m.categoria,
+            'limite': round(m.valor_limite, 2),
+            'gasto': round(gasto, 2),
+            'pct': round(pct, 1),
+            'ultrapassou': gasto > m.valor_limite,
+        })
+
+    # Variação mês anterior
+    variacao_pct = None
+    if total_mes_anterior > 0:
+        variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
+
+    # ── Previsão mensal ───────────────────────────────────────────────────────
+    # Extrapola o gasto atual para o fim do mês com base nos dias passados
+    dias_no_mes = 31  # aproximação
+    previsao_mensal = None
+    if dia_atual > 0 and total_mes > 0:
+        taxa_diaria = total_mes / dia_atual
+        previsao_mensal = round(taxa_diaria * dias_no_mes, 2)
+
+    # ── Subscrições detetadas ─────────────────────────────────────────────────
+    # Lojas que aparecem em múltiplos meses = subscrição provável
+    lojas_por_mes = defaultdict(set)
+    for f in faturas:
+        data = _get_data_obj(f)
+        if not data or not f.loja:
+            continue
+        chave_mes = f"{data.year}-{data.month:02d}"
+        lojas_por_mes[f.loja.lower()].add(chave_mes)
+
+    subscricoes_detetadas = []
+    for loja, meses in lojas_por_mes.items():
+        if len(meses) >= 2:  # aparece em 2+ meses = subscrição provável
+            # Calcular valor médio mensal
+            valores = [f.total or 0 for f in faturas if f.loja and f.loja.lower() == loja]
+            valor_medio = sum(valores) / len(valores) if valores else 0
+            if valor_medio > 0:
+                subscricoes_detetadas.append({
+                    'nome': loja.title(),
+                    'valor_mensal': round(valor_medio, 2),
+                    'meses_detetados': len(meses),
+                })
+
+    subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
+    total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
+
+    # ── Histórico 6 meses para gráfico ────────────────────────────────────────
+    historico_lista = []
+    for i in range(5, -1, -1):
+        mes = mes_atual - i
+        ano = ano_atual
+        if mes <= 0:
+            mes += 12
+            ano -= 1
+        chave = f"{ano}-{mes:02d}"
+        meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+        historico_lista.append({
+            'mes': meses_pt[mes - 1],
+            'valor': round(historico_mensal.get(chave, 0), 2),
+        })
+
+    # Dados do utilizador
+    rendimento = getattr(user, 'rendimento_mensal', None) or 0
+    orcamento = getattr(user, 'orcamento_mensal', None) or 0
+    nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
+    objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    return {
+        'nome': nome.split()[0] if nome else 'utilizador',
+        'personalidade': personalidade,
+        'objetivo': objetivo,
+        'rendimento_mensal': round(rendimento, 2),
+        'orcamento_mensal': round(orcamento, 2),
+        'total_gasto_mes': round(total_mes, 2),
+        'total_gasto_mes_anterior': round(total_mes_anterior, 2),
+        'variacao_pct': variacao_pct,
+        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
+        'metas': metas_info,
+        'num_faturas_mes': len(faturas_mes),
+        'faturas_recentes': faturas_mes[-5:],
+        'previsao_mensal': previsao_mensal,
+        'subscricoes_detetadas': subscricoes_detetadas,
+        'total_subscricoes': round(total_subscricoes, 2),
+        'historico_mensal': historico_lista,
+        'dia_atual': dia_atual,
+    }
+
+
+def _gerar_insights_llm(ctx: dict, personalidade: str) -> list:
+    """Chama o LLM para gerar insights personalizados."""
+
+    SYSTEM_PROMPTS = {
+        'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
+Analisa os dados financeiros e dá insights cortantes mas verdadeiros.
+Sem rodeios. Linguagem direta.""",
+
+        'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
+Analisa os dados financeiros com ironia inteligente mas construtiva.""",
+
+        'calm': """És a Verly, uma coach financeira empática e construtiva.
+Analisa os dados financeiros com tom equilibrado e encorajador.""",
+
+        'pro': """És a Verly, um CFO pessoal analítico.
+Analisa os dados financeiros com rigor técnico e linguagem de negócio.""",
+    }
+
+    system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
+
+    metas_txt = ''
+    if ctx['metas']:
+        linhas = []
+        for m in ctx['metas']:
+            status = 'ULTRAPASSOU' if m['ultrapassou'] else f"{m['pct']}% usado"
+            linhas.append(f"  - {m['categoria']}: limite {m['limite']}€, gasto {m['gasto']}€ ({status})")
+        metas_txt = '\nMetas:\n' + '\n'.join(linhas)
+
+    variacao_txt = ''
+    if ctx['variacao_pct'] is not None:
+        sinal = '+' if ctx['variacao_pct'] > 0 else ''
+        variacao_txt = f"\nVariação vs mês anterior: {sinal}{ctx['variacao_pct']}%"
+
+    rendimento_txt = ''
+    if ctx['rendimento_mensal'] > 0:
+        pct_rendimento = round((ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100, 1)
+        rendimento_txt = f"\nRendimento mensal: {ctx['rendimento_mensal']}€ (gastou {pct_rendimento}% do rendimento)"
+
+    orcamento_txt = ''
+    if ctx['orcamento_mensal'] > 0:
+        pct_orc = round((ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100, 1)
+        orcamento_txt = f"\nOrçamento mensal definido: {ctx['orcamento_mensal']}€ ({pct_orc}% usado)"
+
+    previsao_txt = ''
+    if ctx['previsao_mensal']:
+        previsao_txt = f"\nPrevisão de gasto até fim do mês: {ctx['previsao_mensal']}€ (baseado nos primeiros {ctx['dia_atual']} dias)"
+
+    subscricoes_txt = ''
+    if ctx['subscricoes_detetadas']:
+        linhas = [f"  - {s['nome']}: ~{s['valor_mensal']}€/mês" for s in ctx['subscricoes_detetadas']]
+        subscricoes_txt = f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês):\n" + '\n'.join(linhas)
+
+    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
+
+    user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
+
+Total gasto: {ctx['total_gasto_mes']}€
+Número de faturas: {ctx['num_faturas_mes']}
+Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}
+
+Top categorias de gasto:
+{top_cats_txt}{metas_txt}{subscricoes_txt}
+
+Gera exatamente 5 insights personalizados e relevantes com base nestes dados reais.
+Tipos: alerta, tendencia, positivo, dica, previsao.
+
+Regras:
+- Usa os valores reais dos dados (não inventes números)
+- Sé específico — menciona categorias, valores, percentagens reais
+- Se houver subscrições, comenta sobre o impacto mensal
+- Se houver previsão, usa-a num insight de tipo "previsao"
+- Adapta o tom à personalidade: {personalidade}
+
+Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
+[
+  {{
+    "tipo": "alerta|tendencia|positivo|dica|previsao",
+    "texto": "frase do insight (máx 2 frases, tom adaptado à personalidade)",
+    "valor": null ou número relevante
+  }},
+  ...
+]"""
+
+    try:
+        import os
+        from groq import Groq
+        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[
+                {'role': 'system', 'content': system},
+                {'role': 'user',   'content': user_prompt},
+            ],
+            max_tokens=800,
+            temperature=0.7,
+        )
+        raw = response.choices[0].message.content.strip()
+        import re
+        raw = re.sub(r'```json|```', '', raw).strip()
+        insights = json.loads(raw)
+        if isinstance(insights, list):
+            return insights[:6]
+        return []
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f'Erro ao gerar insights LLM: {e}')
+        # Fallback com insights básicos
+        insights = []
+        if ctx['total_gasto_mes'] > 0:
+            insights.append({
+                'tipo': 'dica',
+                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras.",
+                'valor': ctx['total_gasto_mes'],
+            })
+        if ctx['orcamento_mensal'] > 0 and ctx['total_gasto_mes'] > ctx['orcamento_mensal']:
+            insights.append({
+                'tipo': 'alerta',
+                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€.",
+                'valor': ctx['total_gasto_mes'] - ctx['orcamento_mensal'],
+            })
+        if ctx['previsao_mensal']:
+            insights.append({
+                'tipo': 'previsao',
+                'texto': f"Ao ritmo atual, vais gastar cerca de {ctx['previsao_mensal']}€ este mês.",
+                'valor': ctx['previsao_mensal'],
+            })
+        return insights
+
+
+# ── Endpoint ──────────────────────────────────────────────────────────────────
+
+@api_bp.route('/insights', methods=['GET'])
+@jwt_required()
+def get_insights():
+    """
+    Gera insights personalizados com IA para o utilizador autenticado.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
+
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    ctx = _build_context(user_id)
+    insights = _gerar_insights_llm(ctx, personalidade)
+
+    return jsonify({
+        'success': True,
+        'insights': insights,
+        'resumo': {
+            'total_gasto':       ctx['total_gasto_mes'],
+            'num_faturas':       ctx['num_faturas_mes'],
+            'variacao_pct':      ctx['variacao_pct'],
+            'variacao_subiu':    (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':  ctx['orcamento_mensal'],
+            'rendimento_mensal': ctx['rendimento_mensal'],
+            'pct_orcamento':     round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1) if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':    round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1) if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':    ctx['top_categorias'],
+            'metas':             ctx['metas'],
+            'previsao_mensal':   ctx['previsao_mensal'],
+            'subscricoes':       ctx['subscricoes_detetadas'],
+            'total_subscricoes': ctx['total_subscricoes'],
+            'historico_mensal':  ctx['historico_mensal'],
+        },
+        'personalidade': personalidade,
+        'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
+    })
+</file>
+
 <file path="app/api/playlists.py">
 """
 app/api/playlists.py — Playlists de faturas ("Criar Em")
@@ -12053,10 +12090,6 @@ RESUMO DE VALORES
   Pull & Bear - Servico ao Cliente: support@pull-e-bear.pt
 
 ================================================================================
-</file>
-
-<file path="Procfile">
-web: gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
 </file>
 
 <file path="run.py">
@@ -13599,6 +13632,49 @@ function renderizarMapa(lojas, item) {
   ],
   "configuration_version": "1"
 }
+</file>
+
+<file path="verly-mobile/android/app/src/main/AndroidManifest.xml">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+verly-mobile"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="verly"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
 </file>
 
 <file path="verly-mobile/app.json">
@@ -16617,6 +16693,10 @@ def score_fatura(fatura_id):
     )
     resultado['item'] = item
     return jsonify({'success': True, 'resultado': resultado})
+</file>
+
+<file path="Procfile">
+web: python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
 </file>
 
 <file path="verly-mobile/App.js">
