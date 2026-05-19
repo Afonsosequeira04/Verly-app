@@ -94,7 +94,7 @@ function MerchantLogo({ loja, size = 42 }) {
     }}>
       {!failed ? (
         <Image
-          source={{ uri: `https://img.logo.dev/${domain}?token=pk_f4DgLXo8T6Kz3jKpLqQv2A` }}
+          source={{ uri: `https://img.logo.dev/${domain}?token=pk_FYu-xwzARFCydRMNlm6imQ` }}
           style={{ width: size - 10, height: size - 10, borderRadius: 4 }}
           resizeMode="contain"
           onError={() => setFailed(true)}
