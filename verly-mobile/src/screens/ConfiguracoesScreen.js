@@ -4,10 +4,11 @@ import {
   View, Text, ScrollView, Pressable, Switch,
   Alert, ActivityIndicator, StyleSheet, Linking,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Trash2, LogOut, Lock, Bell, Globe, Download,
-  Info, Shield, FileText, ChevronRight,
+  Info, Shield, FileText, ChevronRight, LayoutDashboard,
 } from 'lucide-react-native';
 import { authAPI, perfilAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -17,6 +18,16 @@ import { Reveal, SectionHeader } from '../components/UI';
 const C = COLORS;
 
 const APP_VERSION = '1.0.0';
+
+const PREFS_KEY = '@verly_dashboard_prefs';
+const DEFAULT_PREFS = {
+  mostrarPrevisao: true,
+  mostrarPoupanca: true,
+  mostrarGraficos: true,
+  mostrarInsights: true,
+  mostrarFaturas:  true,
+  mostrarSubscricoes: true,
+};
 
 // ─── Linha de definição simples ───────────────────────────────────────────────
 function SettingRow({ icon, label, sub, onPress, right, danger, disabled }) {
@@ -53,6 +64,7 @@ export default function ConfiguracoesScreen({ navigation }) {
 
   const [notificacoes,   setNotificacoes]   = useState(false);
   const [lingua,         setLingua]         = useState('pt');
+  const [dashPrefs,      setDashPrefs]      = useState(DEFAULT_PREFS);
   const [loadingDelete,  setLoadingDelete]  = useState(false);
   const [loadingExport,  setLoadingExport]  = useState(false);
   const [loadingPassw,   setLoadingPassw]   = useState(false);
@@ -63,6 +75,10 @@ export default function ConfiguracoesScreen({ navigation }) {
       if (d.notificacoes_email != null) setNotificacoes(d.notificacoes_email);
       if (d.lingua) setLingua(d.lingua);
     }).catch(() => {});
+    // Carregar prefs do dashboard
+    AsyncStorage.getItem(PREFS_KEY).then(raw => {
+      if (raw) { try { setDashPrefs({ ...DEFAULT_PREFS, ...JSON.parse(raw) }); } catch (_) {} }
+    });
   }, []));
 
   // ── Alterar password ───────────────────────────────────────────────────────
@@ -87,6 +103,13 @@ export default function ConfiguracoesScreen({ navigation }) {
       },
       'secure-text'
     );
+  };
+
+  // ── Dashboard prefs toggle ─────────────────────────────────────────────────
+  const togglePref = async (key) => {
+    const next = { ...dashPrefs, [key]: !dashPrefs[key] };
+    setDashPrefs(next);
+    await AsyncStorage.setItem(PREFS_KEY, JSON.stringify(next));
   };
 
   // ── Notificações toggle ────────────────────────────────────────────────────
@@ -213,6 +236,39 @@ export default function ConfiguracoesScreen({ navigation }) {
             sub={user?.email || ''}
             onPress={handleLogout}
           />
+        </View>
+      </Reveal>
+
+      {/* ── Dashboard ─────────────────────────────────────────────────────── */}
+      <Reveal delay={40} style={{ marginTop: 20 }}>
+        <SectionHeader title="Personalizar Dashboard" />
+        <View style={s.card}>
+          {[
+            { key: 'mostrarPoupanca',    label: 'Sugestão de poupança', sub: 'Card com conselho da IA' },
+            { key: 'mostrarPrevisao',    label: 'Previsão do mês',      sub: 'Estimativa de gastos até fim do mês' },
+            { key: 'mostrarGraficos',    label: 'Gráficos',             sub: 'Gastos por categoria e por mês' },
+            { key: 'mostrarInsights',    label: 'Insights da IA',       sub: 'Análise automática dos teus hábitos' },
+            { key: 'mostrarSubscricoes', label: 'Alerta subscrições',   sub: 'Subscrições a desperdiçar' },
+            { key: 'mostrarFaturas',     label: 'Faturas recentes',     sub: 'Últimas faturas no dashboard' },
+          ].map(({ key, label, sub }, i, arr) => (
+            <React.Fragment key={key}>
+              <SettingRow
+                icon={<LayoutDashboard size={18} color={C.brand} />}
+                label={label}
+                sub={sub}
+                onPress={() => togglePref(key)}
+                right={
+                  <Switch
+                    value={dashPrefs[key]}
+                    onValueChange={() => togglePref(key)}
+                    trackColor={{ false: C.border, true: C.brand + '80' }}
+                    thumbColor={dashPrefs[key] ? C.brand : C.textMid}
+                  />
+                }
+              />
+              {i < arr.length - 1 && <Divider />}
+            </React.Fragment>
+          ))}
         </View>
       </Reveal>
 

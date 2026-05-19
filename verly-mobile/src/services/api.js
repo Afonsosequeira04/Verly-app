@@ -318,3 +318,8 @@ export const pushAPI = {
   testar: () =>
     apiFetch('/push/test', { method: 'POST' }),
 };
+
+// ── Poupança ───────────────────────────────────────────────────────────────────
+export const poupancaAPI = {
+  get: () => apiFetch('/poupanca'),
+};

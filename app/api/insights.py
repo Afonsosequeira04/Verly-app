@@ -438,3 +438,187 @@ def get_insights():
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
     })
+
+
+# ── Endpoint Poupança Inteligente ─────────────────────────────────────────────
+
+@api_bp.route('/poupanca', methods=['GET'])
+@jwt_required()
+def get_poupanca():
+    """
+    GET /api/v1/poupanca
+    Gera um plano de poupança personalizado e concreto com base nos dados
+    reais dos últimos meses: histórico, padrões, metas, subscrições, regra 50/30/20.
+    Muito mais rico do que o chat genérico — usa contexto longitudinal real.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'error': 'Utilizador não encontrado.'}), 404
+
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+    ctx = _build_context(user_id)
+
+    if ctx['total_gasto_mes'] == 0 and ctx['num_faturas_mes'] == 0:
+        return jsonify({
+            'success': True,
+            'sem_dados': True,
+            'poupanca_possivel': None,
+            'sugestao': None,
+            'breakdown': [],
+        })
+
+    # Calcular poupança possível com base em dados reais
+    orcamento    = ctx['orcamento_mensal']
+    rendimento   = ctx['rendimento_mensal']
+    gasto_atual  = ctx['total_gasto_mes']
+    subscricoes  = ctx['total_subscricoes']
+    previsao     = ctx['previsao_mensal'] or gasto_atual
+    top_cats     = ctx['top_categorias']
+
+    # Poupança possível: diferença entre orçamento/rendimento e gasto previsto
+    if orcamento > 0:
+        poupanca_possivel = max(0, orcamento - previsao)
+    elif rendimento > 0:
+        poupanca_possivel = max(0, rendimento * 0.20)  # regra 50/30/20
+    else:
+        poupanca_possivel = None
+
+    # Breakdown por categoria: onde pode cortar
+    breakdown = []
+    for cat_item in top_cats[:4]:
+        cat   = cat_item['categoria']
+        valor = cat_item['valor']
+        # Sugere corte de 15-30% nas categorias de lazer/vestuário/restaurantes
+        categorias_cortaveis = ['lazer', 'restaurantes', 'vestuário', 'takeaway',
+                                 'entretenimento', 'outros', 'compras']
+        pct_corte = 0.20 if cat.lower() in categorias_cortaveis else 0.10
+        economia = round(valor * pct_corte, 2)
+        if economia > 0:
+            breakdown.append({
+                'categoria': cat,
+                'gasto_atual': round(valor, 2),
+                'corte_sugerido_pct': int(pct_corte * 100),
+                'economia_mensal': economia,
+                'economia_anual': round(economia * 12, 2),
+            })
+
+    # Prompt muito específico para poupança — usa TODOS os dados reais
+    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
+
+    historico_txt = ', '.join([
+        f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']
+    ])
+
+    subscricoes_txt = ''
+    if ctx['subscricoes_detetadas']:
+        subs = ', '.join([f"{s['nome']} ({s['valor_mensal']}€/mês)" for s in ctx['subscricoes_detetadas']])
+        subscricoes_txt = f"\nSubscrições recorrentes detetadas: {subs} = {subscricoes}€/mês = {subscricoes*12:.0f}€/ano"
+
+    metas_txt = ''
+    if ctx['metas']:
+        metas_ultrapassadas = [m for m in ctx['metas'] if m['ultrapassou']]
+        if metas_ultrapassadas:
+            metas_txt = '\nMetas ultrapassadas: ' + ', '.join([
+                f"{m['categoria']} ({m['gasto']}€/{m['limite']}€)" for m in metas_ultrapassadas
+            ])
+
+    regra_txt = ''
+    if ctx['regra_5030_20']:
+        r = ctx['regra_5030_20']
+        regra_txt = (
+            f"\nRegra 50/30/20 aplicada (rendimento {rendimento}€):"
+            f" necessidades ideal {r['necessidades_ideal']}€,"
+            f" desejos ideal {r['desejos_ideal']}€,"
+            f" poupança ideal {r['poupanca_ideal']}€."
+            f" Atualmente a gastar {r['pct_rendimento']}% do rendimento."
+        )
+
+    PERSONALITY_TONE = {
+        'savage':    'Tom direto e cortante. Diz exatamente onde o dinheiro está a ser desperdiçado.',
+        'sarcastic': 'Tom irónico mas construtivo. Usa ironia inteligente sobre os padrões de gasto.',
+        'calm':      'Tom empático e motivador. Foca no progresso possível.',
+        'pro':       'Tom analítico e rigoroso. Usa linguagem financeira precisa.',
+    }
+    tone = PERSONALITY_TONE.get(personalidade, PERSONALITY_TONE['calm'])
+
+    prompt = f"""És a Verly, uma IA financeira pessoal com acesso aos dados reais do utilizador.
+
+DADOS REAIS DO UTILIZADOR:
+- Gasto este mês: {gasto_atual}€ em {ctx['num_faturas_mes']} faturas
+- Previsão fim do mês: {previsao}€
+- Orçamento definido: {orcamento}€ {'(ULTRAPASSADO)' if orcamento > 0 and previsao > orcamento else ''}
+- Rendimento mensal: {rendimento}€
+- Histórico últimos 6 meses: {historico_txt}
+{regra_txt}
+
+Top categorias de gasto este mês:
+{top_cats_txt}{subscricoes_txt}{metas_txt}
+
+{'Variação vs mês anterior: ' + ('+' if (ctx['variacao_pct'] or 0) > 0 else '') + str(ctx['variacao_pct']) + '%' if ctx['variacao_pct'] is not None else ''}
+
+TAREFA: Cria um plano de poupança CONCRETO e ACIONÁVEL para este utilizador.
+- Usa os dados reais (não inventes valores)
+- Identifica os 2-3 maiores desperdícios com valores específicos
+- Dá uma sugestão principal clara e acionável
+- Menciona o impacto anual se cortar nessas categorias
+- Se tiver subscrições, calcula o impacto de cancelar as menos usadas
+- Cita 1 princípio financeiro real se fizer sentido (regra 50/30/20, Latte Factor, etc.)
+- {tone}
+- Máximo 3-4 frases. Direto ao ponto. Português de Portugal.
+
+Responde APENAS com JSON válido:
+{{
+  "sugestao": "texto principal da sugestão (3-4 frases, concreto, com valores reais)",
+  "poupanca_estimada_mensal": número (quanto pode poupar por mês realisticamente),
+  "poupanca_estimada_anual": número (impacto anual),
+  "foco_principal": "nome da categoria onde deve cortar mais"
+}}"""
+
+    try:
+        import os, json, re
+        from groq import Groq
+        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=400,
+            temperature=0.65,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r'```json|```', '', raw).strip()
+        resultado = json.loads(raw)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f'Erro poupanca LLM: {e}')
+        # Fallback inteligente com dados reais
+        foco = top_cats[0]['categoria'] if top_cats else 'geral'
+        economia_mensal = round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0
+        resultado = {
+            'sugestao': (
+                f"Com base nos teus padrões, podes poupar cortando 20% em {foco} "
+                f"({round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0}€/mês). "
+                f"{'As tuas subscrições custam ' + str(subscricoes) + '€/mês = ' + str(round(subscricoes*12)) + '€/ano — vale a pena rever.' if subscricoes > 0 else ''}"
+            ).strip(),
+            'poupanca_estimada_mensal': economia_mensal,
+            'poupanca_estimada_anual': round(economia_mensal * 12, 2),
+            'foco_principal': foco,
+        }
+
+    return jsonify({
+        'success': True,
+        'sem_dados': False,
+        'poupanca_possivel': poupanca_possivel,
+        'sugestao': resultado.get('sugestao'),
+        'poupanca_estimada_mensal': resultado.get('poupanca_estimada_mensal'),
+        'poupanca_estimada_anual': resultado.get('poupanca_estimada_anual'),
+        'foco_principal': resultado.get('foco_principal'),
+        'breakdown': breakdown,
+        'contexto': {
+            'gasto_atual': gasto_atual,
+            'previsao': previsao,
+            'orcamento': orcamento,
+            'rendimento': rendimento,
+            'total_subscricoes': subscricoes,
+        },
+    })

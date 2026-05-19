@@ -30,10 +30,12 @@ import * as DocumentPicker from 'expo-document-picker';
 import {
   Bell, Plus, Search, X, TrendingUp, TrendingDown,
   Receipt, Camera, Upload, FileText, Zap,
-  ChevronRight, AlertCircle, Target, BarChart2,
+  ChevronRight, ChevronDown, ChevronUp, RefreshCw,
+  AlertCircle, Target, BarChart2,
   Shield, Flame, Calendar, Download,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import {
@@ -46,6 +48,16 @@ const W   = Dimensions.get('window').width;
 const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
 const initials = (name = '') =>
   name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+
+const PREFS_KEY = '@verly_dashboard_prefs';
+const DEFAULT_PREFS = {
+  mostrarPrevisao: true,
+  mostrarPoupanca: true,
+  mostrarGraficos: true,
+  mostrarInsights: true,
+  mostrarFaturas:  true,
+  mostrarSubscricoes: true,
+};
 
 const CHART_COLORS = [
   '#7C6FE0', '#00D68F', '#FFB300', '#FF4D6D',
@@ -808,6 +820,147 @@ function StreakBadge({ streak = 0 }) {
   );
 }
 
+// ─── Poupança Card ────────────────────────────────────────────────────────────
+function PoupancaCard({ data }) {
+  const [resultado,  setResultado]  = useState(null);
+  const [loading,    setLoading]    = useState(false);
+  const [expanded,   setExpanded]   = useState(false);
+
+  const spent = data?.total_gasto || 0;
+
+  useEffect(() => {
+    if (!spent || spent === 0) return;
+    carregar();
+  }, [spent]);
+
+  const carregar = async () => {
+    setLoading(true);
+    try {
+      const res = await apiFetch('/poupanca');
+      if (res.success && !res.sem_dados) setResultado(res);
+    } catch (e) {
+      setResultado(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!spent || spent === 0) return null;
+
+  const poupancaPossivel = resultado?.poupanca_estimada_mensal || resultado?.poupanca_possivel || null;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(370).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <Pressable
+        onPress={() => setExpanded(e => !e)}
+        style={{
+          backgroundColor: C.surface,
+          borderRadius: RADIUS.lg,
+          borderWidth: 1,
+          borderColor: C.brand + '40',
+          padding: 14,
+        }}
+      >
+        {/* Header */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <View style={{
+            width: 40, height: 40, borderRadius: 12,
+            backgroundColor: C.brand + '22',
+            justifyContent: 'center', alignItems: 'center',
+          }}>
+            <Zap size={20} color={C.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, color: C.textSub, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Sugestão de Poupança
+            </Text>
+            {loading ? (
+              <Text style={{ fontSize: 13, color: C.textMid, marginTop: 2 }}>A analisar os teus padrões...</Text>
+            ) : poupancaPossivel ? (
+              <Text style={{ fontSize: 18, fontWeight: '900', color: C.brand, marginTop: 1 }}>
+                Até {fmt(poupancaPossivel)} € /mês
+              </Text>
+            ) : (
+              <Text style={{ fontSize: 13, color: C.textMid, marginTop: 2 }}>Toca para ver a análise</Text>
+            )}
+          </View>
+          {expanded
+            ? <ChevronUp size={16} color={C.textSub} />
+            : <ChevronDown size={16} color={C.textSub} />
+          }
+        </View>
+
+        {/* Conteúdo expandido */}
+        {expanded && (
+          <Animated.View entering={FadeInDown.duration(200)} style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border }}>
+            {loading ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <ActivityIndicator size="small" color={C.brand} />
+                <Text style={{ color: C.textMid, fontSize: 13 }}>A analisar histórico e padrões reais...</Text>
+              </View>
+            ) : resultado ? (
+              <>
+                {/* Sugestão principal */}
+                <Text style={{ color: C.text, fontSize: 14, lineHeight: 20, marginBottom: 12 }}>
+                  {resultado.sugestao}
+                </Text>
+
+                {/* Breakdown por categoria */}
+                {resultado.breakdown?.length > 0 && (
+                  <View style={{ gap: 8, marginBottom: 12 }}>
+                    {resultado.breakdown.map((b, i) => (
+                      <View key={i} style={{
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                        backgroundColor: C.surface2, borderRadius: 10, padding: 10,
+                      }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: C.text, fontSize: 12, fontWeight: '700', textTransform: 'capitalize' }}>
+                            {b.categoria}
+                          </Text>
+                          <Text style={{ color: C.textSub, fontSize: 11 }}>
+                            Cortar {b.corte_sugerido_pct}% → poupar {fmt(b.economia_mensal)}€/mês
+                          </Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end' }}>
+                          <Text style={{ color: C.green, fontSize: 13, fontWeight: '800' }}>
+                            +{fmt(b.economia_anual)}€
+                          </Text>
+                          <Text style={{ color: C.textSub, fontSize: 10 }}>por ano</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+
+                {/* Impacto anual total */}
+                {resultado.poupanca_estimada_anual > 0 && (
+                  <View style={{
+                    backgroundColor: C.brand + '15', borderRadius: 10, padding: 10,
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    marginBottom: 10,
+                  }}>
+                    <Text style={{ color: C.textMid, fontSize: 12 }}>Impacto anual estimado</Text>
+                    <Text style={{ color: C.brand, fontSize: 15, fontWeight: '900' }}>
+                      {fmt(resultado.poupanca_estimada_anual)} €
+                    </Text>
+                  </View>
+                )}
+
+                <Pressable onPress={carregar} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <RefreshCw size={12} color={C.brand} />
+                  <Text style={{ color: C.brand, fontSize: 12, fontWeight: '600' }}>Atualizar análise</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Text style={{ color: C.textMid, fontSize: 13 }}>Sem dados suficientes para análise.</Text>
+            )}
+          </Animated.View>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 // ─── Previsão Card ────────────────────────────────────────────────────────────
 function PrevisaoCard({ previsao, orcamento, navigation }) {
   if (!previsao || previsao === 0) return null;
@@ -878,9 +1031,9 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
             gap: 6,
           }}
         >
-          <Shield size={22} color={numGarantias > 0 ? '#00D68F' : C.brand} />
+          <Shield size={22} color={numGarantias > 0 ? '#00D68F' : C.textMid} />
           <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>Garantias</Text>
-          <Text style={{ fontSize: 11, color: numGarantias > 0 ? '#00D68F' : C.textMid }}>
+          <Text style={{ fontSize: 11, color: numGarantias > 0 ? '#00D68F' : C.textSub }}>
             {numGarantias > 0 ? `${numGarantias} ativa${numGarantias !== 1 ? 's' : ''}` : 'Nenhuma'}
           </Text>
         </Pressable>
@@ -928,6 +1081,7 @@ export default function DashboardScreen({ navigation, route }) {
   const [numGarantias, setNumGarantias] = useState(0);
   const [previsao,     setPrevisao]     = useState(null);
   const [orcamento,    setOrcamento]    = useState(0);
+  const [prefs,        setPrefs]        = useState(DEFAULT_PREFS);
 
   const fetchNotifs = useCallback(async () => {
     setNotifLoad(true);
@@ -969,6 +1123,15 @@ export default function DashboardScreen({ navigation, route }) {
   }, []);
 
   useEffect(() => { fetchExtras(); }, [fetchExtras]);
+
+  // Carrega preferências do dashboard
+  useEffect(() => {
+    AsyncStorage.getItem(PREFS_KEY).then(raw => {
+      if (raw) {
+        try { setPrefs({ ...DEFAULT_PREFS, ...JSON.parse(raw) }); } catch (_) {}
+      }
+    });
+  }, []);
 
   // Abre upload quando o + do header é pressionado
   useEffect(() => {
@@ -1129,12 +1292,21 @@ export default function DashboardScreen({ navigation, route }) {
           <>
             <HeroCard data={data} onSearchPress={() => setSearch(true)} />
             <MetricsRow data={data} />
-            <PrevisaoCard previsao={previsao} orcamento={orcamento} navigation={navigation} />
+            {prefs.mostrarPoupanca && (
+              <PoupancaCard data={data} />
+            )}
+            {prefs.mostrarPrevisao && (
+              <PrevisaoCard previsao={previsao} orcamento={orcamento} navigation={navigation} />
+            )}
             <QuickLinks navigation={navigation} numGarantias={numGarantias} />
-            <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
-            <InsightsSection mood={data?.mood} feed={data?.feed} />
+            {prefs.mostrarGraficos && (
+              <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
+            )}
+            {prefs.mostrarInsights && (
+              <InsightsSection mood={data?.mood} feed={data?.feed} />
+            )}
 
-            {data?.subscricoes?.count_danger > 0 && (
+            {prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0 && (
               <Animated.View
                 entering={FadeInDown.delay(200).duration(400).springify()}
                 style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}
@@ -1155,7 +1327,9 @@ export default function DashboardScreen({ navigation, route }) {
               </Animated.View>
             )}
 
-            <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
+            {prefs.mostrarFaturas && (
+              <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
+            )}
           </>
         )}
       </ScrollView>
