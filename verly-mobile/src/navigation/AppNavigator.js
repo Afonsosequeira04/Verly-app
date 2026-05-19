@@ -286,7 +286,7 @@ function MenuScreen({ navigation }) {
     {
       label: 'Ferramentas',
       items: [
-        { label: '⚡ Score de compra', screen: 'Score',            icon: 'star'   },
+        { label: 'Score de compra', screen: 'Score',            icon: 'star'   },
         { label: 'As minhas subscrições', screen: 'MinhasSubscricoes', icon: 'shield' },
         { label: 'Premium',           screen: 'Premium',           icon: 'star'   },
       ],

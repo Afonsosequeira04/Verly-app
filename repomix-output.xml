@@ -235,284 +235,6 @@ verly-mobile/src/services/api.js
 <files>
 This section contains the contents of the repository's files.
 
-<file path="verly-mobile/src/screens/MinhasSubscricoesScreen.js">
-/**
- * src/screens/MinhasSubscricoesScreen.js
- * Subscrições detetadas automaticamente via faturas + Gmail
- */
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  ActivityIndicator, RefreshControl, Alert,
-} from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
-import { useFocusEffect } from '@react-navigation/native';
-import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
-import { apiFetch } from '../services/api';
-
-const C = COLORS;
-
-const RISK_CONFIG = {
-  high:   { color: C.red,    label: 'Alto risco',  bg: 'rgba(255,77,109,0.10)'  },
-  medium: { color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
-  ok:     { color: C.green,  label: 'Normal',      bg: 'rgba(0,214,143,0.10)'   },
-};
-
-function SubCard({ sub, onDelete, index }) {
-  const risk = RISK_CONFIG[sub.risk] || RISK_CONFIG.ok;
-
-  return (
-    <Animated.View entering={FadeInDown.delay(index * 60).springify()}>
-      <View style={{
-        backgroundColor: C.surface,
-        borderRadius: RADIUS.lg,
-        borderWidth: 1,
-        borderColor: C.border,
-        padding: 16,
-        marginBottom: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-      }}>
-        {/* Ícone */}
-        <View style={{
-          width: 44, height: 44, borderRadius: 12,
-          backgroundColor: risk.bg,
-          justifyContent: 'center', alignItems: 'center',
-        }}>
-          <Text style={{ fontSize: 22 }}>{sub.icone || '📦'}</Text>
-        </View>
-
-        {/* Info */}
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: FONT.md, fontWeight: '700', color: C.text }}>
-            {sub.nome}
-          </Text>
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, marginTop: 2 }}>
-            {sub.categoria} · pago {sub.meses_pago}x
-          </Text>
-          <View style={{
-            marginTop: 5, alignSelf: 'flex-start',
-            backgroundColor: risk.bg, borderRadius: 6,
-            paddingHorizontal: 7, paddingVertical: 2,
-          }}>
-            <Text style={{ fontSize: 10, fontWeight: '800', color: risk.color }}>
-              {risk.label.toUpperCase()}
-            </Text>
-          </View>
-        </View>
-
-        {/* Preço + delete */}
-        <View style={{ alignItems: 'flex-end', gap: 8 }}>
-          <Text style={{ fontSize: FONT.lg, fontWeight: '900', color: C.brand }}>
-            {sub.preco_mensal?.toFixed(2)}€
-          </Text>
-          <Text style={{ fontSize: 10, color: C.textSub }}>/ mês</Text>
-          <Pressable
-            onPress={() => onDelete(sub.id, sub.nome)}
-            hitSlop={8}
-            style={{ padding: 4 }}
-          >
-            <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
-export default function MinhasSubscricoesScreen({ navigation }) {
-  const [subs, setSubs]           = useState([]);
-  const [resumo, setResumo]       = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefresh]  = useState(false);
-  const [detetando, setDetetando] = useState(false);
-
-  const carregar = useCallback(async (refresh = false) => {
-    if (refresh) setRefresh(true);
-    else setLoading(true);
-    try {
-      const data = await apiFetch('/subscricoes');
-      if (data.success) {
-        setSubs(data.subscricoes || []);
-        setResumo(data.resumo || null);
-      }
-    } catch (e) {
-      console.warn('Erro subscrições:', e);
-    } finally {
-      setLoading(false);
-      setRefresh(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
-
-  const detetar = async () => {
-    setDetetando(true);
-    try {
-      const res = await apiFetch('/subscricoes/detetar', { method: 'POST' });
-      if (res.success) {
-        await carregar();
-        const msg = res.detetadas > 0
-          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas faturas!`
-          : 'Nenhuma subscrição nova detetada nas faturas atuais.';
-        Alert.alert('Deteção concluída', msg);
-      }
-    } catch (e) {
-      Alert.alert('Erro', 'Não foi possível detetar subscrições. Tenta novamente.');
-    } finally {
-      setDetetando(false);
-    }
-  };
-
-  const eliminar = (id, nome) => {
-    Alert.alert(
-      'Remover subscrição',
-      `Remover "${nome}" da lista?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Remover',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await apiFetch(`/subscricoes/${id}`, { method: 'DELETE' });
-              setSubs(prev => prev.filter(s => s.id !== id));
-            } catch (e) {
-              Alert.alert('Erro', 'Não foi possível remover.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const totalAnual = resumo?.total_anual || 0;
-  const highRisk   = resumo?.high_risk || 0;
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator color={C.brand} size="large" />
-      </View>
-    );
-  }
-
-  return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: C.bg }}
-      contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 60 }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={() => carregar(true)} tintColor={C.brand} />
-      }
-    >
-      {/* Resumo */}
-      {resumo && subs.length > 0 && (
-        <Animated.View
-          entering={FadeInDown.duration(400).springify()}
-          style={{
-            backgroundColor: C.surface,
-            borderRadius: RADIUS.lg,
-            borderWidth: 1,
-            borderColor: C.brand + '30',
-            padding: 20,
-            marginBottom: 20,
-          }}
-        >
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
-            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 }}>
-            Resumo
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: C.brand }}>
-                {resumo.total_mensal?.toFixed(2)}€
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por mês</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: C.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: C.text }}>
-                {totalAnual?.toFixed(0)}€
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por ano</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: C.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: highRisk > 0 ? C.red : C.green }}>
-                {highRisk}
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>alto risco</Text>
-            </View>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* Botão detetar */}
-      <Pressable
-        onPress={detetar}
-        disabled={detetando}
-        style={({ pressed }) => ({
-          backgroundColor: detetando ? C.surface : C.brand,
-          borderRadius: RADIUS.lg,
-          padding: 16,
-          alignItems: 'center',
-          marginBottom: 20,
-          opacity: pressed ? 0.85 : 1,
-          flexDirection: 'row',
-          justifyContent: 'center',
-          gap: 10,
-        })}
-      >
-        {detetando
-          ? <ActivityIndicator color="#fff" size="small" />
-          : <Text style={{ fontSize: 18 }}>🔍</Text>
-        }
-        <Text style={{ fontSize: FONT.md, fontWeight: '800', color: '#fff' }}>
-          {detetando ? 'A detetar...' : 'Detetar subscrições automáticas'}
-        </Text>
-      </Pressable>
-
-      {/* Lista */}
-      {subs.length === 0 ? (
-        <Animated.View entering={FadeInDown.delay(200).springify()}
-          style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
-          <Text style={{ fontSize: 48 }}>📭</Text>
-          <Text style={{ fontSize: FONT.lg, fontWeight: '700', color: C.text }}>
-            Sem subscrições
-          </Text>
-          <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
-            Toca em "Detetar" para a Verly analisar as tuas faturas e encontrar subscrições automáticas.
-          </Text>
-        </Animated.View>
-      ) : (
-        <>
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
-            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
-            {subs.length} subscrição{subs.length !== 1 ? 'ões' : ''} encontrada{subs.length !== 1 ? 's' : ''}
-          </Text>
-          {subs.map((sub, i) => (
-            <SubCard key={sub.id} sub={sub} onDelete={eliminar} index={i} />
-          ))}
-        </>
-      )}
-
-      {/* Link para Premium se limitado */}
-      <Pressable
-        onPress={() => navigation.navigate('Premium')}
-        style={{ alignItems: 'center', marginTop: 16 }}
-      >
-        <Text style={{ fontSize: FONT.sm, color: C.brand, fontWeight: '600' }}>
-          Ver planos Premium →
-        </Text>
-      </Pressable>
-    </ScrollView>
-  );
-}
-</file>
-
 <file path="app/api/amizades.py">
 """
 app/api/amizades.py — Sistema de conexões entre utilizadores
@@ -652,647 +374,6 @@ def buscar_utilizadores():
     ).limit(10).all()
 
     return jsonify({'utilizadores': [_user_pub(u) for u in users]})
-</file>
-
-<file path="app/api/gmail.py">
-"""
-app/api/gmail.py — Integração Gmail para importação automática de faturas
-
-FLUXO OAUTH:
-  GET  /api/v1/gmail/auth-url        → devolve URL de autorização Google
-  POST /api/v1/gmail/callback        → troca código por tokens, guarda na DB
-  GET  /api/v1/gmail/status          → estado da ligação Gmail do utilizador
-  DELETE /api/v1/gmail/disconnect    → remove ligação
-
-SINCRONIZAÇÃO:
-  POST /api/v1/gmail/sync            → sincroniza emails de compra (manual)
-  GET  /api/v1/gmail/sync/status     → estado da última sincronização
-
-COMO ADICIONAR AO PROJETO:
-  1. pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-  2. Adicionar ao .env: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APP_URL
-  3. Em app/api/__init__.py adicionar: from app.api import gmail  # noqa
-  4. Em app/models.py adicionar o modelo GmailConnection (ver models_addition.py)
-  5. No Google Cloud Console:
-     - Criar projeto → ativar Gmail API
-     - OAuth 2.0 → Authorized redirect URIs: {APP_URL}/api/v1/gmail/callback-web
-     - Scopes necessários: gmail.readonly, gmail.labels
-"""
-
-import os
-import json
-import logging
-import base64
-import re
-from datetime import datetime, timedelta
-from flask import request, jsonify, redirect
-from flask_jwt_extended import jwt_required, get_jwt_identity, decode_token
-from app.api import api_bp
-from app import db
-
-logger = logging.getLogger(__name__)
-
-GOOGLE_CLIENT_ID     = os.getenv('GOOGLE_CLIENT_ID', '')
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
-APP_URL              = os.getenv('APP_URL', 'https://verly.app')
-
-GMAIL_SCOPES = [
-    'https://www.googleapis.com/auth/gmail.readonly',
-]
-
-# Remetentes conhecidos de confirmações de compra em Portugal e internacionais
-PURCHASE_SENDERS = {
-    # Moda PT
-    'zara.com', 'hm.com', 'pullandbear.com', 'bershka.com', 'massimodutti.com',
-    'stradivarius.com', 'noreply@mango.com', 'parfois.com',
-    # Electrónica PT
-    'worten.pt', 'fnac.pt', 'mediamarkt.pt', 'radio-popular.pt',
-    # Supermercados PT
-    'continente.pt', 'pingo-doce.pt', 'minipreço.pt', 'lidl.pt', 'aldi.pt',
-    # Saúde & Beleza PT
-    'sephora.pt', 'notino.pt', 'pharmacia.pt',
-    # Marketplace PT
-    'olx.pt', 'custo-justo.pt',
-    # Internacional comum
-    'amazon.com', 'amazon.co.uk', 'amazon.es', 'ebay.com',
-    'aliexpress.com', 'shein.com', 'temu.com', 'zalando.pt',
-    # Food delivery
-    'ubereats.com', 'glovo.com', 'bolt.eu',
-    # Transporte
-    'uber.com', 'freenow.com', 'bolt.eu', 'cp.pt', 'flixbus.pt',
-    # Streaming / Digital
-    'netflix.com', 'spotify.com', 'apple.com', 'google.com',
-    'microsoft.com', 'adobe.com', 'dropbox.com',
-    # Viagens
-    'booking.com', 'airbnb.com', 'ryanair.com', 'tap.pt', 'easyjet.com',
-}
-
-# Keywords no subject que indicam email de compra
-PURCHASE_SUBJECT_KEYWORDS = [
-    'confirmação', 'confirmacao', 'confirmação de', 'pedido confirmado',
-    'order confirmed', 'order confirmation', 'your order', 'receipt',
-    'recibo', 'fatura', 'factura', 'invoice', 'compra realizada',
-    'purchase confirmation', 'payment confirmation', 'pagamento confirmado',
-    'encomenda', 'detalhe do pedido', 'order details', 'your receipt',
-    'obrigado pela sua compra', 'thank you for your purchase',
-    'resumo do pedido', 'detalhes da compra',
-]
-
-
-# ── Helpers OAuth ─────────────────────────────────────────────────────────────
-
-def _build_oauth_flow(state=None):
-    """Constrói o objeto OAuth2 flow do Google sem PKCE (server-side flow)."""
-    from google_auth_oauthlib.flow import Flow
-
-    client_config = {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [f"{APP_URL}/api/v1/gmail/callback-web"],
-        }
-    }
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=GMAIL_SCOPES,
-        state=state,
-    )
-    flow.redirect_uri = f"{APP_URL}/api/v1/gmail/callback-web"
-    return flow
-
-
-def _get_gmail_service(credentials_json: str):
-    """Cria cliente Gmail API a partir das credentials guardadas."""
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-
-    creds_data = json.loads(credentials_json)
-    creds = Credentials(
-        token=creds_data.get('token'),
-        refresh_token=creds_data.get('refresh_token'),
-        token_uri='https://oauth2.googleapis.com/token',
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=GMAIL_SCOPES,
-    )
-    return build('gmail', 'v1', credentials=creds)
-
-
-def _refresh_credentials_if_needed(gmail_conn) -> bool:
-    """Renova o access token se expirado. Devolve True se ok."""
-    try:
-        from google.oauth2.credentials import Credentials
-        from google.auth.transport.requests import Request
-
-        creds_data = json.loads(gmail_conn.credentials_json)
-        creds = Credentials(
-            token=creds_data.get('token'),
-            refresh_token=creds_data.get('refresh_token'),
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=GOOGLE_CLIENT_ID,
-            client_secret=GOOGLE_CLIENT_SECRET,
-            scopes=GMAIL_SCOPES,
-        )
-
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            creds_data['token'] = creds.token
-            gmail_conn.credentials_json = json.dumps(creds_data)
-            db.session.commit()
-
-        return True
-    except Exception as e:
-        logger.error(f'Erro ao renovar credentials Gmail: {e}')
-        return False
-
-
-# ── Endpoints OAuth ───────────────────────────────────────────────────────────
-
-@api_bp.route('/gmail/auth-url', methods=['GET'])
-@jwt_required()
-def gmail_auth_url():
-    """
-    Devolve a URL de autorização Google para o utilizador abrir no browser.
-    URL construído manualmente para garantir que NÃO inclui PKCE (code_challenge).
-    """
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        return jsonify({'error': 'Gmail não configurado no servidor.'}), 503
-
-    user_id = get_jwt_identity()
-    state = base64.urlsafe_b64encode(str(user_id).encode()).decode()
-
-    try:
-        import urllib.parse
-        params = {
-            'client_id':     GOOGLE_CLIENT_ID,
-            'redirect_uri':  f"{APP_URL}/api/v1/gmail/callback-web",
-            'response_type': 'code',
-            'scope':         ' '.join(GMAIL_SCOPES),
-            'access_type':   'offline',
-            'prompt':        'consent',
-            'state':         state,
-            # Sem code_challenge nem code_challenge_method → sem PKCE
-        }
-        auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode(params)
-        return jsonify({'auth_url': auth_url, 'state': state})
-    except Exception as e:
-        logger.error(f'Erro ao gerar auth URL Gmail: {e}')
-        return jsonify({'error': 'Erro ao gerar URL de autorização.'}), 500
-
-
-@api_bp.route('/gmail/callback-web', methods=['GET'])
-def gmail_callback_web():
-    """
-    Callback OAuth do Google — chamado pelo browser depois do utilizador autorizar.
-    Troca o código por tokens e guarda na DB.
-    Redireciona para deep link da app.
-    """
-    code  = request.args.get('code', '')
-    state = request.args.get('state', '')
-    error = request.args.get('error', '')
-
-    if error:
-        deep_link = f"verly://gmail/callback?error={error}"
-        return redirect(deep_link)
-
-    if not code or not state:
-        return '<h2>Parâmetros inválidos.</h2>', 400
-
-    # Recuperar user_id do state
-    try:
-        user_id = int(base64.urlsafe_b64decode(state.encode()).decode())
-    except Exception:
-        return '<h2>State inválido.</h2>', 400
-
-    try:
-        # IMPORTANTE: criar flow sem state para evitar validação PKCE no fetch_token
-        flow = _build_oauth_flow()
-        # Trocar o código por tokens manualmente para evitar PKCE
-        import requests as req_lib
-        token_response = req_lib.post(
-            'https://oauth2.googleapis.com/token',
-            data={
-                'code': code,
-                'client_id': GOOGLE_CLIENT_ID,
-                'client_secret': GOOGLE_CLIENT_SECRET,
-                'redirect_uri': f"{APP_URL}/api/v1/gmail/callback-web",
-                'grant_type': 'authorization_code',
-            }
-        )
-        token_data = token_response.json()
-
-        if 'error' in token_data:
-            logger.error(f'Erro ao trocar código Gmail: {token_data}')
-            deep_link = "verly://gmail/callback?error=token_exchange_failed"
-            return redirect(deep_link)
-
-        access_token  = token_data.get('access_token')
-        refresh_token = token_data.get('refresh_token')
-
-        creds_json = json.dumps({
-            'token':         access_token,
-            'refresh_token': refresh_token,
-            'scopes':        GMAIL_SCOPES,
-        })
-
-        # Obter email Gmail do utilizador
-        from google.oauth2.credentials import Credentials
-        from googleapiclient.discovery import build
-        creds = Credentials(
-            token=access_token,
-            refresh_token=refresh_token,
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=GOOGLE_CLIENT_ID,
-            client_secret=GOOGLE_CLIENT_SECRET,
-            scopes=GMAIL_SCOPES,
-        )
-        service = build('gmail', 'v1', credentials=creds)
-        profile = service.users().getProfile(userId='me').execute()
-        gmail_email = profile.get('emailAddress', '')
-
-        # Guardar ou atualizar na DB
-        from app.models import GmailConnection
-        conn = GmailConnection.query.filter_by(user_id=user_id).first()
-        if conn:
-            conn.credentials_json = creds_json
-            conn.gmail_email      = gmail_email
-            conn.ativa            = True
-            conn.atualizado_em    = datetime.utcnow()
-        else:
-            conn = GmailConnection(
-                user_id=user_id,
-                gmail_email=gmail_email,
-                credentials_json=creds_json,
-                ativa=True,
-            )
-            db.session.add(conn)
-        db.session.commit()
-
-        deep_link = f"verly://gmail/callback?success=true&email={gmail_email}"
-        return f"""
-        <html>
-        <head><meta http-equiv="refresh" content="2;url={deep_link}"></head>
-        <body style="font-family:sans-serif;text-align:center;padding:60px;background:#080810;color:#EEEEF8;">
-          <div style="font-size:48px;margin-bottom:16px;">✅</div>
-          <h2 style="color:#7C6FE0;">Gmail ligado!</h2>
-          <p style="color:#8888B0;">A importar os teus emails de compra...</p>
-          <p style="color:#8888B0;font-size:13px;">A redirecionar para a Verly...</p>
-          <a href="{deep_link}" style="color:#7C6FE0;">Voltar à Verly</a>
-        </body>
-        </html>
-        """
-
-    except Exception as e:
-        logger.error(f'Erro no callback Gmail: {e}')
-        deep_link = "verly://gmail/callback?error=server_error"
-        return redirect(deep_link)
-
-
-@api_bp.route('/gmail/status', methods=['GET'])
-@jwt_required()
-def gmail_status():
-    """Estado da ligação Gmail do utilizador autenticado."""
-    from app.models import GmailConnection
-    user_id = int(get_jwt_identity())
-    conn = GmailConnection.query.filter_by(user_id=user_id).first()
-
-    if not conn or not conn.ativa:
-        return jsonify({'ligado': False})
-
-    return jsonify({
-        'ligado':          True,
-        'gmail_email':     conn.gmail_email,
-        'ultima_sync':     conn.ultima_sync.isoformat() if conn.ultima_sync else None,
-        'faturas_importadas': conn.faturas_importadas or 0,
-    })
-
-
-@api_bp.route('/gmail/disconnect', methods=['DELETE'])
-@jwt_required()
-def gmail_disconnect():
-    """Remove a ligação Gmail."""
-    from app.models import GmailConnection
-    user_id = int(get_jwt_identity())
-    conn = GmailConnection.query.filter_by(user_id=user_id).first()
-    if conn:
-        conn.ativa = False
-        db.session.commit()
-    return jsonify({'success': True})
-
-
-# ── Sincronização de Emails ───────────────────────────────────────────────────
-
-def _is_purchase_email(headers: dict, snippet: str) -> bool:
-    """Heurística para identificar emails de confirmação de compra."""
-    from_header = headers.get('From', '').lower()
-    subject     = headers.get('Subject', '').lower()
-
-    # Verificar remetente conhecido
-    for sender_domain in PURCHASE_SENDERS:
-        if sender_domain in from_header:
-            return True
-
-    # Verificar keywords no subject
-    for keyword in PURCHASE_SUBJECT_KEYWORDS:
-        if keyword in subject:
-            return True
-
-    # Verificar snippet do email
-    snippet_lower = snippet.lower()
-    for keyword in ['total', 'subtotal', 'pagamento', 'payment', 'order', 'pedido']:
-        if keyword in snippet_lower:
-            return True
-
-    return False
-
-
-def _extract_email_body(payload: dict) -> str:
-    """Extrai o corpo do email (texto ou HTML) de forma recursiva."""
-    body = ''
-
-    if payload.get('body', {}).get('data'):
-        raw = payload['body']['data']
-        body = base64.urlsafe_b64decode(raw + '==').decode('utf-8', errors='ignore')
-        return body
-
-    for part in payload.get('parts', []):
-        mime_type = part.get('mimeType', '')
-        if mime_type == 'text/plain':
-            data = part.get('body', {}).get('data', '')
-            if data:
-                body = base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
-                return body
-        elif mime_type == 'text/html':
-            data = part.get('body', {}).get('data', '')
-            if data:
-                body = base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
-        elif 'multipart' in mime_type:
-            sub_body = _extract_email_body(part)
-            if sub_body:
-                body = sub_body
-
-    return body
-
-
-def _parse_purchase_info(subject: str, from_header: str, body: str, snippet: str) -> dict:
-    """
-    Tenta extrair loja, total e data a partir do email.
-    Devolve dicionário com os campos encontrados.
-    """
-    info = {
-        'loja':        '',
-        'total':       None,
-        'data_compra': None,
-        'categoria':   'outros',
-    }
-
-    # Extrair loja do remetente
-    from_match = re.search(r'@([\w.-]+)', from_header)
-    if from_match:
-        domain = from_match.group(1).lower()
-        # Limpar subdomínios (mail.amazon.com → amazon)
-        parts = domain.split('.')
-        if len(parts) >= 2:
-            info['loja'] = parts[-2].capitalize()
-
-    # Extrair total (€ XX.XX ou XX,XX €)
-    total_patterns = [
-        r'total[:\s]*€?\s*([\d]+[.,][\d]{2})',
-        r'([\d]+[.,][\d]{2})\s*€',
-        r'€\s*([\d]+[.,][\d]{2})',
-        r'EUR\s*([\d]+[.,][\d]{2})',
-        r'total[:\s]*([\d]+[.,][\d]{2})',
-    ]
-    text_to_search = f"{subject} {snippet} {body[:2000]}"
-    for pattern in total_patterns:
-        match = re.search(pattern, text_to_search, re.IGNORECASE)
-        if match:
-            try:
-                total_str = match.group(1).replace(',', '.')
-                info['total'] = float(total_str)
-                break
-            except ValueError:
-                continue
-
-    # Inferir categoria pela loja
-    loja_lower = info['loja'].lower()
-    categoria_map = {
-        'alimentação':  ['continente', 'pingodoce', 'lidl', 'aldi', 'glovo', 'ubereats', 'bolt'],
-        'vestuário':    ['zara', 'hm', 'mango', 'bershka', 'stradivarius', 'shein', 'zalando'],
-        'electrónica':  ['fnac', 'worten', 'mediamarkt', 'amazon', 'apple'],
-        'transporte':   ['uber', 'freenow', 'cp', 'ryanair', 'tap', 'easyjet', 'flixbus'],
-        'lazer':        ['netflix', 'spotify', 'steam', 'adobe'],
-        'saúde':        ['sephora', 'notino', 'pharmacia'],
-    }
-    for categoria, lojas in categoria_map.items():
-        if any(l in loja_lower for l in lojas):
-            info['categoria'] = categoria
-            break
-
-    return info
-
-
-
-def _parse_with_groq(subject: str, from_header: str, body: str, snippet: str) -> dict:
-    """Usa Groq para extrair informação de compra do email com IA."""
-    try:
-        from groq import Groq as GroqClient
-        client = GroqClient(api_key=os.getenv('GROQ_API_KEY', ''))
-
-        body_truncated = body[:3000] if body else snippet[:500]
-
-        prompt = f"""Analisa este email de confirmação de compra e extrai as informações.
-
-REMETENTE: {from_header}
-ASSUNTO: {subject}
-CORPO:
-{body_truncated}
-
-Responde APENAS com JSON valido, sem mais texto:
-{{
-  "loja": "nome da loja/empresa",
-  "total": 12.99,
-  "itens": ["item 1", "item 2"],
-  "categoria": "alimentacao|vestuario|electronica|transporte|lazer|saude|outros",
-  "e_compra": true,
-  "confianca": 0.9
-}}
-
-Regras:
-- "total" deve ser um numero (ex: 12.99). Se nao encontrares nenhum valor real, usa null.
-- "itens" lista os produtos/servicos. Se for subscricao coloca o nome do plano.
-- "e_compra" e false se nao for confirmacao de compra real (newsletters, promocoes sem compra).
-- Se o total for 0 ou nao houver valor real, total deve ser null."""
-
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=400,
-            temperature=0.1,
-        )
-
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r'```json|```', '', raw).strip()
-        data = json.loads(raw)
-
-        return {
-            'loja':      data.get('loja', ''),
-            'total':     data.get('total'),
-            'itens':     data.get('itens', []),
-            'categoria': data.get('categoria', 'outros'),
-            'e_compra':  data.get('e_compra', True),
-            'confianca': data.get('confianca', 0.5),
-        }
-    except Exception as e:
-        logger.warning(f'Groq parsing falhou, fallback para regex: {e}')
-        info = _parse_purchase_info(subject, from_header, body, snippet)
-        return {**info, 'itens': [], 'e_compra': True, 'confianca': 0.3}
-
-
-@api_bp.route('/gmail/sync', methods=['POST'])
-@jwt_required()
-def gmail_sync():
-    """
-    Sincroniza emails de compra do Gmail e cria faturas automaticamente.
-    Processa os ultimos 30 dias ou desde a ultima sync.
-    Usa Groq para extrair loja, total, itens e categoria.
-    Ignora emails sem valor real (0 euros ou sem total).
-    """
-    from app.models import GmailConnection, Fatura
-
-    user_id = int(get_jwt_identity())
-    conn = GmailConnection.query.filter_by(user_id=user_id, ativa=True).first()
-
-    if not conn:
-        return jsonify({'error': 'Gmail nao ligado.'}), 400
-
-    if not _refresh_credentials_if_needed(conn):
-        return jsonify({'error': 'Erro ao autenticar com Gmail. Volta a ligar a conta.'}), 401
-
-    try:
-        service = _get_gmail_service(conn.credentials_json)
-
-        if conn.ultima_sync:
-            after_date = conn.ultima_sync - timedelta(days=1)
-        else:
-            after_date = datetime.utcnow() - timedelta(days=30)
-
-        after_timestamp = int(after_date.timestamp())
-        query = f'after:{after_timestamp}'
-
-        results = service.users().messages().list(
-            userId='me',
-            q=query,
-            maxResults=100,
-        ).execute()
-
-        messages = results.get('messages', [])
-        faturas_criadas = 0
-        emails_processados = 0
-
-        for msg_ref in messages:
-            msg_id = msg_ref['id']
-
-            existing = Fatura.query.filter_by(
-                user_id=user_id,
-                gmail_message_id=msg_id,
-            ).first()
-            if existing:
-                continue
-
-            msg = service.users().messages().get(
-                userId='me',
-                id=msg_id,
-                format='full',
-            ).execute()
-
-            headers = {}
-            for h in msg.get('payload', {}).get('headers', []):
-                headers[h['name']] = h['value']
-
-            snippet = msg.get('snippet', '')
-
-            if not _is_purchase_email(headers, snippet):
-                continue
-
-            emails_processados += 1
-
-            body = _extract_email_body(msg.get('payload', {}))
-            subject = headers.get('Subject', '')
-            from_header = headers.get('From', '')
-
-            # Usar Groq para extrair informacao com IA
-            purchase_info = _parse_with_groq(subject, from_header, body, snippet)
-
-            # Ignorar se nao for compra real ou sem valor
-            if not purchase_info.get('e_compra', True):
-                continue
-            if not purchase_info.get('total') or purchase_info['total'] <= 0:
-                continue
-            if purchase_info.get('confianca', 0) < 0.4:
-                continue
-
-            date_header = headers.get('Date', '')
-            try:
-                from email.utils import parsedate_to_datetime
-                data_compra = parsedate_to_datetime(date_header).replace(tzinfo=None)
-            except Exception:
-                data_compra = datetime.utcnow()
-
-            itens = purchase_info.get('itens', [])
-            notas_parts = ['Importado automaticamente do Gmail']
-            if itens:
-                notas_parts.append('Itens: ' + ', '.join(itens[:10]))
-            notas_parts.append(f'Assunto: {subject}')
-            notas = '\n'.join(notas_parts)
-
-            items_json = json.dumps(
-                [{'nome': item, 'preco': None} for item in itens],
-                ensure_ascii=False
-            ) if itens else None
-
-            fatura = Fatura(
-                user_id=user_id,
-                nome_ficheiro=f"Gmail: {subject[:80]}",
-                loja=purchase_info['loja'] or 'Desconhecido',
-                data_compra=data_compra,
-                total=purchase_info['total'],
-                items=items_json,
-                categoria=purchase_info['categoria'],
-                notas=notas,
-                gmail_message_id=msg_id,
-                fonte='gmail',
-            )
-            db.session.add(fatura)
-            faturas_criadas += 1
-
-        conn.ultima_sync = datetime.utcnow()
-        conn.faturas_importadas = (conn.faturas_importadas or 0) + faturas_criadas
-        db.session.commit()
-
-        # ── Auto-deteção de subscrições após sync ─────────────────────────────
-        try:
-            from app.api.subscricoes import _detetar_e_guardar
-            subs_novas = _detetar_e_guardar(user_id)
-        except Exception as sub_err:
-            logger.warning(f'Auto-deteção subscrições falhou: {sub_err}')
-            subs_novas = 0
-
-        return jsonify({
-            'success': True,
-            'emails_analisados': len(messages),
-            'emails_compra':     emails_processados,
-            'faturas_criadas':   faturas_criadas,
-            'ultima_sync':       conn.ultima_sync.isoformat(),
-            'subscricoes_detetadas': subs_novas,
-        })
-
-    except Exception as e:
-        logger.error(f'Erro na sync Gmail: {e}')
-        db.session.rollback()
-        return jsonify({'error': f'Erro na sincronizacao: {str(e)}'}), 500
 </file>
 
 <file path="app/api/metas.py">
@@ -2067,293 +1148,6 @@ def perfil_mobile_update():
     db.session.commit()
 
     return jsonify({'success': True, 'message': 'Perfil atualizado.'})
-</file>
-
-<file path="app/api/subscricoes.py">
-"""
-app/api/subscricoes.py
-Endpoint mobile para Leak Detector + verificação Pro via RevenueCat.
-
-Adicionar em app/api/__init__.py:
-    from app.api import subscricoes  # noqa
-"""
-
-import os
-import requests
-from flask import jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import Subscricao, User, Fatura
-from app import db
-
-# ── Config RevenueCat ─────────────────────────────────────────────────────────
-
-REVENUECAT_SECRET_KEY = os.getenv('REVENUECAT_SECRET_KEY', 'sk_qVKmtGGXRNsBISJeGndavzeKUkFKg')
-REVENUECAT_BASE       = 'https://api.revenuecat.com/v2'
-PRO_ENTITLEMENT       = 'Verly Pro'
-
-
-def _is_pro(user_id: int) -> bool:
-    """Verifica no RevenueCat se o utilizador tem entitlement Pro ativo."""
-    try:
-        url = f'{REVENUECAT_BASE}/projects/customers/{user_id}/active_entitlements'
-        headers = {
-            'Authorization': f'Bearer {REVENUECAT_SECRET_KEY}',
-            'Content-Type': 'application/json',
-        }
-        r = requests.get(url, headers=headers, timeout=5)
-        if r.status_code == 200:
-            data = r.json()
-            entitlements = data.get('items', [])
-            return any(e.get('entitlement', {}).get('identifier') == PRO_ENTITLEMENT for e in entitlements)
-    except Exception as e:
-        print(f'[RevenueCat] Erro ao verificar Pro: {e}')
-    return False
-
-
-# ── GET /api/v1/subscricoes ───────────────────────────────────────────────────
-
-@api_bp.route('/subscricoes', methods=['GET'])
-@jwt_required()
-def listar_subscricoes():
-    """
-    Devolve as subscrições do utilizador.
-    Se for Pro, inclui análise completa. Se não for, devolve lista limitada.
-    """
-    user_id = int(get_jwt_identity())
-
-    subs = Subscricao.query.filter_by(user_id=user_id, ativa=True).order_by(
-        Subscricao.preco_mensal.desc()
-    ).all()
-
-    subs_list = [
-        {
-            'id':           s.id,
-            'nome':         s.nome,
-            'categoria':    s.categoria,
-            'icone':        s.icone,
-            'preco_mensal': s.preco_mensal,
-            'meses_pago':   s.meses_pago,
-            'risk':         s.risk,
-            'fonte':        s.fonte,
-        }
-        for s in subs
-    ]
-
-    total_mensal   = sum(s.preco_mensal for s in subs)
-    total_anual    = total_mensal * 12
-    total_pago     = sum(s.preco_mensal * s.meses_pago for s in subs)
-    high_risk      = [s for s in subs_list if s['risk'] == 'high']
-
-    is_pro = _is_pro(user_id)
-
-    return jsonify({
-        'success':      True,
-        'is_pro':       is_pro,
-        'subscricoes':  subs_list,
-        'resumo': {
-            'total_mensal':  round(total_mensal, 2),
-            'total_anual':   round(total_anual, 2),
-            'total_pago':    round(total_pago, 2),
-            'count':         len(subs_list),
-            'high_risk':     len(high_risk),
-        },
-    })
-
-
-# ── POST /api/v1/subscricoes/detetar ─────────────────────────────────────────
-
-SUBSCRIPTION_KEYWORDS = [
-    'netflix', 'spotify', 'amazon prime', 'disney', 'hbo', 'apple music',
-    'youtube premium', 'google one', 'icloud', 'dropbox', 'adobe',
-    'microsoft 365', 'microsoft', 'office 365', 'linkedin', 'canva', 'notion',
-    'slack', 'zoom', 'gym', 'ginásio', 'fitness', 'nespresso',
-    'nos ', 'meo', 'vodafone', 'seguro', 'antivirus', 'vpn',
-    'github', 'figma', 'duolingo', 'coursera', 'udemy', 'apple tv',
-    'playstation', 'twitch', 'xbox', 'nintendo', 'prime video',
-]
-
-SUB_ICONS = {
-    'streaming': '📺', 'musica': '🎵', 'cloud': '☁️',
-    'fitness': '💪', 'software': '💻', 'telco': '📡',
-    'educacao': '📚', 'jogos': '🎮', 'seguro': '🛡️', 'outro': '📦',
-}
-
-
-def _classify(name: str) -> tuple[str, str]:
-    n = name.lower()
-    if any(k in n for k in ['netflix', 'disney', 'hbo', 'youtube', 'apple tv', 'prime video']):
-        cat = 'streaming'
-    elif any(k in n for k in ['spotify', 'apple music', 'deezer']):
-        cat = 'musica'
-    elif any(k in n for k in ['icloud', 'google one', 'dropbox', 'onedrive']):
-        cat = 'cloud'
-    elif any(k in n for k in ['gym', 'ginásio', 'fitness']):
-        cat = 'fitness'
-    elif any(k in n for k in ['adobe', 'microsoft', 'github', 'figma', 'notion', 'slack', 'zoom', 'canva']):
-        cat = 'software'
-    elif any(k in n for k in ['nos ', 'meo', 'vodafone', 'nospresso']):
-        cat = 'telco'
-    elif any(k in n for k in ['duolingo', 'coursera', 'udemy']):
-        cat = 'educacao'
-    elif any(k in n for k in ['playstation', 'xbox', 'nintendo', 'twitch']):
-        cat = 'jogos'
-    elif 'seguro' in n:
-        cat = 'seguro'
-    else:
-        cat = 'outro'
-    return cat, SUB_ICONS.get(cat, '📦')
-
-
-@api_bp.route('/subscricoes/detetar', methods=['POST'])
-@jwt_required()
-def detetar_subscricoes():
-    """
-    Analisa as faturas do utilizador e deteta subscrições automáticas.
-    Guarda na BD e devolve o resultado.
-    Requer Pro para deteção completa (mais de 3 resultados).
-    """
-    user_id = int(get_jwt_identity())
-    is_pro  = _is_pro(user_id)
-
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
-    detetadas = {}
-
-    for f in faturas:
-        nome = (f.loja or f.nome_ficheiro or '').lower()
-        for kw in SUBSCRIPTION_KEYWORDS:
-            if kw in nome:
-                chave = kw.strip()
-                if chave not in detetadas:
-                    detetadas[chave] = {
-                        'nome':   f.loja or f.nome_ficheiro or kw.title(),
-                        'preco':  float(f.total or 0),
-                        'count':  1,
-                    }
-                else:
-                    detetadas[chave]['count'] += 1
-                    detetadas[chave]['preco'] = max(
-                        detetadas[chave]['preco'], float(f.total or 0)
-                    )
-                break
-
-    # Limitar a 3 para utilizadores Free
-    items = list(detetadas.values())
-    if not is_pro:
-        items = items[:3]
-
-    # Guardar/atualizar na BD
-    for item in items:
-        nome_display = item['nome'].title()
-        cat, icone   = _classify(nome_display)
-        preco        = round(item['preco'], 2)
-        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
-
-        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
-        if existing:
-            existing.preco_mensal = preco
-            existing.meses_pago   = item['count']
-            existing.risk         = risk
-        else:
-            db.session.add(Subscricao(
-                user_id=user_id,
-                nome=nome_display,
-                categoria=cat,
-                icone=icone,
-                preco_mensal=preco,
-                meses_pago=item['count'],
-                risk=risk,
-                fonte='faturas',
-            ))
-
-    db.session.commit()
-
-    return jsonify({
-        'success':    True,
-        'is_pro':     is_pro,
-        'detetadas':  len(items),
-        'limitado':   not is_pro and len(detetadas) > 3,
-    })
-
-
-# ── DELETE /api/v1/subscricoes/<id> ──────────────────────────────────────────
-
-@api_bp.route('/subscricoes/<int:sub_id>', methods=['DELETE'])
-@jwt_required()
-def apagar_subscricao(sub_id):
-    user_id = int(get_jwt_identity())
-    sub = Subscricao.query.filter_by(id=sub_id, user_id=user_id).first()
-    if not sub:
-        return jsonify({'success': False, 'message': 'Não encontrada'}), 404
-    sub.ativa = False
-    db.session.commit()
-    return jsonify({'success': True})
-
-
-# ── GET /api/v1/subscricoes/pro-status ───────────────────────────────────────
-
-@api_bp.route('/subscricoes/pro-status', methods=['GET'])
-@jwt_required()
-def pro_status():
-    """Verifica se o utilizador tem Pro ativo via RevenueCat."""
-    user_id = int(get_jwt_identity())
-    is_pro  = _is_pro(user_id)
-    return jsonify({'success': True, 'is_pro': is_pro})
-
-# ── Helper reutilizável (chamado pelo gmail sync) ─────────────────────────────
-
-def _detetar_e_guardar(user_id: int) -> int:
-    """
-    Deteta subscrições nas faturas do utilizador e guarda na BD.
-    Retorna o número de subscrições novas/atualizadas.
-    Chamado automaticamente após sync Gmail.
-    """
-    from app.models import Fatura, Subscricao
-    from app import db
-
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
-    detetadas = {}
-
-    for f in faturas:
-        nome = (f.loja or f.nome_ficheiro or '').lower()
-        for kw in SUBSCRIPTION_KEYWORDS:
-            if kw in nome:
-                chave = kw.strip()
-                if chave not in detetadas:
-                    detetadas[chave] = {
-                        'nome':  f.loja or f.nome_ficheiro or kw.title(),
-                        'preco': float(f.total or 0),
-                        'count': 1,
-                    }
-                else:
-                    detetadas[chave]['count'] += 1
-                    detetadas[chave]['preco'] = max(
-                        detetadas[chave]['preco'], float(f.total or 0)
-                    )
-                break
-
-    count = 0
-    for item in detetadas.values():
-        nome_display = item['nome'].title()
-        cat, icone   = _classify(nome_display)
-        preco        = round(item['preco'], 2)
-        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
-
-        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
-        if existing:
-            existing.preco_mensal = preco
-            existing.meses_pago   = item['count']
-            existing.risk         = risk
-        else:
-            db.session.add(Subscricao(
-                user_id=user_id, nome=nome_display, categoria=cat,
-                icone=icone, preco_mensal=preco, meses_pago=item['count'],
-                risk=risk, fonte='gmail_auto',
-            ))
-            count += 1
-
-    db.session.commit()
-    return count
 </file>
 
 <file path="app/configuracoes.py">
@@ -8970,563 +7764,272 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/GmailScreen.js">
+<file path="verly-mobile/src/screens/MinhasSubscricoesScreen.js">
 /**
- * verly-mobile/src/screens/GmailScreen.js
+ * src/screens/MinhasSubscricoesScreen.js
+ * Subscrições detetadas automaticamente via faturas + Gmail
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Linking, Alert, RefreshControl,
+  View, Text, ScrollView, Pressable,
+  ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
-import { COLORS, FONT, SPACE, RADIUS } from '../constants/theme';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useFocusEffect } from '@react-navigation/native';
+import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { apiFetch } from '../services/api';
 
-const gmailAPI = {
-  authUrl:    () => apiFetch('/gmail/auth-url'),
-  status:     () => apiFetch('/gmail/status'),
-  sync:       () => apiFetch('/gmail/sync', { method: 'POST' }),
-  disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
+const C = COLORS;
+
+const RISK_CONFIG = {
+  high:   { color: C.red,    label: 'Alto risco',  bg: 'rgba(255,77,109,0.10)'  },
+  medium: { color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
+  ok:     { color: C.green,  label: 'Normal',      bg: 'rgba(0,214,143,0.10)'   },
 };
 
-function StatCard({ label, value, color }) {
+function SubCard({ sub, onDelete, index }) {
+  const risk = RISK_CONFIG[sub.risk] || RISK_CONFIG.ok;
+
   return (
-    <View style={styles.statCard}>
-      <Text style={[styles.statValue, color && { color }]}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
+    <Animated.View entering={FadeInDown.delay(index * 60).springify()}>
+      <View style={{
+        backgroundColor: C.surface,
+        borderRadius: RADIUS.lg,
+        borderWidth: 1,
+        borderColor: C.border,
+        padding: 16,
+        marginBottom: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+      }}>
+        {/* Ícone */}
+        <View style={{
+          width: 44, height: 44, borderRadius: 12,
+          backgroundColor: risk.bg,
+          justifyContent: 'center', alignItems: 'center',
+        }}>
+          <Text style={{ fontSize: 22 }}>{sub.icone || '📦'}</Text>
+        </View>
+
+        {/* Info */}
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: FONT.md, fontWeight: '700', color: C.text }}>
+            {sub.nome}
+          </Text>
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, marginTop: 2 }}>
+            {sub.categoria} · pago {sub.meses_pago}x
+          </Text>
+          <View style={{
+            marginTop: 5, alignSelf: 'flex-start',
+            backgroundColor: risk.bg, borderRadius: 6,
+            paddingHorizontal: 7, paddingVertical: 2,
+          }}>
+            <Text style={{ fontSize: 10, fontWeight: '800', color: risk.color }}>
+              {risk.label.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        {/* Preço + delete */}
+        <View style={{ alignItems: 'flex-end', gap: 8 }}>
+          <Text style={{ fontSize: FONT.lg, fontWeight: '900', color: C.brand }}>
+            {sub.preco_mensal?.toFixed(2)}€
+          </Text>
+          <Text style={{ fontSize: 10, color: C.textSub }}>/ mês</Text>
+          <Pressable
+            onPress={() => onDelete(sub.id, sub.nome)}
+            hitSlop={8}
+            style={{ padding: 4 }}
+          >
+            <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Animated.View>
   );
 }
 
-function SenderChip({ name }) {
-  return (
-    <View style={styles.chip}>
-      <Text style={styles.chipText}>{name}</Text>
-    </View>
-  );
-}
+export default function MinhasSubscricoesScreen({ navigation }) {
+  const [subs, setSubs]           = useState([]);
+  const [resumo, setResumo]       = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefresh]  = useState(false);
+  const [detetando, setDetetando] = useState(false);
 
-const KNOWN_STORES = [
-  'Zara', 'H&M', 'FNAC', 'Worten', 'Amazon', 'Zalando',
-  'Continente', 'Uber Eats', 'Glovo', 'Booking', 'Spotify', 'Netflix',
-];
-
-export default function GmailScreen({ navigation }) {
-  const [status, setStatus]         = useState(null);
-  const [loading, setLoading]       = useState(true);
-  const [syncing, setSyncing]       = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const [lastResult, setLastResult] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const loadStatus = useCallback(async () => {
+  const carregar = useCallback(async (refresh = false) => {
+    if (refresh) setRefresh(true);
+    else setLoading(true);
     try {
-      const data = await gmailAPI.status();
-      setStatus(data);
+      const data = await apiFetch('/subscricoes');
+      if (data.success) {
+        setSubs(data.subscricoes || []);
+        setResumo(data.resumo || null);
+      }
     } catch (e) {
-      console.warn('Erro ao carregar status Gmail:', e);
+      console.warn('Erro subscrições:', e);
     } finally {
       setLoading(false);
-      setRefreshing(false);
+      setRefresh(false);
     }
   }, []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
 
-  useEffect(() => {
-    const handleUrl = ({ url }) => {
-      if (url?.includes('gmail/callback')) {
-        if (url.includes('success=true')) {
-          loadStatus();
-          handleSync(true);
-        } else {
-          Alert.alert('Erro', 'Não foi possível ligar o Gmail. Tenta novamente.');
-        }
-        setConnecting(false);
-      }
-    };
-    const sub = Linking.addEventListener('url', handleUrl);
-    return () => sub?.remove();
-  }, [loadStatus]);
-
-  const handleConnect = async () => {
-    setConnecting(true);
+  const detetar = async () => {
+    setDetetando(true);
     try {
-      const { auth_url } = await gmailAPI.authUrl();
-      await Linking.openURL(auth_url);
-    } catch (e) {
-      Alert.alert('Erro', 'Não foi possível iniciar a ligação ao Gmail.');
-      setConnecting(false);
-    }
-  };
-
-  const handleSync = async (silent = false) => {
-    if (syncing) return;
-    setSyncing(true);
-    setLastResult(null);
-    try {
-      const result = await gmailAPI.sync();
-      setLastResult(result);
-      await loadStatus();
-      if (!silent && result.faturas_criadas === 0) {
-        Alert.alert('Nada de novo', 'Não encontrámos emails de compra novos nos últimos 30 dias.');
+      const res = await apiFetch('/subscricoes/detetar', { method: 'POST' });
+      if (res.success) {
+        await carregar();
+        const msg = res.detetadas > 0
+          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas faturas!`
+          : 'Nenhuma subscrição nova detetada nas faturas atuais.';
+        Alert.alert('Deteção concluída', msg);
       }
     } catch (e) {
-      Alert.alert('Erro', 'Erro ao sincronizar. Verifica a ligação e tenta novamente.');
+      Alert.alert('Erro', 'Não foi possível detetar subscrições. Tenta novamente.');
     } finally {
-      setSyncing(false);
+      setDetetando(false);
     }
   };
 
-  const handleDisconnect = () => {
+  const eliminar = (id, nome) => {
     Alert.alert(
-      'Desligar Gmail',
-      'As faturas já importadas ficam guardadas. Queres mesmo desligar?',
+      'Remover subscrição',
+      `Remover "${nome}" da lista?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Desligar',
+          text: 'Remover',
           style: 'destructive',
           onPress: async () => {
             try {
-              await gmailAPI.disconnect();
-              setStatus({ ligado: false });
-              setLastResult(null);
+              await apiFetch(`/subscricoes/${id}`, { method: 'DELETE' });
+              setSubs(prev => prev.filter(s => s.id !== id));
             } catch (e) {
-              Alert.alert('Erro', 'Não foi possível desligar. Tenta novamente.');
+              Alert.alert('Erro', 'Não foi possível remover.');
             }
           },
         },
-      ],
+      ]
     );
   };
 
+  const totalAnual = resumo?.total_anual || 0;
+  const highRisk   = resumo?.high_risk || 0;
+
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={COLORS.brand} />
+      <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator color={C.brand} size="large" />
       </View>
     );
   }
 
-  const isConnected = status?.ligado;
-  const ultimaSync  = status?.ultima_sync
-    ? new Date(status.ultima_sync).toLocaleString('pt-PT', {
-        day: '2-digit', month: '2-digit',
-        hour: '2-digit', minute: '2-digit',
-      })
-    : null;
-
-  // ── Ecrã não ligado ─────────────────────────────────────────────────────────
-  if (!isConnected) {
-    return (
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.notConnectedContent}
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.iconCircle}>
-          <Text style={styles.iconEmoji}>📧</Text>
-        </View>
-
-        <Text style={styles.title}>Importar do Gmail</Text>
-        <Text style={styles.subtitle}>
-          Liga o teu Gmail e a Verly importa automaticamente os emails de
-          confirmação de compra — sem teres de fazer upload de nada.
-        </Text>
-
-        <View style={styles.howCard}>
-          <Text style={styles.howTitle}>Como funciona</Text>
-          {[
-            ['🔍', 'A Verly analisa apenas emails de confirmação de compras'],
-            ['🤖', 'A IA extrai loja, valor e data automaticamente'],
-            ['🔒', 'Nunca lemos emails pessoais — só confirmações de compra'],
-            ['✅', 'Tens sempre controlo total — podes desligar quando quiseres'],
-          ].map(([icon, text], i) => (
-            <View key={i} style={styles.howRow}>
-              <Text style={styles.howIcon}>{icon}</Text>
-              <Text style={styles.howText}>{text}</Text>
-            </View>
-          ))}
-        </View>
-
-        <Text style={styles.sectionLabel}>Detetamos automaticamente</Text>
-        <View style={styles.chipsRow}>
-          {KNOWN_STORES.map(s => <SenderChip key={s} name={s} />)}
-          <SenderChip name="e muito mais..." />
-        </View>
-
-        {/* BOTÃO — agora com margem top garantida */}
-        <TouchableOpacity
-          style={[styles.btn, styles.btnPrimary, connecting && styles.btnDisabled]}
-          onPress={handleConnect}
-          disabled={connecting}
-          activeOpacity={0.8}
-        >
-          {connecting
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Text style={styles.btnPrimaryText}>Ligar Gmail</Text>
-          }
-        </TouchableOpacity>
-
-        <Text style={styles.privacyNote}>
-          Permissão de leitura apenas. Não enviamos nem apagamos emails.
-        </Text>
-      </ScrollView>
-    );
-  }
-
-  // ── Ecrã ligado ─────────────────────────────────────────────────────────────
   return (
     <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.connectedContent}
+      style={{ flex: 1, backgroundColor: C.bg }}
+      contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 60 }}
       showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={() => {
-          setRefreshing(true);
-          loadStatus();
-        }} tintColor={COLORS.brand} />
+        <RefreshControl refreshing={refreshing} onRefresh={() => carregar(true)} tintColor={C.brand} />
       }
     >
-      <View style={styles.connectedBadge}>
-        <View style={styles.connectedDot} />
-        <Text style={styles.connectedEmail}>{status.gmail_email}</Text>
-      </View>
-
-      <View style={styles.statsRow}>
-        <StatCard
-          label="Faturas importadas"
-          value={status.faturas_importadas ?? 0}
-          color={COLORS.brand}
-        />
-        <StatCard
-          label="Última sync"
-          value={ultimaSync ?? '—'}
-        />
-      </View>
-
-      {lastResult && lastResult.faturas_criadas > 0 && (
-        <View style={styles.resultCard}>
-          <Text style={styles.resultTitle}>
-            ✅ {lastResult.faturas_criadas} fatura{lastResult.faturas_criadas !== 1 ? 's' : ''} importada{lastResult.faturas_criadas !== 1 ? 's' : ''}
+      {/* Resumo */}
+      {resumo && subs.length > 0 && (
+        <Animated.View
+          entering={FadeInDown.duration(400).springify()}
+          style={{
+            backgroundColor: C.surface,
+            borderRadius: RADIUS.lg,
+            borderWidth: 1,
+            borderColor: C.brand + '30',
+            padding: 20,
+            marginBottom: 20,
+          }}
+        >
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 }}>
+            Resumo
           </Text>
-          <Text style={styles.resultSub}>
-            {lastResult.emails_analisados} emails analisados
-          </Text>
-        </View>
-      )}
-
-      {lastResult && lastResult.faturas_criadas === 0 && (
-        <View style={[styles.resultCard, styles.resultCardNeutral]}>
-          <Text style={styles.resultTitleNeutral}>Sem faturas novas</Text>
-          <Text style={styles.resultSub}>
-            {lastResult.emails_analisados} emails analisados
-          </Text>
-        </View>
-      )}
-
-      <TouchableOpacity
-        style={[styles.btn, styles.btnPrimary, syncing && styles.btnDisabled]}
-        onPress={() => handleSync(false)}
-        disabled={syncing}
-        activeOpacity={0.8}
-      >
-        {syncing ? (
-          <View style={styles.btnRow}>
-            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.btnPrimaryText}>A sincronizar...</Text>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: C.brand }}>
+                {resumo.total_mensal?.toFixed(2)}€
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por mês</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: C.border }} />
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: C.text }}>
+                {totalAnual?.toFixed(0)}€
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por ano</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: C.border }} />
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: highRisk > 0 ? C.red : C.green }}>
+                {highRisk}
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>alto risco</Text>
+            </View>
           </View>
-        ) : (
-          <Text style={styles.btnPrimaryText}>Sincronizar agora</Text>
-        )}
-      </TouchableOpacity>
+        </Animated.View>
+      )}
 
-      <Text style={styles.syncNote}>
-        Analisa emails de confirmação de compra dos últimos 30 dias.
-      </Text>
-
-      <TouchableOpacity
-        style={[styles.btn, styles.btnSecondary]}
-        onPress={() => navigation.navigate('Faturas', { filtro: 'gmail' })}
-        activeOpacity={0.8}
+      {/* Botão detetar */}
+      <Pressable
+        onPress={detetar}
+        disabled={detetando}
+        style={({ pressed }) => ({
+          backgroundColor: detetando ? C.surface : C.brand,
+          borderRadius: RADIUS.lg,
+          padding: 16,
+          alignItems: 'center',
+          marginBottom: 20,
+          opacity: pressed ? 0.85 : 1,
+          flexDirection: 'row',
+          justifyContent: 'center',
+          gap: 10,
+        })}
       >
-        <Text style={styles.btnSecondaryText}>Ver faturas importadas do Gmail</Text>
-      </TouchableOpacity>
-
-      <View style={styles.privacyCard}>
-        <Text style={styles.privacyTitle}>🔒 A tua privacidade</Text>
-        <Text style={styles.privacyBody}>
-          A Verly só lê emails com assuntos como "confirmação de pedido" ou "recibo".
-          Nunca acedemos a emails pessoais, nem guardamos o conteúdo dos emails
-          — apenas os dados extraídos (loja, valor, data).
+        {detetando
+          ? <ActivityIndicator color="#fff" size="small" />
+          : <Text style={{ fontSize: 18 }}>🔍</Text>
+        }
+        <Text style={{ fontSize: FONT.md, fontWeight: '800', color: '#fff' }}>
+          {detetando ? 'A detetar...' : 'Detetar subscrições automáticas'}
         </Text>
-      </View>
+      </Pressable>
 
-      <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnect}>
-        <Text style={styles.disconnectText}>Desligar Gmail</Text>
-      </TouchableOpacity>
+      {/* Lista */}
+      {subs.length === 0 ? (
+        <Animated.View entering={FadeInDown.delay(200).springify()}
+          style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
+          <Text style={{ fontSize: 48 }}>📭</Text>
+          <Text style={{ fontSize: FONT.lg, fontWeight: '700', color: C.text }}>
+            Sem subscrições
+          </Text>
+          <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
+            Toca em "Detetar" para a Verly analisar as tuas faturas e encontrar subscrições automáticas.
+          </Text>
+        </Animated.View>
+      ) : (
+        <>
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
+            {subs.length} subscrição{subs.length !== 1 ? 'ões' : ''} encontrada{subs.length !== 1 ? 's' : ''}
+          </Text>
+          {subs.map((sub, i) => (
+            <SubCard key={sub.id} sub={sub} onDelete={eliminar} index={i} />
+          ))}
+        </>
+      )}
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.bg,
-  },
-
-  // Ecrã não ligado — flexGrow garante que o scroll funciona e o botão aparece
-  notConnectedContent: {
-    flexGrow: 1,
-    padding: SPACE.lg,
-    alignItems: 'center',
-    paddingBottom: 40,
-  },
-  iconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: COLORS.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: SPACE.lg,
-    marginBottom: SPACE.md,
-  },
-  iconEmoji: { fontSize: 36 },
-  title: {
-    fontSize: FONT.xl,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: SPACE.sm,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: FONT.sm,
-    color: COLORS.textSub,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: SPACE.lg,
-    maxWidth: 320,
-  },
-
-  howCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.lg,
-    padding: SPACE.md,
-    width: '100%',
-    marginBottom: SPACE.lg,
-  },
-  howTitle: {
-    fontSize: FONT.sm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACE.sm,
-  },
-  howRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 10,
-    gap: 10,
-  },
-  howIcon: { fontSize: 16, marginTop: 1 },
-  howText: {
-    flex: 1,
-    fontSize: FONT.xs,
-    color: COLORS.textSub,
-    lineHeight: 20,
-  },
-
-  sectionLabel: {
-    fontSize: FONT.xs,
-    color: COLORS.textSub,
-    alignSelf: 'flex-start',
-    marginBottom: SPACE.sm,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  chipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: SPACE.xl,
-    alignSelf: 'flex-start',
-  },
-  chip: {
-    backgroundColor: COLORS.surface,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: RADIUS.sm,
-  },
-  chipText: { fontSize: FONT.xs, color: COLORS.textSub },
-
-  privacyNote: {
-    fontSize: 11,
-    color: COLORS.textSub,
-    textAlign: 'center',
-    marginTop: SPACE.sm,
-    opacity: 0.7,
-  },
-
-  // Ecrã ligado
-  connectedContent: {
-    flexGrow: 1,
-    padding: SPACE.lg,
-    paddingBottom: 40,
-  },
-  connectedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.lg,
-    padding: SPACE.md,
-    marginBottom: SPACE.md,
-    gap: 10,
-  },
-  connectedDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#2ecc71',
-  },
-  connectedEmail: {
-    fontSize: FONT.sm,
-    color: COLORS.text,
-    fontWeight: '500',
-    flex: 1,
-  },
-
-  statsRow: {
-    flexDirection: 'row',
-    gap: SPACE.sm,
-    marginBottom: SPACE.md,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
-    padding: SPACE.md,
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: FONT.lg,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: COLORS.textSub,
-    marginTop: 4,
-    textAlign: 'center',
-  },
-
-  resultCard: {
-    backgroundColor: '#1a3a2a',
-    borderRadius: RADIUS.md,
-    padding: SPACE.md,
-    marginBottom: SPACE.md,
-    borderWidth: 1,
-    borderColor: '#2ecc71' + '40',
-  },
-  resultCardNeutral: {
-    backgroundColor: COLORS.surface,
-    borderColor: 'transparent',
-  },
-  resultTitle: {
-    fontSize: FONT.sm,
-    fontWeight: '600',
-    color: '#2ecc71',
-    marginBottom: 4,
-  },
-  resultTitleNeutral: {
-    fontSize: FONT.sm,
-    fontWeight: '600',
-    color: COLORS.textSub,
-    marginBottom: 4,
-  },
-  resultSub: {
-    fontSize: FONT.xs,
-    color: COLORS.textSub,
-  },
-
-  syncNote: {
-    fontSize: FONT.xs,
-    color: COLORS.textSub,
-    textAlign: 'center',
-    marginTop: SPACE.sm,
-    marginBottom: SPACE.md,
-  },
-
-  privacyCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.lg,
-    padding: SPACE.md,
-    marginBottom: SPACE.md,
-  },
-  privacyTitle: {
-    fontSize: FONT.sm,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: SPACE.sm,
-  },
-  privacyBody: {
-    fontSize: FONT.xs,
-    color: COLORS.textSub,
-    lineHeight: 20,
-  },
-
-  disconnectBtn: {
-    alignItems: 'center',
-    paddingVertical: SPACE.md,
-  },
-  disconnectText: {
-    fontSize: FONT.sm,
-    color: COLORS.red,
-  },
-
-  // Botões
-  btn: {
-    borderRadius: RADIUS.md,
-    paddingVertical: 16,
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: SPACE.sm,
-    marginTop: SPACE.md,
-    minHeight: 52,
-  },
-  btnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  btnPrimary: {
-    backgroundColor: '#7C6FE0',
-    borderWidth: 0,
-  },
-  btnPrimaryText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: FONT.md,
-  },
-  btnSecondary: {
-    backgroundColor: COLORS.surface,
-    marginBottom: SPACE.md,
-  },
-  btnSecondaryText: {
-    color: COLORS.text,
-    fontWeight: '600',
-    fontSize: FONT.sm,
-  },
-  btnDisabled: {
-    opacity: 0.5,
-  },
-});
 </file>
 
 <file path="verly-mobile/src/screens/NotificacoesScreen.js">
@@ -10539,6 +9042,647 @@ def upload_fatura():
         return jsonify({'error': 'Erro ao processar a fatura.'}), 500
 </file>
 
+<file path="app/api/gmail.py">
+"""
+app/api/gmail.py — Integração Gmail para importação automática de faturas
+
+FLUXO OAUTH:
+  GET  /api/v1/gmail/auth-url        → devolve URL de autorização Google
+  POST /api/v1/gmail/callback        → troca código por tokens, guarda na DB
+  GET  /api/v1/gmail/status          → estado da ligação Gmail do utilizador
+  DELETE /api/v1/gmail/disconnect    → remove ligação
+
+SINCRONIZAÇÃO:
+  POST /api/v1/gmail/sync            → sincroniza emails de compra (manual)
+  GET  /api/v1/gmail/sync/status     → estado da última sincronização
+
+COMO ADICIONAR AO PROJETO:
+  1. pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+  2. Adicionar ao .env: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APP_URL
+  3. Em app/api/__init__.py adicionar: from app.api import gmail  # noqa
+  4. Em app/models.py adicionar o modelo GmailConnection (ver models_addition.py)
+  5. No Google Cloud Console:
+     - Criar projeto → ativar Gmail API
+     - OAuth 2.0 → Authorized redirect URIs: {APP_URL}/api/v1/gmail/callback-web
+     - Scopes necessários: gmail.readonly, gmail.labels
+"""
+
+import os
+import json
+import logging
+import base64
+import re
+from datetime import datetime, timedelta
+from flask import request, jsonify, redirect
+from flask_jwt_extended import jwt_required, get_jwt_identity, decode_token
+from app.api import api_bp
+from app import db
+
+logger = logging.getLogger(__name__)
+
+GOOGLE_CLIENT_ID     = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+APP_URL              = os.getenv('APP_URL', 'https://verly.app')
+
+GMAIL_SCOPES = [
+    'https://www.googleapis.com/auth/gmail.readonly',
+]
+
+# Remetentes conhecidos de confirmações de compra em Portugal e internacionais
+PURCHASE_SENDERS = {
+    # Moda PT
+    'zara.com', 'hm.com', 'pullandbear.com', 'bershka.com', 'massimodutti.com',
+    'stradivarius.com', 'noreply@mango.com', 'parfois.com',
+    # Electrónica PT
+    'worten.pt', 'fnac.pt', 'mediamarkt.pt', 'radio-popular.pt',
+    # Supermercados PT
+    'continente.pt', 'pingo-doce.pt', 'minipreço.pt', 'lidl.pt', 'aldi.pt',
+    # Saúde & Beleza PT
+    'sephora.pt', 'notino.pt', 'pharmacia.pt',
+    # Marketplace PT
+    'olx.pt', 'custo-justo.pt',
+    # Internacional comum
+    'amazon.com', 'amazon.co.uk', 'amazon.es', 'ebay.com',
+    'aliexpress.com', 'shein.com', 'temu.com', 'zalando.pt',
+    # Food delivery
+    'ubereats.com', 'glovo.com', 'bolt.eu',
+    # Transporte
+    'uber.com', 'freenow.com', 'bolt.eu', 'cp.pt', 'flixbus.pt',
+    # Streaming / Digital
+    'netflix.com', 'spotify.com', 'apple.com', 'google.com',
+    'microsoft.com', 'adobe.com', 'dropbox.com',
+    # Viagens
+    'booking.com', 'airbnb.com', 'ryanair.com', 'tap.pt', 'easyjet.com',
+}
+
+# Keywords no subject que indicam email de compra
+PURCHASE_SUBJECT_KEYWORDS = [
+    'confirmação', 'confirmacao', 'confirmação de', 'pedido confirmado',
+    'order confirmed', 'order confirmation', 'your order', 'receipt',
+    'recibo', 'fatura', 'factura', 'invoice', 'compra realizada',
+    'purchase confirmation', 'payment confirmation', 'pagamento confirmado',
+    'encomenda', 'detalhe do pedido', 'order details', 'your receipt',
+    'obrigado pela sua compra', 'thank you for your purchase',
+    'resumo do pedido', 'detalhes da compra',
+]
+
+
+# ── Helpers OAuth ─────────────────────────────────────────────────────────────
+
+def _build_oauth_flow(state=None):
+    """Constrói o objeto OAuth2 flow do Google sem PKCE (server-side flow)."""
+    from google_auth_oauthlib.flow import Flow
+
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [f"{APP_URL}/api/v1/gmail/callback-web"],
+        }
+    }
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=GMAIL_SCOPES,
+        state=state,
+    )
+    flow.redirect_uri = f"{APP_URL}/api/v1/gmail/callback-web"
+    return flow
+
+
+def _get_gmail_service(credentials_json: str):
+    """Cria cliente Gmail API a partir das credentials guardadas."""
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    creds_data = json.loads(credentials_json)
+    creds = Credentials(
+        token=creds_data.get('token'),
+        refresh_token=creds_data.get('refresh_token'),
+        token_uri='https://oauth2.googleapis.com/token',
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        scopes=GMAIL_SCOPES,
+    )
+    return build('gmail', 'v1', credentials=creds)
+
+
+def _refresh_credentials_if_needed(gmail_conn) -> bool:
+    """Renova o access token se expirado. Devolve True se ok."""
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+
+        creds_data = json.loads(gmail_conn.credentials_json)
+        creds = Credentials(
+            token=creds_data.get('token'),
+            refresh_token=creds_data.get('refresh_token'),
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            scopes=GMAIL_SCOPES,
+        )
+
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            creds_data['token'] = creds.token
+            gmail_conn.credentials_json = json.dumps(creds_data)
+            db.session.commit()
+
+        return True
+    except Exception as e:
+        logger.error(f'Erro ao renovar credentials Gmail: {e}')
+        return False
+
+
+# ── Endpoints OAuth ───────────────────────────────────────────────────────────
+
+@api_bp.route('/gmail/auth-url', methods=['GET'])
+@jwt_required()
+def gmail_auth_url():
+    """
+    Devolve a URL de autorização Google para o utilizador abrir no browser.
+    URL construído manualmente para garantir que NÃO inclui PKCE (code_challenge).
+    """
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        return jsonify({'error': 'Gmail não configurado no servidor.'}), 503
+
+    user_id = get_jwt_identity()
+    state = base64.urlsafe_b64encode(str(user_id).encode()).decode()
+
+    try:
+        import urllib.parse
+        params = {
+            'client_id':     GOOGLE_CLIENT_ID,
+            'redirect_uri':  f"{APP_URL}/api/v1/gmail/callback-web",
+            'response_type': 'code',
+            'scope':         ' '.join(GMAIL_SCOPES),
+            'access_type':   'offline',
+            'prompt':        'consent',
+            'state':         state,
+            # Sem code_challenge nem code_challenge_method → sem PKCE
+        }
+        auth_url = 'https://accounts.google.com/o/oauth2/v2/auth?' + urllib.parse.urlencode(params)
+        return jsonify({'auth_url': auth_url, 'state': state})
+    except Exception as e:
+        logger.error(f'Erro ao gerar auth URL Gmail: {e}')
+        return jsonify({'error': 'Erro ao gerar URL de autorização.'}), 500
+
+
+@api_bp.route('/gmail/callback-web', methods=['GET'])
+def gmail_callback_web():
+    """
+    Callback OAuth do Google — chamado pelo browser depois do utilizador autorizar.
+    Troca o código por tokens e guarda na DB.
+    Redireciona para deep link da app.
+    """
+    code  = request.args.get('code', '')
+    state = request.args.get('state', '')
+    error = request.args.get('error', '')
+
+    if error:
+        deep_link = f"verly://gmail/callback?error={error}"
+        return redirect(deep_link)
+
+    if not code or not state:
+        return '<h2>Parâmetros inválidos.</h2>', 400
+
+    # Recuperar user_id do state
+    try:
+        user_id = int(base64.urlsafe_b64decode(state.encode()).decode())
+    except Exception:
+        return '<h2>State inválido.</h2>', 400
+
+    try:
+        # IMPORTANTE: criar flow sem state para evitar validação PKCE no fetch_token
+        flow = _build_oauth_flow()
+        # Trocar o código por tokens manualmente para evitar PKCE
+        import requests as req_lib
+        token_response = req_lib.post(
+            'https://oauth2.googleapis.com/token',
+            data={
+                'code': code,
+                'client_id': GOOGLE_CLIENT_ID,
+                'client_secret': GOOGLE_CLIENT_SECRET,
+                'redirect_uri': f"{APP_URL}/api/v1/gmail/callback-web",
+                'grant_type': 'authorization_code',
+            }
+        )
+        token_data = token_response.json()
+
+        if 'error' in token_data:
+            logger.error(f'Erro ao trocar código Gmail: {token_data}')
+            deep_link = "verly://gmail/callback?error=token_exchange_failed"
+            return redirect(deep_link)
+
+        access_token  = token_data.get('access_token')
+        refresh_token = token_data.get('refresh_token')
+
+        creds_json = json.dumps({
+            'token':         access_token,
+            'refresh_token': refresh_token,
+            'scopes':        GMAIL_SCOPES,
+        })
+
+        # Obter email Gmail do utilizador
+        from google.oauth2.credentials import Credentials
+        from googleapiclient.discovery import build
+        creds = Credentials(
+            token=access_token,
+            refresh_token=refresh_token,
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=GOOGLE_CLIENT_ID,
+            client_secret=GOOGLE_CLIENT_SECRET,
+            scopes=GMAIL_SCOPES,
+        )
+        service = build('gmail', 'v1', credentials=creds)
+        profile = service.users().getProfile(userId='me').execute()
+        gmail_email = profile.get('emailAddress', '')
+
+        # Guardar ou atualizar na DB
+        from app.models import GmailConnection
+        conn = GmailConnection.query.filter_by(user_id=user_id).first()
+        if conn:
+            conn.credentials_json = creds_json
+            conn.gmail_email      = gmail_email
+            conn.ativa            = True
+            conn.atualizado_em    = datetime.utcnow()
+        else:
+            conn = GmailConnection(
+                user_id=user_id,
+                gmail_email=gmail_email,
+                credentials_json=creds_json,
+                ativa=True,
+            )
+            db.session.add(conn)
+        db.session.commit()
+
+        deep_link = f"verly://gmail/callback?success=true&email={gmail_email}"
+        return f"""
+        <html>
+        <head><meta http-equiv="refresh" content="2;url={deep_link}"></head>
+        <body style="font-family:sans-serif;text-align:center;padding:60px;background:#080810;color:#EEEEF8;">
+          <div style="font-size:48px;margin-bottom:16px;">✅</div>
+          <h2 style="color:#7C6FE0;">Gmail ligado!</h2>
+          <p style="color:#8888B0;">A importar os teus emails de compra...</p>
+          <p style="color:#8888B0;font-size:13px;">A redirecionar para a Verly...</p>
+          <a href="{deep_link}" style="color:#7C6FE0;">Voltar à Verly</a>
+        </body>
+        </html>
+        """
+
+    except Exception as e:
+        logger.error(f'Erro no callback Gmail: {e}')
+        deep_link = "verly://gmail/callback?error=server_error"
+        return redirect(deep_link)
+
+
+@api_bp.route('/gmail/status', methods=['GET'])
+@jwt_required()
+def gmail_status():
+    """Estado da ligação Gmail do utilizador autenticado."""
+    from app.models import GmailConnection
+    user_id = int(get_jwt_identity())
+    conn = GmailConnection.query.filter_by(user_id=user_id).first()
+
+    if not conn or not conn.ativa:
+        return jsonify({'ligado': False})
+
+    return jsonify({
+        'ligado':          True,
+        'gmail_email':     conn.gmail_email,
+        'ultima_sync':     conn.ultima_sync.isoformat() if conn.ultima_sync else None,
+        'faturas_importadas': conn.faturas_importadas or 0,
+    })
+
+
+@api_bp.route('/gmail/disconnect', methods=['DELETE'])
+@jwt_required()
+def gmail_disconnect():
+    """Remove a ligação Gmail."""
+    from app.models import GmailConnection
+    user_id = int(get_jwt_identity())
+    conn = GmailConnection.query.filter_by(user_id=user_id).first()
+    if conn:
+        conn.ativa = False
+        db.session.commit()
+    return jsonify({'success': True})
+
+
+# ── Sincronização de Emails ───────────────────────────────────────────────────
+
+def _is_purchase_email(headers: dict, snippet: str) -> bool:
+    """Heurística para identificar emails de confirmação de compra."""
+    from_header = headers.get('From', '').lower()
+    subject     = headers.get('Subject', '').lower()
+
+    # Verificar remetente conhecido
+    for sender_domain in PURCHASE_SENDERS:
+        if sender_domain in from_header:
+            return True
+
+    # Verificar keywords no subject
+    for keyword in PURCHASE_SUBJECT_KEYWORDS:
+        if keyword in subject:
+            return True
+
+    # Verificar snippet do email
+    snippet_lower = snippet.lower()
+    for keyword in ['total', 'subtotal', 'pagamento', 'payment', 'order', 'pedido']:
+        if keyword in snippet_lower:
+            return True
+
+    return False
+
+
+def _extract_email_body(payload: dict) -> str:
+    """Extrai o corpo do email (texto ou HTML) de forma recursiva."""
+    body = ''
+
+    if payload.get('body', {}).get('data'):
+        raw = payload['body']['data']
+        body = base64.urlsafe_b64decode(raw + '==').decode('utf-8', errors='ignore')
+        return body
+
+    for part in payload.get('parts', []):
+        mime_type = part.get('mimeType', '')
+        if mime_type == 'text/plain':
+            data = part.get('body', {}).get('data', '')
+            if data:
+                body = base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+                return body
+        elif mime_type == 'text/html':
+            data = part.get('body', {}).get('data', '')
+            if data:
+                body = base64.urlsafe_b64decode(data + '==').decode('utf-8', errors='ignore')
+        elif 'multipart' in mime_type:
+            sub_body = _extract_email_body(part)
+            if sub_body:
+                body = sub_body
+
+    return body
+
+
+def _parse_purchase_info(subject: str, from_header: str, body: str, snippet: str) -> dict:
+    """
+    Tenta extrair loja, total e data a partir do email.
+    Devolve dicionário com os campos encontrados.
+    """
+    info = {
+        'loja':        '',
+        'total':       None,
+        'data_compra': None,
+        'categoria':   'outros',
+    }
+
+    # Extrair loja do remetente
+    from_match = re.search(r'@([\w.-]+)', from_header)
+    if from_match:
+        domain = from_match.group(1).lower()
+        # Limpar subdomínios (mail.amazon.com → amazon)
+        parts = domain.split('.')
+        if len(parts) >= 2:
+            info['loja'] = parts[-2].capitalize()
+
+    # Extrair total (€ XX.XX ou XX,XX €)
+    total_patterns = [
+        r'total[:\s]*€?\s*([\d]+[.,][\d]{2})',
+        r'([\d]+[.,][\d]{2})\s*€',
+        r'€\s*([\d]+[.,][\d]{2})',
+        r'EUR\s*([\d]+[.,][\d]{2})',
+        r'total[:\s]*([\d]+[.,][\d]{2})',
+    ]
+    text_to_search = f"{subject} {snippet} {body[:2000]}"
+    for pattern in total_patterns:
+        match = re.search(pattern, text_to_search, re.IGNORECASE)
+        if match:
+            try:
+                total_str = match.group(1).replace(',', '.')
+                info['total'] = float(total_str)
+                break
+            except ValueError:
+                continue
+
+    # Inferir categoria pela loja
+    loja_lower = info['loja'].lower()
+    categoria_map = {
+        'alimentação':  ['continente', 'pingodoce', 'lidl', 'aldi', 'glovo', 'ubereats', 'bolt'],
+        'vestuário':    ['zara', 'hm', 'mango', 'bershka', 'stradivarius', 'shein', 'zalando'],
+        'electrónica':  ['fnac', 'worten', 'mediamarkt', 'amazon', 'apple'],
+        'transporte':   ['uber', 'freenow', 'cp', 'ryanair', 'tap', 'easyjet', 'flixbus'],
+        'lazer':        ['netflix', 'spotify', 'steam', 'adobe'],
+        'saúde':        ['sephora', 'notino', 'pharmacia'],
+    }
+    for categoria, lojas in categoria_map.items():
+        if any(l in loja_lower for l in lojas):
+            info['categoria'] = categoria
+            break
+
+    return info
+
+
+
+def _parse_with_groq(subject: str, from_header: str, body: str, snippet: str) -> dict:
+    """Usa Groq para extrair informação de compra do email com IA."""
+    try:
+        from groq import Groq as GroqClient
+        client = GroqClient(api_key=os.getenv('GROQ_API_KEY', ''))
+
+        body_truncated = body[:3000] if body else snippet[:500]
+
+        prompt = f"""Analisa este email de confirmação de compra e extrai as informações.
+
+REMETENTE: {from_header}
+ASSUNTO: {subject}
+CORPO:
+{body_truncated}
+
+Responde APENAS com JSON valido, sem mais texto:
+{{
+  "loja": "nome da loja/empresa",
+  "total": 12.99,
+  "itens": ["item 1", "item 2"],
+  "categoria": "alimentacao|vestuario|electronica|transporte|lazer|saude|outros",
+  "e_compra": true,
+  "confianca": 0.9
+}}
+
+Regras:
+- "total" deve ser um numero (ex: 12.99). Se nao encontrares nenhum valor real, usa null.
+- "itens" lista os produtos/servicos. Se for subscricao coloca o nome do plano.
+- "e_compra" e false se nao for confirmacao de compra real (newsletters, promocoes sem compra).
+- Se o total for 0 ou nao houver valor real, total deve ser null."""
+
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=400,
+            temperature=0.1,
+        )
+
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r'```json|```', '', raw).strip()
+        data = json.loads(raw)
+
+        return {
+            'loja':      data.get('loja', ''),
+            'total':     data.get('total'),
+            'itens':     data.get('itens', []),
+            'categoria': data.get('categoria', 'outros'),
+            'e_compra':  data.get('e_compra', True),
+            'confianca': data.get('confianca', 0.5),
+        }
+    except Exception as e:
+        logger.warning(f'Groq parsing falhou, fallback para regex: {e}')
+        info = _parse_purchase_info(subject, from_header, body, snippet)
+        return {**info, 'itens': [], 'e_compra': True, 'confianca': 0.3}
+
+
+@api_bp.route('/gmail/sync', methods=['POST'])
+@jwt_required()
+def gmail_sync():
+    """
+    Sincroniza emails de compra do Gmail e cria faturas automaticamente.
+    Processa os ultimos 30 dias ou desde a ultima sync.
+    Usa Groq para extrair loja, total, itens e categoria.
+    Ignora emails sem valor real (0 euros ou sem total).
+    """
+    from app.models import GmailConnection, Fatura
+
+    user_id = int(get_jwt_identity())
+    conn = GmailConnection.query.filter_by(user_id=user_id, ativa=True).first()
+
+    if not conn:
+        return jsonify({'error': 'Gmail nao ligado.'}), 400
+
+    if not _refresh_credentials_if_needed(conn):
+        return jsonify({'error': 'Erro ao autenticar com Gmail. Volta a ligar a conta.'}), 401
+
+    try:
+        service = _get_gmail_service(conn.credentials_json)
+
+        if conn.ultima_sync:
+            after_date = conn.ultima_sync - timedelta(days=1)
+        else:
+            after_date = datetime.utcnow() - timedelta(days=30)
+
+        after_timestamp = int(after_date.timestamp())
+        query = f'after:{after_timestamp}'
+
+        results = service.users().messages().list(
+            userId='me',
+            q=query,
+            maxResults=100,
+        ).execute()
+
+        messages = results.get('messages', [])
+        faturas_criadas = 0
+        emails_processados = 0
+
+        for msg_ref in messages:
+            msg_id = msg_ref['id']
+
+            existing = Fatura.query.filter_by(
+                user_id=user_id,
+                gmail_message_id=msg_id,
+            ).first()
+            if existing:
+                continue
+
+            msg = service.users().messages().get(
+                userId='me',
+                id=msg_id,
+                format='full',
+            ).execute()
+
+            headers = {}
+            for h in msg.get('payload', {}).get('headers', []):
+                headers[h['name']] = h['value']
+
+            snippet = msg.get('snippet', '')
+
+            if not _is_purchase_email(headers, snippet):
+                continue
+
+            emails_processados += 1
+
+            body = _extract_email_body(msg.get('payload', {}))
+            subject = headers.get('Subject', '')
+            from_header = headers.get('From', '')
+
+            # Usar Groq para extrair informacao com IA
+            purchase_info = _parse_with_groq(subject, from_header, body, snippet)
+
+            # Ignorar se nao for compra real ou sem valor
+            if not purchase_info.get('e_compra', True):
+                continue
+            if not purchase_info.get('total') or purchase_info['total'] <= 0:
+                continue
+            if purchase_info.get('confianca', 0) < 0.4:
+                continue
+
+            date_header = headers.get('Date', '')
+            try:
+                from email.utils import parsedate_to_datetime
+                data_compra = parsedate_to_datetime(date_header).replace(tzinfo=None)
+            except Exception:
+                data_compra = datetime.utcnow()
+
+            itens = purchase_info.get('itens', [])
+            notas_parts = ['Importado automaticamente do Gmail']
+            if itens:
+                notas_parts.append('Itens: ' + ', '.join(itens[:10]))
+            notas_parts.append(f'Assunto: {subject}')
+            notas = '\n'.join(notas_parts)
+
+            items_json = json.dumps(
+                [{'nome': item, 'preco': None} for item in itens],
+                ensure_ascii=False
+            ) if itens else None
+
+            fatura = Fatura(
+                user_id=user_id,
+                nome_ficheiro=f"Gmail: {subject[:80]}",
+                loja=purchase_info['loja'] or 'Desconhecido',
+                data_compra=data_compra,
+                total=purchase_info['total'],
+                items=items_json,
+                categoria=purchase_info['categoria'],
+                notas=notas,
+                gmail_message_id=msg_id,
+                fonte='gmail',
+            )
+            db.session.add(fatura)
+            faturas_criadas += 1
+
+        conn.ultima_sync = datetime.utcnow()
+        conn.faturas_importadas = (conn.faturas_importadas or 0) + faturas_criadas
+        db.session.commit()
+
+        # ── Auto-deteção de subscrições após sync ─────────────────────────────
+        try:
+            from app.api.subscricoes import _detetar_e_guardar
+            subs_novas = _detetar_e_guardar(user_id)
+        except Exception as sub_err:
+            logger.warning(f'Auto-deteção subscrições falhou: {sub_err}')
+            subs_novas = 0
+
+        return jsonify({
+            'success': True,
+            'emails_analisados': len(messages),
+            'emails_compra':     emails_processados,
+            'faturas_criadas':   faturas_criadas,
+            'ultima_sync':       conn.ultima_sync.isoformat(),
+            'subscricoes_detetadas': subs_novas,
+        })
+
+    except Exception as e:
+        logger.error(f'Erro na sync Gmail: {e}')
+        db.session.rollback()
+        return jsonify({'error': f'Erro na sincronizacao: {str(e)}'}), 500
+</file>
+
 <file path="app/api/playlists.py">
 """
 app/api/playlists.py — Playlists de faturas ("Criar Em")
@@ -10818,6 +9962,293 @@ def sair_playlist(playlist_id):
     )
     db.session.commit()
     return jsonify({'success': True})
+</file>
+
+<file path="app/api/subscricoes.py">
+"""
+app/api/subscricoes.py
+Endpoint mobile para Leak Detector + verificação Pro via RevenueCat.
+
+Adicionar em app/api/__init__.py:
+    from app.api import subscricoes  # noqa
+"""
+
+import os
+import requests
+from flask import jsonify, request
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Subscricao, User, Fatura
+from app import db
+
+# ── Config RevenueCat ─────────────────────────────────────────────────────────
+
+REVENUECAT_SECRET_KEY = os.getenv('REVENUECAT_SECRET_KEY', 'sk_qVKmtGGXRNsBISJeGndavzeKUkFKg')
+REVENUECAT_BASE       = 'https://api.revenuecat.com/v2'
+PRO_ENTITLEMENT       = 'Verly Pro'
+
+
+def _is_pro(user_id: int) -> bool:
+    """Verifica no RevenueCat se o utilizador tem entitlement Pro ativo."""
+    try:
+        url = f'{REVENUECAT_BASE}/projects/customers/{user_id}/active_entitlements'
+        headers = {
+            'Authorization': f'Bearer {REVENUECAT_SECRET_KEY}',
+            'Content-Type': 'application/json',
+        }
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            entitlements = data.get('items', [])
+            return any(e.get('entitlement', {}).get('identifier') == PRO_ENTITLEMENT for e in entitlements)
+    except Exception as e:
+        print(f'[RevenueCat] Erro ao verificar Pro: {e}')
+    return False
+
+
+# ── GET /api/v1/subscricoes ───────────────────────────────────────────────────
+
+@api_bp.route('/subscricoes', methods=['GET'])
+@jwt_required()
+def listar_subscricoes():
+    """
+    Devolve as subscrições do utilizador.
+    Se for Pro, inclui análise completa. Se não for, devolve lista limitada.
+    """
+    user_id = int(get_jwt_identity())
+
+    subs = Subscricao.query.filter_by(user_id=user_id, ativa=True).order_by(
+        Subscricao.preco_mensal.desc()
+    ).all()
+
+    subs_list = [
+        {
+            'id':           s.id,
+            'nome':         s.nome,
+            'categoria':    s.categoria,
+            'icone':        s.icone,
+            'preco_mensal': s.preco_mensal,
+            'meses_pago':   s.meses_pago,
+            'risk':         s.risk,
+            'fonte':        s.fonte,
+        }
+        for s in subs
+    ]
+
+    total_mensal   = sum(s.preco_mensal for s in subs)
+    total_anual    = total_mensal * 12
+    total_pago     = sum(s.preco_mensal * s.meses_pago for s in subs)
+    high_risk      = [s for s in subs_list if s['risk'] == 'high']
+
+    is_pro = _is_pro(user_id)
+
+    return jsonify({
+        'success':      True,
+        'is_pro':       is_pro,
+        'subscricoes':  subs_list,
+        'resumo': {
+            'total_mensal':  round(total_mensal, 2),
+            'total_anual':   round(total_anual, 2),
+            'total_pago':    round(total_pago, 2),
+            'count':         len(subs_list),
+            'high_risk':     len(high_risk),
+        },
+    })
+
+
+# ── POST /api/v1/subscricoes/detetar ─────────────────────────────────────────
+
+SUBSCRIPTION_KEYWORDS = [
+    'netflix', 'spotify', 'amazon prime', 'disney', 'hbo', 'apple music',
+    'youtube premium', 'google one', 'icloud', 'dropbox', 'adobe',
+    'microsoft 365', 'microsoft', 'office 365', 'linkedin', 'canva', 'notion',
+    'slack', 'zoom', 'gym', 'ginásio', 'fitness', 'nespresso',
+    'nos ', 'meo', 'vodafone', 'seguro', 'antivirus', 'vpn',
+    'github', 'figma', 'duolingo', 'coursera', 'udemy', 'apple tv',
+    'playstation', 'twitch', 'xbox', 'nintendo', 'prime video',
+]
+
+SUB_ICONS = {
+    'streaming': '📺', 'musica': '🎵', 'cloud': '☁️',
+    'fitness': '💪', 'software': '💻', 'telco': '📡',
+    'educacao': '📚', 'jogos': '🎮', 'seguro': '🛡️', 'outro': '📦',
+}
+
+
+def _classify(name: str) -> tuple[str, str]:
+    n = name.lower()
+    if any(k in n for k in ['netflix', 'disney', 'hbo', 'youtube', 'apple tv', 'prime video']):
+        cat = 'streaming'
+    elif any(k in n for k in ['spotify', 'apple music', 'deezer']):
+        cat = 'musica'
+    elif any(k in n for k in ['icloud', 'google one', 'dropbox', 'onedrive']):
+        cat = 'cloud'
+    elif any(k in n for k in ['gym', 'ginásio', 'fitness']):
+        cat = 'fitness'
+    elif any(k in n for k in ['adobe', 'microsoft', 'github', 'figma', 'notion', 'slack', 'zoom', 'canva']):
+        cat = 'software'
+    elif any(k in n for k in ['nos ', 'meo', 'vodafone', 'nospresso']):
+        cat = 'telco'
+    elif any(k in n for k in ['duolingo', 'coursera', 'udemy']):
+        cat = 'educacao'
+    elif any(k in n for k in ['playstation', 'xbox', 'nintendo', 'twitch']):
+        cat = 'jogos'
+    elif 'seguro' in n:
+        cat = 'seguro'
+    else:
+        cat = 'outro'
+    return cat, SUB_ICONS.get(cat, '📦')
+
+
+@api_bp.route('/subscricoes/detetar', methods=['POST'])
+@jwt_required()
+def detetar_subscricoes():
+    """
+    Analisa as faturas do utilizador e deteta subscrições automáticas.
+    Guarda na BD e devolve o resultado.
+    Requer Pro para deteção completa (mais de 3 resultados).
+    """
+    user_id = int(get_jwt_identity())
+    is_pro  = _is_pro(user_id)
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    detetadas = {}
+
+    for f in faturas:
+        nome = (f.loja or f.nome_ficheiro or '').lower()
+        for kw in SUBSCRIPTION_KEYWORDS:
+            if kw in nome:
+                chave = kw.strip()
+                if chave not in detetadas:
+                    detetadas[chave] = {
+                        'nome':   f.loja or f.nome_ficheiro or kw.title(),
+                        'preco':  float(f.total or 0),
+                        'count':  1,
+                    }
+                else:
+                    detetadas[chave]['count'] += 1
+                    detetadas[chave]['preco'] = max(
+                        detetadas[chave]['preco'], float(f.total or 0)
+                    )
+                break
+
+    # Limitar a 3 para utilizadores Free
+    items = list(detetadas.values())
+    if not is_pro:
+        items = items[:3]
+
+    # Guardar/atualizar na BD
+    for item in items:
+        nome_display = item['nome'].title()
+        cat, icone   = _classify(nome_display)
+        preco        = round(item['preco'], 2)
+        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
+
+        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
+        if existing:
+            existing.preco_mensal = preco
+            existing.meses_pago   = item['count']
+            existing.risk         = risk
+        else:
+            db.session.add(Subscricao(
+                user_id=user_id,
+                nome=nome_display,
+                categoria=cat,
+                icone=icone,
+                preco_mensal=preco,
+                meses_pago=item['count'],
+                risk=risk,
+                fonte='faturas',
+            ))
+
+    db.session.commit()
+
+    return jsonify({
+        'success':    True,
+        'is_pro':     is_pro,
+        'detetadas':  len(items),
+        'limitado':   not is_pro and len(detetadas) > 3,
+    })
+
+
+# ── DELETE /api/v1/subscricoes/<id> ──────────────────────────────────────────
+
+@api_bp.route('/subscricoes/<int:sub_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_subscricao(sub_id):
+    user_id = int(get_jwt_identity())
+    sub = Subscricao.query.filter_by(id=sub_id, user_id=user_id).first()
+    if not sub:
+        return jsonify({'success': False, 'message': 'Não encontrada'}), 404
+    sub.ativa = False
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+# ── GET /api/v1/subscricoes/pro-status ───────────────────────────────────────
+
+@api_bp.route('/subscricoes/pro-status', methods=['GET'])
+@jwt_required()
+def pro_status():
+    """Verifica se o utilizador tem Pro ativo via RevenueCat."""
+    user_id = int(get_jwt_identity())
+    is_pro  = _is_pro(user_id)
+    return jsonify({'success': True, 'is_pro': is_pro})
+
+# ── Helper reutilizável (chamado pelo gmail sync) ─────────────────────────────
+
+def _detetar_e_guardar(user_id: int) -> int:
+    """
+    Deteta subscrições nas faturas do utilizador e guarda na BD.
+    Retorna o número de subscrições novas/atualizadas.
+    Chamado automaticamente após sync Gmail.
+    """
+    from app.models import Fatura, Subscricao
+    from app import db
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    detetadas = {}
+
+    for f in faturas:
+        nome = (f.loja or f.nome_ficheiro or '').lower()
+        for kw in SUBSCRIPTION_KEYWORDS:
+            if kw in nome:
+                chave = kw.strip()
+                if chave not in detetadas:
+                    detetadas[chave] = {
+                        'nome':  f.loja or f.nome_ficheiro or kw.title(),
+                        'preco': float(f.total or 0),
+                        'count': 1,
+                    }
+                else:
+                    detetadas[chave]['count'] += 1
+                    detetadas[chave]['preco'] = max(
+                        detetadas[chave]['preco'], float(f.total or 0)
+                    )
+                break
+
+    count = 0
+    for item in detetadas.values():
+        nome_display = item['nome'].title()
+        cat, icone   = _classify(nome_display)
+        preco        = round(item['preco'], 2)
+        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
+
+        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
+        if existing:
+            existing.preco_mensal = preco
+            existing.meses_pago   = item['count']
+            existing.risk         = risk
+        else:
+            db.session.add(Subscricao(
+                user_id=user_id, nome=nome_display, categoria=cat,
+                icone=icone, preco_mensal=preco, meses_pago=item['count'],
+                risk=risk, fonte='gmail_auto',
+            ))
+            count += 1
+
+    db.session.commit()
+    return count
 </file>
 
 <file path="app/exportar.py">
@@ -11403,225 +10834,6 @@ RESUMO DE VALORES
   Pull & Bear - Servico ao Cliente: support@pull-e-bear.pt
 
 ================================================================================
-</file>
-
-<file path="enviar_alertas_push.py">
-#!/usr/bin/env python3
-"""
-enviar_alertas_push.py — Cron diário: envia push FCM reais a todos os utilizadores
-
-Agendar (crontab):
-    0 9 * * * cd /caminho/para/verly && python enviar_alertas_push.py
-
-Requer:
-    - firebase-service-account.json na raiz do projeto
-    - Coluna fcm_token na tabela users (ver migration abaixo)
-    - firebase-admin instalado: pip install firebase-admin
-
-Migration (executar uma vez):
-    ALTER TABLE users ADD COLUMN fcm_token VARCHAR(512);
-    ALTER TABLE users ADD COLUMN fcm_token_updated TIMESTAMP;
-    ALTER TABLE users ADD COLUMN push_ativas BOOLEAN DEFAULT TRUE;
-"""
-
-import os
-import sys
-import logging
-from datetime import datetime, timedelta
-from collections import defaultdict
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from dotenv import load_dotenv
-load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s — %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger('push_alertas')
-
-
-def _parse_date(date_str):
-    if not date_str:
-        return None
-    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
-        try:
-            return datetime.strptime(str(date_str).strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def gerar_alertas_push(user, faturas, orcamento, hoje):
-    """
-    Gera lista de pushes a enviar para um utilizador.
-    Devolve lista de {'titulo': ..., 'corpo': ...}.
-    """
-    alertas = []
-    mes_atual = hoje.month
-    ano_atual = hoje.year
-
-    # ── 1. Garantias a expirar em <=7 dias ───────────────────────────────────
-    for f in faturas:
-        data_gar = _parse_date(f.data_garantia)
-        if data_gar and data_gar >= hoje:
-            dias = (data_gar - hoje).days
-            if dias <= 7:
-                loja = f.loja or f.nome_ficheiro or 'produto'
-                alertas.append({
-                    'titulo': f'Garantia expira em {dias} dia{"s" if dias != 1 else ""}!',
-                    'corpo': f'A garantia de {loja} termina em {data_gar.strftime("%d/%m/%Y")}. Guarda bem o teu comprovativo.',
-                    'tipo': 'garantia',
-                })
-
-    # ── 2. Devoluções a expirar em <=3 dias ──────────────────────────────────
-    for f in faturas:
-        data_dev = _parse_date(f.data_devolucao)
-        if data_dev and data_dev >= hoje:
-            dias = (data_dev - hoje).days
-            if dias <= 3:
-                loja = f.loja or f.nome_ficheiro or 'produto'
-                alertas.append({
-                    'titulo': f'Prazo de devolucao termina em {dias} dia{"s" if dias != 1 else ""}!',
-                    'corpo': f'{loja}: tens ate {data_dev.strftime("%d/%m")} para devolver.',
-                    'tipo': 'devolucao',
-                })
-
-    # ── 3. Orcamento ─────────────────────────────────────────────────────────
-    if orcamento > 0:
-        total_mes = sum(
-            f.total or 0 for f in faturas
-            if _parse_date(f.data_compra) and
-               _parse_date(f.data_compra).month == mes_atual and
-               _parse_date(f.data_compra).year == ano_atual
-        )
-        pct = (total_mes / orcamento) * 100 if orcamento > 0 else 0
-
-        # Dias restantes do mes
-        if hoje.month == 12:
-            fim_mes = datetime(hoje.year + 1, 1, 1)
-        else:
-            fim_mes = datetime(hoje.year, hoje.month + 1, 1)
-        dias_restantes = (fim_mes - hoje).days
-
-        if pct >= 100:
-            alertas.append({
-                'titulo': 'Orcamento ultrapassado!',
-                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR ({pct:.0f}%). Ainda faltam {dias_restantes} dias para o fim do mes.',
-                'tipo': 'orcamento',
-            })
-        elif pct >= 80:
-            restante = orcamento - total_mes
-            alertas.append({
-                'titulo': f'Ja usaste {pct:.0f}% do orcamento',
-                'corpo': f'Restam {restante:.0f}EUR e {dias_restantes} dias para o fim do mes. Cuidado com os proximos gastos.',
-                'tipo': 'orcamento',
-            })
-        elif pct >= 50 and dias_restantes <= 10:
-            alertas.append({
-                'titulo': f'{pct:.0f}% usado, {dias_restantes} dias restantes',
-                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR. Ao ritmo atual podes ultrapassar o orcamento.',
-                'tipo': 'orcamento',
-            })
-
-    return alertas
-
-
-def main():
-    logger.info('=' * 60)
-    logger.info(f'Verly Push Alertas — {datetime.now().strftime("%Y-%m-%d %H:%M")}')
-    logger.info('=' * 60)
-
-    # Inicializar Firebase
-    try:
-        import firebase_admin
-        from firebase_admin import credentials, messaging
-        if not firebase_admin._apps:
-            cred = credentials.Certificate('firebase-service-account.json')
-            firebase_admin.initialize_app(cred)
-        logger.info('Firebase Admin SDK inicializado.')
-    except Exception as e:
-        logger.error(f'Erro Firebase: {e}')
-        logger.warning('Push nao sera enviada — continua com email.')
-
-    from app import create_app, db
-    from app.models import User, Fatura
-
-    app = create_app()
-    hoje = datetime.utcnow()
-
-    with app.app_context():
-        try:
-            utilizadores = User.query.filter(
-                User.fcm_token.isnot(None),
-                User.fcm_token != '',
-            ).all()
-        except Exception:
-            logger.warning('Coluna fcm_token nao encontrada. Executa a migration primeiro.')
-            utilizadores = []
-
-        logger.info(f'{len(utilizadores)} utilizador(es) com FCM token.')
-
-        enviados = 0
-        erros = 0
-
-        for user in utilizadores:
-            try:
-                faturas = Fatura.query.filter_by(user_id=user.id).all()
-                orcamento = getattr(user, 'orcamento_mensal', 0) or 0
-                alertas = gerar_alertas_push(user, faturas, orcamento, hoje)
-
-                if not alertas:
-                    continue
-
-                # Envia apenas o alerta mais urgente (para nao spammar)
-                alerta = alertas[0]
-
-                try:
-                    from firebase_admin import messaging
-                    msg = messaging.Message(
-                        notification=messaging.Notification(
-                            title=alerta['titulo'],
-                            body=alerta['corpo'],
-                        ),
-                        data={
-                            'tipo': alerta.get('tipo', 'alerta'),
-                            'user_id': str(user.id),
-                        },
-                        token=user.fcm_token,
-                        android=messaging.AndroidConfig(
-                            priority='high',
-                            notification=messaging.AndroidNotification(
-                                icon='ic_notification',
-                                color='#7C6FE0',
-                                channel_id='verly_alertas',
-                            ),
-                        ),
-                        apns=messaging.APNSConfig(
-                            payload=messaging.APNSPayload(
-                                aps=messaging.Aps(badge=len(alertas), sound='default'),
-                            ),
-                        ),
-                    )
-                    response = messaging.send(msg)
-                    logger.info(f'Push enviada para user {user.id}: {response}')
-                    enviados += 1
-
-                except Exception as e:
-                    logger.error(f'Erro ao enviar push para user {user.id}: {e}')
-                    erros += 1
-
-            except Exception as e:
-                logger.error(f'Erro ao processar user {user.id}: {e}')
-                erros += 1
-
-        logger.info(f'Concluido — Enviadas: {enviados} | Erros: {erros}')
-
-
-if __name__ == '__main__':
-    main()
 </file>
 
 <file path="migration_fcm_push.py">
@@ -13667,71 +12879,6 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/constants/theme.js">
-// src/constants/theme.js — Verly Design System
-
-export const COLORS = {
-  // Brand
-  brand:    '#7C6FE0',
-  brandMid: '#9D93E8',
-  brandDim: 'rgba(124,111,224,0.12)',
-  brandGlow:'rgba(124,111,224,0.22)',
-
-  // Backgrounds
-  bg:       '#080810',
-  surface:  '#0F0F1A',
-  surface2: '#161624',
-  surface3: '#1E1E30',
-
-  // Borders
-  border:   'rgba(255,255,255,0.06)',
-  borderHi: 'rgba(255,255,255,0.11)',
-
-  // Text
-  text:     '#EEEEF8',
-  textMid:  '#8888B0',
-  textSub:  '#505078',   // ← era '#5050780' (7 dígitos inválido → texto preto)
-
-  // Status
-  green:  '#00D68F',
-  red:    '#FF4D6D',
-  yellow: '#FFB300',
-  orange: '#FF7340',
-
-  // Semantic dims
-  greenDim:  'rgba(0,214,143,0.10)',
-  redDim:    'rgba(255,77,109,0.10)',
-  yellowDim: 'rgba(255,179,0,0.10)',
-};
-
-export const FONT = {
-  xs:  11,
-  sm:  12,
-  md:  14,
-  lg:  16,
-  xl:  18,
-  xxl: 22,
-  h1:  28,
-};
-
-export const RADIUS = {
-  xs: 8,
-  sm: 12,
-  md: 16,
-  lg: 20,
-  xl: 24,
-  pill: 100,
-};
-
-export const SPACE = {
-  xs: 6,
-  sm: 10,
-  md: 16,
-  lg: 20,
-  xl: 28,
-};
-</file>
-
 <file path="verly-mobile/src/screens/ConfiguracoesScreen.js">
 // src/screens/ConfiguracoesScreen.js
 import React, { useState, useCallback } from 'react';
@@ -14139,6 +13286,565 @@ const s = StyleSheet.create({
     fontSize: 12,
     color: COLORS.textMid,
     fontWeight: '600',
+  },
+});
+</file>
+
+<file path="verly-mobile/src/screens/GmailScreen.js">
+/**
+ * verly-mobile/src/screens/GmailScreen.js
+ */
+
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  ActivityIndicator, Linking, Alert, RefreshControl,
+} from 'react-native';
+import { COLORS, FONT, SPACE, RADIUS } from '../constants/theme';
+import { apiFetch } from '../services/api';
+
+const gmailAPI = {
+  authUrl:    () => apiFetch('/gmail/auth-url'),
+  status:     () => apiFetch('/gmail/status'),
+  sync:       () => apiFetch('/gmail/sync', { method: 'POST' }),
+  disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
+};
+
+function StatCard({ label, value, color }) {
+  return (
+    <View style={styles.statCard}>
+      <Text style={[styles.statValue, color && { color }]}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
+  );
+}
+
+function SenderChip({ name }) {
+  return (
+    <View style={styles.chip}>
+      <Text style={styles.chipText}>{name}</Text>
+    </View>
+  );
+}
+
+const KNOWN_STORES = [
+  'Zara', 'H&M', 'FNAC', 'Worten', 'Amazon', 'Zalando',
+  'Continente', 'Uber Eats', 'Glovo', 'Booking', 'Spotify', 'Netflix',
+];
+
+export default function GmailScreen({ navigation }) {
+  const [status, setStatus]         = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [syncing, setSyncing]       = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [lastResult, setLastResult] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const data = await gmailAPI.status();
+      setStatus(data);
+    } catch (e) {
+      console.warn('Erro ao carregar status Gmail:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  useEffect(() => {
+    const handleUrl = ({ url }) => {
+      if (url?.includes('gmail/callback')) {
+        if (url.includes('success=true')) {
+          loadStatus();
+          handleSync(true);
+        } else {
+          Alert.alert('Erro', 'Não foi possível ligar o Gmail. Tenta novamente.');
+        }
+        setConnecting(false);
+      }
+    };
+    const sub = Linking.addEventListener('url', handleUrl);
+    return () => sub?.remove();
+  }, [loadStatus]);
+
+  const handleConnect = async () => {
+    setConnecting(true);
+    try {
+      const { auth_url } = await gmailAPI.authUrl();
+      await Linking.openURL(auth_url);
+    } catch (e) {
+      Alert.alert('Erro', 'Não foi possível iniciar a ligação ao Gmail.');
+      setConnecting(false);
+    }
+  };
+
+  const handleSync = async (silent = false) => {
+    if (syncing) return;
+    setSyncing(true);
+    setLastResult(null);
+    try {
+      const result = await gmailAPI.sync();
+      setLastResult(result);
+      await loadStatus();
+      if (!silent && result.faturas_criadas === 0) {
+        Alert.alert('Nada de novo', 'Não encontrámos emails de compra novos nos últimos 30 dias.');
+      }
+    } catch (e) {
+      Alert.alert('Erro', 'Erro ao sincronizar. Verifica a ligação e tenta novamente.');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDisconnect = () => {
+    Alert.alert(
+      'Desligar Gmail',
+      'As faturas já importadas ficam guardadas. Queres mesmo desligar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desligar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await gmailAPI.disconnect();
+              setStatus({ ligado: false });
+              setLastResult(null);
+            } catch (e) {
+              Alert.alert('Erro', 'Não foi possível desligar. Tenta novamente.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={COLORS.brand} />
+      </View>
+    );
+  }
+
+  const isConnected = status?.ligado;
+  const ultimaSync  = status?.ultima_sync
+    ? new Date(status.ultima_sync).toLocaleString('pt-PT', {
+        day: '2-digit', month: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
+  // ── Ecrã não ligado ─────────────────────────────────────────────────────────
+  if (!isConnected) {
+    return (
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.notConnectedContent}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.iconCircle}>
+          <Text style={styles.iconEmoji}>📧</Text>
+        </View>
+
+        <Text style={styles.title}>Importar do Gmail</Text>
+        <Text style={styles.subtitle}>
+          Liga o teu Gmail e a Verly importa automaticamente os emails de
+          confirmação de compra — sem teres de fazer upload de nada.
+        </Text>
+
+        <View style={styles.howCard}>
+          <Text style={styles.howTitle}>Como funciona</Text>
+          {[
+            ['🔍', 'A Verly analisa apenas emails de confirmação de compras'],
+            ['🤖', 'A IA extrai loja, valor e data automaticamente'],
+            ['🔒', 'Nunca lemos emails pessoais — só confirmações de compra'],
+            ['✅', 'Tens sempre controlo total — podes desligar quando quiseres'],
+          ].map(([icon, text], i) => (
+            <View key={i} style={styles.howRow}>
+              <Text style={styles.howIcon}>{icon}</Text>
+              <Text style={styles.howText}>{text}</Text>
+            </View>
+          ))}
+        </View>
+
+        <Text style={styles.sectionLabel}>Detetamos automaticamente</Text>
+        <View style={styles.chipsRow}>
+          {KNOWN_STORES.map(s => <SenderChip key={s} name={s} />)}
+          <SenderChip name="e muito mais..." />
+        </View>
+
+        {/* BOTÃO — agora com margem top garantida */}
+        <TouchableOpacity
+          style={[styles.btn, styles.btnPrimary, connecting && styles.btnDisabled]}
+          onPress={handleConnect}
+          disabled={connecting}
+          activeOpacity={0.8}
+        >
+          {connecting
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <Text style={styles.btnPrimaryText}>Ligar Gmail</Text>
+          }
+        </TouchableOpacity>
+
+        <Text style={styles.privacyNote}>
+          Permissão de leitura apenas. Não enviamos nem apagamos emails.
+        </Text>
+      </ScrollView>
+    );
+  }
+
+  // ── Ecrã ligado ─────────────────────────────────────────────────────────────
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.connectedContent}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => {
+          setRefreshing(true);
+          loadStatus();
+        }} tintColor={COLORS.brand} />
+      }
+    >
+      <View style={styles.connectedBadge}>
+        <View style={styles.connectedDot} />
+        <Text style={styles.connectedEmail}>{status.gmail_email}</Text>
+      </View>
+
+      <View style={styles.statsRow}>
+        <StatCard
+          label="Faturas importadas"
+          value={status.faturas_importadas ?? 0}
+          color={COLORS.brand}
+        />
+        <StatCard
+          label="Última sync"
+          value={ultimaSync ?? '—'}
+        />
+      </View>
+
+      {lastResult && lastResult.faturas_criadas > 0 && (
+        <View style={styles.resultCard}>
+          <Text style={styles.resultTitle}>
+            ✅ {lastResult.faturas_criadas} fatura{lastResult.faturas_criadas !== 1 ? 's' : ''} importada{lastResult.faturas_criadas !== 1 ? 's' : ''}
+          </Text>
+          <Text style={styles.resultSub}>
+            {lastResult.emails_analisados} emails analisados
+          </Text>
+        </View>
+      )}
+
+      {lastResult && lastResult.faturas_criadas === 0 && (
+        <View style={[styles.resultCard, styles.resultCardNeutral]}>
+          <Text style={styles.resultTitleNeutral}>Sem faturas novas</Text>
+          <Text style={styles.resultSub}>
+            {lastResult.emails_analisados} emails analisados
+          </Text>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[styles.btn, styles.btnPrimary, syncing && styles.btnDisabled]}
+        onPress={() => handleSync(false)}
+        disabled={syncing}
+        activeOpacity={0.8}
+      >
+        {syncing ? (
+          <View style={styles.btnRow}>
+            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+            <Text style={styles.btnPrimaryText}>A sincronizar...</Text>
+          </View>
+        ) : (
+          <Text style={styles.btnPrimaryText}>Sincronizar agora</Text>
+        )}
+      </TouchableOpacity>
+
+      <Text style={styles.syncNote}>
+        Analisa emails de confirmação de compra dos últimos 30 dias.
+      </Text>
+
+      <TouchableOpacity
+        style={[styles.btn, styles.btnSecondary]}
+        onPress={() => navigation.navigate('Faturas', { filtro: 'gmail' })}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.btnSecondaryText}>Ver faturas importadas do Gmail</Text>
+      </TouchableOpacity>
+
+      <View style={styles.privacyCard}>
+        <Text style={styles.privacyTitle}>🔒 A tua privacidade</Text>
+        <Text style={styles.privacyBody}>
+          A Verly só lê emails com assuntos como "confirmação de pedido" ou "recibo".
+          Nunca acedemos a emails pessoais, nem guardamos o conteúdo dos emails
+          — apenas os dados extraídos (loja, valor, data).
+        </Text>
+      </View>
+
+      <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnect}>
+        <Text style={styles.disconnectText}>Desligar Gmail</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.bg,
+  },
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.bg,
+  },
+
+  // Ecrã não ligado — flexGrow garante que o scroll funciona e o botão aparece
+  notConnectedContent: {
+    flexGrow: 1,
+    padding: SPACE.lg,
+    alignItems: 'center',
+    paddingBottom: 40,
+  },
+  iconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: COLORS.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: SPACE.lg,
+    marginBottom: SPACE.md,
+  },
+  iconEmoji: { fontSize: 36 },
+  title: {
+    fontSize: FONT.xl,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: SPACE.sm,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: FONT.sm,
+    color: COLORS.textSub,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: SPACE.lg,
+    maxWidth: 320,
+  },
+
+  howCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    width: '100%',
+    marginBottom: SPACE.lg,
+  },
+  howTitle: {
+    fontSize: FONT.sm,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: SPACE.sm,
+  },
+  howRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+    gap: 10,
+  },
+  howIcon: { fontSize: 16, marginTop: 1 },
+  howText: {
+    flex: 1,
+    fontSize: FONT.xs,
+    color: COLORS.textSub,
+    lineHeight: 20,
+  },
+
+  sectionLabel: {
+    fontSize: FONT.xs,
+    color: COLORS.textSub,
+    alignSelf: 'flex-start',
+    marginBottom: SPACE.sm,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: SPACE.xl,
+    alignSelf: 'flex-start',
+  },
+  chip: {
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: RADIUS.sm,
+  },
+  chipText: { fontSize: FONT.xs, color: COLORS.textSub },
+
+  privacyNote: {
+    fontSize: 11,
+    color: COLORS.textSub,
+    textAlign: 'center',
+    marginTop: SPACE.sm,
+    opacity: 0.7,
+  },
+
+  // Ecrã ligado
+  connectedContent: {
+    flexGrow: 1,
+    padding: SPACE.lg,
+    paddingBottom: 40,
+  },
+  connectedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
+    gap: 10,
+  },
+  connectedDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#2ecc71',
+  },
+  connectedEmail: {
+    fontSize: FONT.sm,
+    color: COLORS.text,
+    fontWeight: '500',
+    flex: 1,
+  },
+
+  statsRow: {
+    flexDirection: 'row',
+    gap: SPACE.sm,
+    marginBottom: SPACE.md,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.md,
+    padding: SPACE.md,
+    alignItems: 'center',
+  },
+  statValue: {
+    fontSize: FONT.lg,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: COLORS.textSub,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
+  resultCard: {
+    backgroundColor: '#1a3a2a',
+    borderRadius: RADIUS.md,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
+    borderWidth: 1,
+    borderColor: '#2ecc71' + '40',
+  },
+  resultCardNeutral: {
+    backgroundColor: COLORS.surface,
+    borderColor: 'transparent',
+  },
+  resultTitle: {
+    fontSize: FONT.sm,
+    fontWeight: '600',
+    color: '#2ecc71',
+    marginBottom: 4,
+  },
+  resultTitleNeutral: {
+    fontSize: FONT.sm,
+    fontWeight: '600',
+    color: COLORS.textSub,
+    marginBottom: 4,
+  },
+  resultSub: {
+    fontSize: FONT.xs,
+    color: COLORS.textSub,
+  },
+
+  syncNote: {
+    fontSize: FONT.xs,
+    color: COLORS.textSub,
+    textAlign: 'center',
+    marginTop: SPACE.sm,
+    marginBottom: SPACE.md,
+  },
+
+  privacyCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
+  },
+  privacyTitle: {
+    fontSize: FONT.sm,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: SPACE.sm,
+  },
+  privacyBody: {
+    fontSize: FONT.xs,
+    color: COLORS.textSub,
+    lineHeight: 20,
+  },
+
+  disconnectBtn: {
+    alignItems: 'center',
+    paddingVertical: SPACE.md,
+  },
+  disconnectText: {
+    fontSize: FONT.sm,
+    color: COLORS.red,
+  },
+
+  // Botões
+  btn: {
+    borderRadius: RADIUS.md,
+    paddingVertical: 16,
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: SPACE.sm,
+    marginTop: SPACE.md,
+    minHeight: 52,
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  btnPrimary: {
+    backgroundColor: '#7C6FE0',
+    borderWidth: 0,
+  },
+  btnPrimaryText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: FONT.md,
+  },
+  btnSecondary: {
+    backgroundColor: COLORS.surface,
+    marginBottom: SPACE.md,
+  },
+  btnSecondaryText: {
+    color: COLORS.text,
+    fontWeight: '600',
+    fontSize: FONT.sm,
+  },
+  btnDisabled: {
+    opacity: 0.5,
   },
 });
 </file>
@@ -16432,6 +16138,225 @@ def score_fatura(fatura_id):
     return jsonify({'success': True, 'resultado': resultado})
 </file>
 
+<file path="enviar_alertas_push.py">
+#!/usr/bin/env python3
+"""
+enviar_alertas_push.py — Cron diário: envia push FCM reais a todos os utilizadores
+
+Agendar (crontab):
+    0 9 * * * cd /caminho/para/verly && python enviar_alertas_push.py
+
+Requer:
+    - firebase-service-account.json na raiz do projeto
+    - Coluna fcm_token na tabela users (ver migration abaixo)
+    - firebase-admin instalado: pip install firebase-admin
+
+Migration (executar uma vez):
+    ALTER TABLE users ADD COLUMN fcm_token VARCHAR(512);
+    ALTER TABLE users ADD COLUMN fcm_token_updated TIMESTAMP;
+    ALTER TABLE users ADD COLUMN push_ativas BOOLEAN DEFAULT TRUE;
+"""
+
+import os
+import sys
+import logging
+from datetime import datetime, timedelta
+from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from dotenv import load_dotenv
+load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s — %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger('push_alertas')
+
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(str(date_str).strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def gerar_alertas_push(user, faturas, orcamento, hoje):
+    """
+    Gera lista de pushes a enviar para um utilizador.
+    Devolve lista de {'titulo': ..., 'corpo': ...}.
+    """
+    alertas = []
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+
+    # ── 1. Garantias a expirar em <=7 dias ───────────────────────────────────
+    for f in faturas:
+        data_gar = _parse_date(f.data_garantia)
+        if data_gar and data_gar >= hoje:
+            dias = (data_gar - hoje).days
+            if dias <= 7:
+                loja = f.loja or f.nome_ficheiro or 'produto'
+                alertas.append({
+                    'titulo': f'Garantia expira em {dias} dia{"s" if dias != 1 else ""}!',
+                    'corpo': f'A garantia de {loja} termina em {data_gar.strftime("%d/%m/%Y")}. Guarda bem o teu comprovativo.',
+                    'tipo': 'garantia',
+                })
+
+    # ── 2. Devoluções a expirar em <=3 dias ──────────────────────────────────
+    for f in faturas:
+        data_dev = _parse_date(f.data_devolucao)
+        if data_dev and data_dev >= hoje:
+            dias = (data_dev - hoje).days
+            if dias <= 3:
+                loja = f.loja or f.nome_ficheiro or 'produto'
+                alertas.append({
+                    'titulo': f'Prazo de devolucao termina em {dias} dia{"s" if dias != 1 else ""}!',
+                    'corpo': f'{loja}: tens ate {data_dev.strftime("%d/%m")} para devolver.',
+                    'tipo': 'devolucao',
+                })
+
+    # ── 3. Orcamento ─────────────────────────────────────────────────────────
+    if orcamento > 0:
+        total_mes = sum(
+            f.total or 0 for f in faturas
+            if _parse_date(f.data_compra) and
+               _parse_date(f.data_compra).month == mes_atual and
+               _parse_date(f.data_compra).year == ano_atual
+        )
+        pct = (total_mes / orcamento) * 100 if orcamento > 0 else 0
+
+        # Dias restantes do mes
+        if hoje.month == 12:
+            fim_mes = datetime(hoje.year + 1, 1, 1)
+        else:
+            fim_mes = datetime(hoje.year, hoje.month + 1, 1)
+        dias_restantes = (fim_mes - hoje).days
+
+        if pct >= 100:
+            alertas.append({
+                'titulo': 'Orcamento ultrapassado!',
+                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR ({pct:.0f}%). Ainda faltam {dias_restantes} dias para o fim do mes.',
+                'tipo': 'orcamento',
+            })
+        elif pct >= 80:
+            restante = orcamento - total_mes
+            alertas.append({
+                'titulo': f'Ja usaste {pct:.0f}% do orcamento',
+                'corpo': f'Restam {restante:.0f}EUR e {dias_restantes} dias para o fim do mes. Cuidado com os proximos gastos.',
+                'tipo': 'orcamento',
+            })
+        elif pct >= 50 and dias_restantes <= 10:
+            alertas.append({
+                'titulo': f'{pct:.0f}% usado, {dias_restantes} dias restantes',
+                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR. Ao ritmo atual podes ultrapassar o orcamento.',
+                'tipo': 'orcamento',
+            })
+
+    return alertas
+
+
+def main():
+    logger.info('=' * 60)
+    logger.info(f'Verly Push Alertas — {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    logger.info('=' * 60)
+
+    # Inicializar Firebase
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+        if not firebase_admin._apps:
+            cred = credentials.Certificate('firebase-service-account.json')
+            firebase_admin.initialize_app(cred)
+        logger.info('Firebase Admin SDK inicializado.')
+    except Exception as e:
+        logger.error(f'Erro Firebase: {e}')
+        logger.warning('Push nao sera enviada — continua com email.')
+
+    from app import create_app, db
+    from app.models import User, Fatura
+
+    app = create_app()
+    hoje = datetime.utcnow()
+
+    with app.app_context():
+        try:
+            utilizadores = User.query.filter(
+                User.fcm_token.isnot(None),
+                User.fcm_token != '',
+            ).all()
+        except Exception:
+            logger.warning('Coluna fcm_token nao encontrada. Executa a migration primeiro.')
+            utilizadores = []
+
+        logger.info(f'{len(utilizadores)} utilizador(es) com FCM token.')
+
+        enviados = 0
+        erros = 0
+
+        for user in utilizadores:
+            try:
+                faturas = Fatura.query.filter_by(user_id=user.id).all()
+                orcamento = getattr(user, 'orcamento_mensal', 0) or 0
+                alertas = gerar_alertas_push(user, faturas, orcamento, hoje)
+
+                if not alertas:
+                    continue
+
+                # Envia apenas o alerta mais urgente (para nao spammar)
+                alerta = alertas[0]
+
+                try:
+                    from firebase_admin import messaging
+                    msg = messaging.Message(
+                        notification=messaging.Notification(
+                            title=alerta['titulo'],
+                            body=alerta['corpo'],
+                        ),
+                        data={
+                            'tipo': alerta.get('tipo', 'alerta'),
+                            'user_id': str(user.id),
+                        },
+                        token=user.fcm_token,
+                        android=messaging.AndroidConfig(
+                            priority='high',
+                            notification=messaging.AndroidNotification(
+                                icon='ic_notification',
+                                color='#7C6FE0',
+                                channel_id='verly_alertas',
+                            ),
+                        ),
+                        apns=messaging.APNSConfig(
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(badge=len(alertas), sound='default'),
+                            ),
+                        ),
+                    )
+                    response = messaging.send(msg)
+                    logger.info(f'Push enviada para user {user.id}: {response}')
+                    enviados += 1
+
+                except Exception as e:
+                    logger.error(f'Erro ao enviar push para user {user.id}: {e}')
+                    erros += 1
+
+            except Exception as e:
+                logger.error(f'Erro ao processar user {user.id}: {e}')
+                erros += 1
+
+        logger.info(f'Concluido — Enviadas: {enviados} | Erros: {erros}')
+
+
+if __name__ == '__main__':
+    main()
+</file>
+
 <file path="migrate_prod.py">
 """
 migrate_prod.py — Cria todas as tabelas no PostgreSQL de produção.
@@ -16844,6 +16769,71 @@ export default function AppNavigator() {
     </NavigationContainer>
   );
 }
+</file>
+
+<file path="verly-mobile/src/constants/theme.js">
+// src/constants/theme.js — Verly Design System
+
+export const COLORS = {
+  // Brand
+  brand:    '#7C6FE0',
+  brandMid: '#9D93E8',
+  brandDim: 'rgba(124,111,224,0.12)',
+  brandGlow:'rgba(124,111,224,0.22)',
+
+  // Backgrounds
+  bg:       '#080810',
+  surface:  '#0F0F1A',
+  surface2: '#161624',
+  surface3: '#1E1E30',
+
+  // Borders
+  border:   'rgba(255,255,255,0.06)',
+  borderHi: 'rgba(255,255,255,0.11)',
+
+  // Text
+  text:     '#EEEEF8',
+  textMid:  '#8888B0',
+  textSub:  '#505078',   // ← era '#5050780' (7 dígitos inválido → texto preto)
+
+  // Status
+  green:  '#00D68F',
+  red:    '#FF4D6D',
+  yellow: '#FFB300',
+  orange: '#FF7340',
+
+  // Semantic dims
+  greenDim:  'rgba(0,214,143,0.10)',
+  redDim:    'rgba(255,77,109,0.10)',
+  yellowDim: 'rgba(255,179,0,0.10)',
+};
+
+export const FONT = {
+  xs:  11,
+  sm:  12,
+  md:  14,
+  lg:  16,
+  xl:  18,
+  xxl: 22,
+  h1:  28,
+};
+
+export const RADIUS = {
+  xs: 8,
+  sm: 12,
+  md: 16,
+  lg: 20,
+  xl: 24,
+  pill: 100,
+};
+
+export const SPACE = {
+  xs: 6,
+  sm: 10,
+  md: 16,
+  lg: 20,
+  xl: 28,
+};
 </file>
 
 <file path="verly-mobile/src/screens/auth/RegisterScreen.js">
@@ -19009,7 +18999,7 @@ const styles = StyleSheet.create({
 
 <file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
 // src/screens/RetrospetivaMensalScreen.js
-// Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
+// Retrospetiva Mensal — com navegação mês a mês
 
 import React, { useState, useCallback } from 'react';
 import {
@@ -19018,6 +19008,7 @@ import {
   Share, RefreshControl, Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, {
   FadeInDown, FadeIn, ZoomIn,
 } from 'react-native-reanimated';
@@ -19025,7 +19016,7 @@ import { MotiView } from 'moti';
 import {
   TrendingUp, TrendingDown, Award, Flame, Target,
   BarChart2, Download, Share2, Calendar, Zap,
-  ChevronRight,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react-native';
 import { apiFetch, getToken } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
@@ -19035,14 +19026,14 @@ const W = Dimensions.get('window').width;
 const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
 const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
 
-const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-                  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-const MESES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+const MESES_PT    = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                     'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun',
+                     'Jul','Ago','Set','Out','Nov','Dez'];
 
 const CAT_COLORS = [
-  '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
-  '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
+  '#7C6FE0','#E24B4A','#00D68F','#FFB300',
+  '#45B7D1','#FF7340','#B06FE0','#E07090',
 ];
 
 const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
@@ -19084,32 +19075,31 @@ function MiniBarChart({ dados }) {
 }
 
 // ─── Histograma de 6 meses ────────────────────────────────────────────────────
-function Histograma({ historico }) {
+function Histograma({ historico, mesAtivo }) {
   if (!historico || historico.length === 0) return null;
   const maxVal = Math.max(...historico.map(d => d.total), 1);
-  const BAR_H = 80;
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: BAR_H + 30 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 80 }}>
       {historico.map((d, i) => {
-        const h = Math.max((d.total / maxVal) * BAR_H, 4);
-        const isCurrent = i === historico.length - 1;
+        const pct = d.total / maxVal;
+        const isAtivo = d.mes === mesAtivo;
         return (
-          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={{ fontSize: 9, color: C.textSub, marginBottom: 4 }}>
-              {d.total > 0 ? `${(d.total / 1000).toFixed(d.total >= 1000 ? 1 : 0)}${d.total >= 1000 ? 'k' : ''}` : ''}
-            </Text>
-            <MotiView
-              from={{ height: 4 }}
-              animate={{ height: h }}
-              transition={{ type: 'spring', delay: i * 60 }}
+          <View key={i} style={{ flex: 1, alignItems: 'center', gap: 4 }}>
+            <Animated.View
+              entering={FadeIn.delay(i * 60)}
               style={{
                 width: '100%',
-                backgroundColor: isCurrent ? C.brand : C.surface3,
+                height: Math.max(pct * 64, 4),
+                backgroundColor: isAtivo ? C.brand : C.surface3,
                 borderRadius: 4,
               }}
             />
-            <Text style={{ fontSize: 9, color: isCurrent ? C.brand : C.textSub, marginTop: 5, fontWeight: isCurrent ? '800' : '500' }}>
+            <Text style={{
+              fontSize: 9,
+              color: isAtivo ? C.brand : C.textSub,
+              fontWeight: isAtivo ? '800' : '500',
+            }}>
               {d.mes}
             </Text>
           </View>
@@ -19119,19 +19109,24 @@ function Histograma({ historico }) {
   );
 }
 
+// ─── Componente principal ─────────────────────────────────────────────────────
 export default function RetrospetivaMensalScreen({ navigation }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData]         = useState(null);
+  const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const hoje = new Date();
-  const mesAtual = hoje.getMonth(); // 0-indexed
-  const nomesMesAtual = MESES_PT[mesAtual];
+  // índice do mês selecionado dentro do historico (começa no penúltimo = mês anterior)
+  const [mesIdx, setMesIdx] = useState(null);
 
   const carregar = useCallback(async (isRefresh = false) => {
     try {
       const res = await apiFetch('/exportar/resumo');
       setData(res);
+      // ao carregar, posicionar no penúltimo mês (mês anterior ao atual)
+      const hist = res?.historico_mensal || [];
+      if (mesIdx === null && hist.length >= 2) {
+        setMesIdx(hist.length - 2);
+      }
     } catch (e) {
       console.error('RetrospetivaMensal:', e);
     } finally {
@@ -19147,10 +19142,9 @@ export default function RetrospetivaMensalScreen({ navigation }) {
   const partilhar = async () => {
     if (!data) return;
     const historico = data.historico_mensal || [];
-    const mesRef = historico[historico.length - 2];
-    const total = mesRef?.total || 0;
-    const topCat = data.top_categorias?.[0];
-
+    const mesRef    = historico[mesIdx ?? historico.length - 2];
+    const total     = mesRef?.total || 0;
+    const topCat    = data.top_categorias?.[0];
     try {
       await Share.share({
         message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
@@ -19175,156 +19169,209 @@ export default function RetrospetivaMensalScreen({ navigation }) {
     );
   }
 
-  const historico = data?.historico_mensal || [];
-  const mesAnterior = historico[historico.length - 2];
-  const mesAtualData = historico[historico.length - 1];
-  const mesAntAnterior = historico[historico.length - 3];
+  const historico   = data?.historico_mensal || [];
+  const idx         = mesIdx ?? historico.length - 2;
+  const mesAtual_   = historico[idx];
+  const mesAnterior = historico[idx - 1];
 
-  const totalMesAnt = mesAnterior?.total || 0;
-  const totalMesAntAnt = mesAntAnterior?.total || 0;
-  const variacao = totalMesAntAnt > 0
-    ? ((totalMesAnt - totalMesAntAnt) / totalMesAntAnt) * 100
+  const totalMes    = mesAtual_?.total || 0;
+  const totalAnt    = mesAnterior?.total || 0;
+  const variacao    = totalAnt > 0
+    ? ((totalMes - totalAnt) / totalAnt) * 100
     : null;
 
-  const topCats = (data?.top_categorias || []).slice(0, 5);
-  const streak = data?.streak_dias || 0;
-  const rendimento = data?.rendimento_mensal || 0;
-  const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
+  const topCats     = (data?.top_categorias || []).slice(0, 5);
+  const streak      = data?.streak_dias || 0;
+  const rendimento  = data?.rendimento_mensal || 0;
+  const pctRend     = rendimento > 0 ? (totalMes / rendimento) * 100 : null;
 
-  const nomeMesAnt = mesAnterior?.mes
-    ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
-    : 'Mês anterior';
+  const nomeMes = mesAtual_?.mes
+    ? MESES_PT[MESES_SHORT.indexOf(mesAtual_.mes)] ?? mesAtual_.mes
+    : 'Mês';
+
+  const mesProximo  = MESES_PT[(MESES_SHORT.indexOf(mesAtual_?.mes) + 1) % 12] || 'próximo mês';
+
+  const podePrev = idx > 0;
+  const podeNext = idx < historico.length - 1;
 
   return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-    >
-      {/* Header */}
-      <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
-        <View style={styles.headerTop}>
-          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerLabel}>Retrospetiva de</Text>
-            <Text style={styles.headerMes}>{nomeMesAnt}</Text>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
+      <ScrollView
+        style={styles.root}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+      >
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
+          <View style={styles.headerTop}>
+
+            {/* Botão voltar */}
+            <Pressable
+              onPress={() => navigation.goBack()}
+              style={styles.backBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <ChevronLeft size={24} color={C.text} />
+            </Pressable>
+
+            {/* Navegação mês */}
+            <View style={styles.mesNav}>
+              <Pressable
+                onPress={() => podePrev && setMesIdx(idx - 1)}
+                style={[styles.navBtn, !podePrev && styles.navBtnDisabled]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
+              </Pressable>
+
+              <View style={{ alignItems: 'center' }}>
+                <Text style={styles.headerLabel}>Retrospetiva de</Text>
+                <Text style={styles.headerMes}>{nomeMes}</Text>
+              </View>
+
+              <Pressable
+                onPress={() => podeNext && setMesIdx(idx + 1)}
+                style={[styles.navBtn, !podeNext && styles.navBtnDisabled]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
+              </Pressable>
+            </View>
+
+            {/* Partilhar */}
+            <Pressable onPress={partilhar} style={styles.shareBtn}>
+              <Share2 size={16} color={C.brand} />
+            </Pressable>
           </View>
-          <Pressable onPress={partilhar} style={styles.shareBtn}>
-            <Share2 size={16} color={C.brand} />
-          </Pressable>
-        </View>
-      </Animated.View>
-
-      {/* Hero — total gasto */}
-      <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Total gasto em {nomeMesAnt}</Text>
-        <Text style={styles.heroValor}>{fmt(totalMesAnt)} €</Text>
-
-        {variacao !== null && (
-          <View style={styles.variacaoRow}>
-            {variacao > 0
-              ? <TrendingUp size={14} color={C.red} />
-              : <TrendingDown size={14} color={C.green} />
-            }
-            <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
-              {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAntAnterior?.mes || 'mês anterior'}
-            </Text>
-          </View>
-        )}
-
-        {pctRendimento !== null && (
-          <Text style={styles.heroSub}>
-            {pctRendimento.toFixed(0)}% do teu rendimento mensal
-          </Text>
-        )}
-      </Animated.View>
-
-      {/* Histograma 6 meses */}
-      <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <BarChart2 size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
-        </View>
-        <Histograma historico={historico} />
-      </Animated.View>
-
-      {/* Top categorias */}
-      <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <Target size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-        </View>
-        {topCats.length > 0
-          ? <MiniBarChart dados={topCats} />
-          : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
-        }
-      </Animated.View>
-
-      {/* Streak */}
-      {streak > 0 && (
-        <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
-          <View style={styles.cardTitleRow}>
-            <Flame size={18} color='#FF7340' />
-            <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
-          </View>
-          <Text style={styles.streakSub}>
-            Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
-            {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
-          </Text>
         </Animated.View>
-      )}
 
-      {/* Dica da Verly */}
-      <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
-        <View style={styles.cardTitleRow}>
-          <Zap size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>O que melhorar em {nomesMesAtual}</Text>
-        </View>
-        {variacao !== null && variacao > 15 ? (
-          <Text style={styles.dicaText}>
-            Gastaste {variacao.toFixed(0)}% mais do que em {mesAntAnterior?.mes || 'mês anterior'}.
-            Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
-            Define um limite concreto para este mês.
-          </Text>
-        ) : variacao !== null && variacao < -10 ? (
-          <Text style={styles.dicaText}>
-            Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
-            Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
-            (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
-          </Text>
-        ) : (
-          <Text style={styles.dicaText}>
-            Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-            A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
-            {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
-          </Text>
+        {/* Hero — total gasto */}
+        <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
+          <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
+          <Text style={styles.heroValor}>{fmt(totalMes)} €</Text>
+
+          {variacao !== null && (
+            <View style={styles.variacaoRow}>
+              {variacao > 0
+                ? <TrendingUp size={14} color={C.red} />
+                : <TrendingDown size={14} color={C.green} />
+              }
+              <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
+                {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAnterior?.mes || 'mês anterior'}
+              </Text>
+            </View>
+          )}
+
+          {pctRend !== null && (
+            <Text style={styles.heroSub}>
+              {pctRend.toFixed(0)}% do teu rendimento mensal
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Histograma 6 meses */}
+        <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <BarChart2 size={16} color={C.brand} />
+            <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
+          </View>
+          <Histograma historico={historico} mesAtivo={mesAtual_?.mes} />
+        </Animated.View>
+
+        {/* Top categorias */}
+        <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
+          <View style={styles.cardTitleRow}>
+            <Target size={16} color={C.brand} />
+            <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+          </View>
+          {topCats.length > 0
+            ? <MiniBarChart dados={topCats} />
+            : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
+          }
+        </Animated.View>
+
+        {/* Streak */}
+        {streak > 0 && (
+          <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
+            <View style={styles.cardTitleRow}>
+              <Flame size={18} color='#FF7340' />
+              <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
+            </View>
+            <Text style={styles.streakSub}>
+              Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
+              {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
+            </Text>
+          </Animated.View>
         )}
-      </Animated.View>
 
-      {/* Botão exportar PDF */}
-      <Animated.View entering={FadeInDown.delay(500)}>
-        <Pressable onPress={exportarPDF} style={styles.exportBtn}>
-          <Download size={18} color="#fff" />
-          <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
-        </Pressable>
-      </Animated.View>
-    </ScrollView>
+        {/* Dica da Verly */}
+        <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
+          <View style={styles.cardTitleRow}>
+            <Zap size={16} color={C.brand} />
+            <Text style={styles.cardTitle}>O que melhorar em {mesProximo}</Text>
+          </View>
+          {variacao !== null && variacao > 15 ? (
+            <Text style={styles.dicaText}>
+              Gastaste {variacao.toFixed(0)}% mais do que em {mesAnterior?.mes || 'mês anterior'}.
+              Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
+              Define um limite concreto para o próximo mês.
+            </Text>
+          ) : variacao !== null && variacao < -10 ? (
+            <Text style={styles.dicaText}>
+              Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
+              Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
+              (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMes * 4)}€).
+            </Text>
+          ) : (
+            <Text style={styles.dicaText}>
+              Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
+              A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
+              {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Botão exportar PDF */}
+        <Animated.View entering={FadeInDown.delay(500)}>
+          <Pressable onPress={exportarPDF} style={styles.exportBtn}>
+            <Download size={18} color="#fff" />
+            <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
+          </Pressable>
+        </Animated.View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
+  root:    { flex: 1, backgroundColor: C.bg },
   content: { padding: SPACE.lg, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
 
-  backBtn: { padding: 4, marginRight: 8 },
-  header: { marginBottom: SPACE.lg, paddingTop: 8 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
-  headerMes: { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2 },
+  header:    { marginBottom: SPACE.lg, paddingTop: 4 },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+
+  backBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: C.surface2,
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  mesNav: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginHorizontal: 8,
+  },
+  navBtn:         { padding: 4 },
+  navBtnDisabled: { opacity: 0.3 },
+
+  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', textAlign: 'center' },
+  headerMes:   { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2, textAlign: 'center' },
+
   shareBtn: {
     width: 36, height: 36, borderRadius: 10,
     backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
@@ -19338,11 +19385,11 @@ const styles = StyleSheet.create({
     marginBottom: SPACE.lg,
     alignItems: 'center',
   },
-  heroLabel: { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor: { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  heroLabel:   { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
   variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
-  variacaoText: { fontSize: FONT.sm, fontWeight: '700' },
-  heroSub: { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+  variacaoText:{ fontSize: FONT.sm, fontWeight: '700' },
+  heroSub:     { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
 
   card: {
     backgroundColor: C.surface,
@@ -19353,7 +19400,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACE.md,
   },
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  cardTitle:    { fontSize: FONT.sm, fontWeight: '700', color: C.text },
 
   streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
   streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
@@ -30835,7 +30882,7 @@ function MenuScreen({ navigation }) {
     {
       label: 'Ferramentas',
       items: [
-        { label: '⚡ Score de compra', screen: 'Score',            icon: 'star'   },
+        { label: 'Score de compra', screen: 'Score',            icon: 'star'   },
         { label: 'As minhas subscrições', screen: 'MinhasSubscricoes', icon: 'shield' },
         { label: 'Premium',           screen: 'Premium',           icon: 'star'   },
       ],

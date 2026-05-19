@@ -260,16 +260,6 @@ export default function MinhasSubscricoesScreen({ navigation }) {
           ))}
         </>
       )}
-
-      {/* Link para Premium se limitado */}
-      <Pressable
-        onPress={() => navigation.navigate('Premium')}
-        style={{ alignItems: 'center', marginTop: 16 }}
-      >
-        <Text style={{ fontSize: FONT.sm, color: C.brand, fontWeight: '600' }}>
-          Ver planos Premium →
-        </Text>
-      </Pressable>
     </ScrollView>
   );
 }
