@@ -878,9 +878,9 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
             gap: 6,
           }}
         >
-          <Shield size={22} color={numGarantias > 0 ? '#00D68F' : C.textMid} />
+          <Shield size={22} color={numGarantias > 0 ? '#00D68F' : C.brand} />
           <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>Garantias</Text>
-          <Text style={{ fontSize: 11, color: numGarantias > 0 ? '#00D68F' : C.textSub }}>
+          <Text style={{ fontSize: 11, color: numGarantias > 0 ? '#00D68F' : C.textMid }}>
             {numGarantias > 0 ? `${numGarantias} ativa${numGarantias !== 1 ? 's' : ''}` : 'Nenhuma'}
           </Text>
         </Pressable>

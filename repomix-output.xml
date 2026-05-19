@@ -14221,397 +14221,6 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/GarantiasScreen.js">
-// src/screens/GarantiasScreen.js
-// Centro de Garantias — todas as garantias ativas e expiradas num só sítio
-// Nenhuma app portuguesa tem isto. É a funcionalidade de diferenciação.
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, RefreshControl, Dimensions,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
-import {
-  Shield, ShieldCheck, ShieldOff, ShieldAlert,
-  ChevronRight, Package, Calendar, AlertTriangle,
-} from 'lucide-react-native';
-import { apiFetch } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-
-function diasLabel(dias) {
-  if (dias === 0) return 'Expira hoje!';
-  if (dias === 1) return 'Expira amanhã!';
-  if (dias < 0) return `Expirou há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`;
-  return `${dias} dias restantes`;
-}
-
-function diasColor(dias) {
-  if (dias < 0) return C.textSub;
-  if (dias <= 7) return C.red;
-  if (dias <= 30) return C.yellow;
-  return C.green;
-}
-
-function GarantiaCard({ item, idx }) {
-  const dias = item.dias_restantes;
-  const cor = diasColor(dias);
-  const expirou = dias < 0;
-
-  return (
-    <Animated.View entering={FadeInDown.delay(idx * 60).duration(350).springify()}>
-      <View style={[styles.card, expirou && { opacity: 0.55 }]}>
-        {/* Linha esquerda colorida */}
-        <View style={[styles.cardAccent, { backgroundColor: cor }]} />
-
-        <View style={{ flex: 1, paddingLeft: 14 }}>
-          {/* Header */}
-          <View style={styles.cardHeader}>
-            <View style={[styles.iconBox, { backgroundColor: cor + '22' }]}>
-              {expirou
-                ? <ShieldOff size={18} color={cor} />
-                : dias <= 7
-                  ? <ShieldAlert size={18} color={cor} />
-                  : <ShieldCheck size={18} color={cor} />
-              }
-            </View>
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={styles.cardLoja} numberOfLines={1}>{item.loja}</Text>
-              <Text style={[styles.cardDias, { color: cor }]}>{diasLabel(dias)}</Text>
-            </View>
-            {item.valor > 0 && (
-              <Text style={styles.cardValor}>{fmt(item.valor)} €</Text>
-            )}
-          </View>
-
-          {/* Detalhes */}
-          <View style={styles.cardDetails}>
-            <View style={styles.detailRow}>
-              <Calendar size={12} color={C.textSub} />
-              <Text style={styles.detailText}>
-                Válida até {item.data_garantia}
-              </Text>
-            </View>
-            {item.categoria && (
-              <View style={[styles.badge, { backgroundColor: C.brand + '22' }]}>
-                <Text style={[styles.badgeText, { color: C.brand }]}>{item.categoria}</Text>
-              </View>
-            )}
-          </View>
-
-          {/* Barra de progresso restante */}
-          {!expirou && dias <= 365 && (
-            <View style={styles.progressTrack}>
-              <View
-                style={[
-                  styles.progressFill,
-                  {
-                    width: `${Math.max(2, Math.min(100, (dias / 365) * 100))}%`,
-                    backgroundColor: cor,
-                  },
-                ]}
-              />
-            </View>
-          )}
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
-export default function GarantiasScreen({ navigation }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [filtro, setFiltro] = useState('ativas'); // 'ativas' | 'todas' | 'urgentes'
-
-  const fetch = useCallback(async (isRefresh = false) => {
-    try {
-      const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
-    } catch (e) {
-      console.error('GarantiasScreen:', e);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
-
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const todas = data?.garantias_ativas || [];
-  const ativas = todas.filter(g => g.dias_restantes >= 0);
-  const urgentes = todas.filter(g => g.dias_restantes >= 0 && g.dias_restantes <= 30);
-  const expiradas = todas.filter(g => g.dias_restantes < 0);
-
-  const listaFiltrada =
-    filtro === 'ativas'   ? ativas :
-    filtro === 'urgentes' ? urgentes :
-    todas;
-
-  const totalAtivas = ativas.length;
-  const totalUrgentes = urgentes.length;
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-    >
-      {/* Header */}
-      <Animated.View entering={FadeIn.duration(400)}>
-        <View style={styles.header}>
-          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
-          </Pressable>
-          <Shield size={28} color={C.brand} style={{ marginLeft: 8 }} />
-          <View style={{ marginLeft: 12 }}>
-            <Text style={styles.headerTitle}>Centro de Garantias</Text>
-            <Text style={styles.headerSub}>
-              {totalAtivas} ativ{totalAtivas !== 1 ? 'as' : 'a'}
-              {totalUrgentes > 0 ? ` · ${totalUrgentes} urgente${totalUrgentes !== 1 ? 's' : ''}` : ''}
-            </Text>
-          </View>
-        </View>
-
-        {/* Stats rápidas */}
-        <View style={styles.statsRow}>
-          <View style={[styles.statCard, { borderColor: C.green + '40' }]}>
-            <ShieldCheck size={20} color={C.green} />
-            <Text style={[styles.statNum, { color: C.green }]}>{totalAtivas}</Text>
-            <Text style={styles.statLabel}>Ativas</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.yellow + '40' }]}>
-            <ShieldAlert size={20} color={C.yellow} />
-            <Text style={[styles.statNum, { color: C.yellow }]}>{urgentes.length}</Text>
-            <Text style={styles.statLabel}>30 dias</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.red + '40' }]}>
-            <AlertTriangle size={20} color={C.red} />
-            <Text style={[styles.statNum, { color: C.red }]}>{urgentes.filter(g => g.dias_restantes <= 7).length}</Text>
-            <Text style={styles.statLabel}>7 dias</Text>
-          </View>
-          <View style={[styles.statCard, { borderColor: C.textSub + '30' }]}>
-            <ShieldOff size={20} color={C.textSub} />
-            <Text style={[styles.statNum, { color: C.textSub }]}>{expiradas.length}</Text>
-            <Text style={styles.statLabel}>Expiradas</Text>
-          </View>
-        </View>
-
-        {/* Filtros */}
-        <View style={styles.filtros}>
-          {[
-            { key: 'ativas',   label: `Ativas (${ativas.length})` },
-            { key: 'urgentes', label: `Urgentes (${urgentes.length})` },
-            { key: 'todas',    label: `Todas (${todas.length})` },
-          ].map(f => (
-            <Pressable
-              key={f.key}
-              onPress={() => setFiltro(f.key)}
-              style={[styles.filtroBtn, filtro === f.key && styles.filtroBtnActive]}
-            >
-              <Text style={[styles.filtroText, filtro === f.key && styles.filtroTextActive]}>
-                {f.label}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      </Animated.View>
-
-      {/* Lista */}
-      {listaFiltrada.length === 0 ? (
-        <Animated.View entering={FadeIn.delay(200)} style={styles.emptyBox}>
-          <ShieldCheck size={48} color={C.green} style={{ marginBottom: 16 }} />
-          <Text style={styles.emptyTitle}>
-            {filtro === 'urgentes' ? 'Nenhuma garantia urgente' : 'Nenhuma garantia aqui'}
-          </Text>
-          <Text style={styles.emptySub}>
-            {filtro === 'urgentes'
-              ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
-              : 'Quando fizeres upload de faturas com garantia, aparecem aqui automaticamente.'}
-          </Text>
-        </Animated.View>
-      ) : (
-        listaFiltrada.map((item, idx) => (
-          <GarantiaCard key={`${item.loja}-${idx}`} item={item} idx={idx} />
-        ))
-      )}
-
-      {/* Dica */}
-      <Animated.View entering={FadeInDown.delay(400)} style={styles.dicaBox}>
-        <Package size={16} color={C.textSub} />
-        <Text style={styles.dicaText}>
-          A Verly extrai automaticamente datas de garantia das tuas faturas.
-          Guarda sempre o PDF original para reclamar quando necessário.
-        </Text>
-      </Animated.View>
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  backBtn: { padding: 4, marginRight: 4 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACE.lg,
-    paddingTop: 8,
-  },
-  headerTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
-  headerSub:   { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
-
-  statsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: SPACE.lg,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 4,
-  },
-  statNum:   { fontSize: FONT.lg, fontWeight: '900', color: C.text },
-  statLabel: { fontSize: 10, color: C.textSub, fontWeight: '600' },
-
-  filtros: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: SPACE.lg,
-  },
-  filtroBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.surface,
-  },
-  filtroBtnActive: {
-    backgroundColor: C.brandDim,
-    borderColor: C.brand + '60',
-  },
-  filtroText:       { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
-  filtroTextActive: { color: C.brand },
-
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    marginBottom: 12,
-    flexDirection: 'row',
-    overflow: 'hidden',
-  },
-  cardAccent: { width: 4, minHeight: '100%' },
-
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  iconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardLoja:  { fontSize: FONT.md, fontWeight: '700', color: C.text },
-  cardDias:  { fontSize: FONT.xs, fontWeight: '700', marginTop: 2 },
-  cardValor: { fontSize: FONT.sm, fontWeight: '800', color: C.text },
-
-  cardDetails: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 10,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  detailText: { fontSize: 11, color: C.textSub },
-  badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  badgeText: { fontSize: 10, fontWeight: '700' },
-
-  progressTrack: {
-    height: 3,
-    backgroundColor: C.surface3,
-    borderRadius: 2,
-    overflow: 'hidden',
-    marginTop: 2,
-    marginBottom: 12,
-  },
-  progressFill: { height: '100%', borderRadius: 2 },
-
-  emptyBox: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    paddingHorizontal: 24,
-  },
-  emptyTitle: {
-    fontSize: FONT.lg,
-    fontWeight: '800',
-    color: C.text,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  emptySub: {
-    fontSize: FONT.sm,
-    color: C.textMid,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  dicaBox: {
-    flexDirection: 'row',
-    gap: 10,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: C.border,
-    marginTop: 16,
-    alignItems: 'flex-start',
-  },
-  dicaText: {
-    flex: 1,
-    fontSize: 11,
-    color: C.textSub,
-    lineHeight: 17,
-  },
-});
-</file>
-
 <file path="verly-mobile/src/screens/HistoricoScreen.js">
 import React from 'react';
 import { View, Text } from 'react-native';
@@ -15639,376 +15248,6 @@ const s = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
-// src/screens/RetrospetivaMensalScreen.js
-// Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
-// Mostra: total gasto, categoria top, comparação com mês antes, streak, dica da Verly
-
-import React, { useState, useCallback, useRef } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, Dimensions,
-  Share, RefreshControl,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import Animated, {
-  FadeInDown, FadeIn, ZoomIn,
-  useSharedValue, useAnimatedStyle, withSpring,
-} from 'react-native-reanimated';
-import { MotiView } from 'moti';
-import {
-  TrendingUp, TrendingDown, Award, Flame, Target,
-  BarChart2, Download, Share2, Calendar, Zap,
-} from 'lucide-react-native';
-import { apiFetch } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
-
-const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-                  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
-const MESES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-
-const CAT_COLORS = [
-  '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
-  '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
-];
-
-// ─── Mini bar chart horizontal ────────────────────────────────────────────────
-function MiniBarChart({ dados }) {
-  if (!dados || dados.length === 0) return null;
-  const maxVal = Math.max(...dados.map(d => d.total), 1);
-
-  return (
-    <View style={{ gap: 10 }}>
-      {dados.map((d, i) => {
-        const pct = d.total / maxVal;
-        const cor = CAT_COLORS[i % CAT_COLORS.length];
-        return (
-          <View key={i}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
-                {d.categoria}
-              </Text>
-              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
-            </View>
-            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-              <Animated.View
-                entering={FadeIn.delay(i * 80)}
-                style={{
-                  height: '100%',
-                  width: `${pct * 100}%`,
-                  backgroundColor: cor,
-                  borderRadius: 3,
-                }}
-              />
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Histograma de 6 meses ────────────────────────────────────────────────────
-function Histograma({ historico }) {
-  if (!historico || historico.length === 0) return null;
-  const maxVal = Math.max(...historico.map(d => d.total), 1);
-  const BAR_H = 80;
-
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: BAR_H + 30 }}>
-      {historico.map((d, i) => {
-        const h = Math.max((d.total / maxVal) * BAR_H, 4);
-        const isCurrent = i === historico.length - 1;
-        return (
-          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-            <Text style={{ fontSize: 9, color: C.textSub, marginBottom: 4 }}>
-              {d.total > 0 ? `${(d.total / 1000).toFixed(d.total >= 1000 ? 1 : 0)}${d.total >= 1000 ? 'k' : ''}` : ''}
-            </Text>
-            <MotiView
-              from={{ height: 4 }}
-              animate={{ height: h }}
-              transition={{ type: 'spring', delay: i * 60 }}
-              style={{
-                width: '100%',
-                backgroundColor: isCurrent ? C.brand : C.surface3,
-                borderRadius: 4,
-              }}
-            />
-            <Text style={{ fontSize: 9, color: isCurrent ? C.brand : C.textSub, marginTop: 5, fontWeight: isCurrent ? '800' : '500' }}>
-              {d.mes}
-            </Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-export default function RetrospetivaMensalScreen({ navigation }) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const hoje = new Date();
-  const mesAtual = hoje.getMonth(); // 0-indexed
-  const nomesMesAtual = MESES_PT[mesAtual];
-
-  const fetch = useCallback(async (isRefresh = false) => {
-    try {
-      const res = await apiFetch('/exportar/resumo');
-      if (res.success) setData(res);
-    } catch (e) {
-      console.error('RetrospetivaMensal:', e);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { fetch(); }, [fetch]));
-
-  const onRefresh = () => { setRefreshing(true); fetch(true); };
-
-  const partilhar = async () => {
-    if (!data) return;
-    const historico = data.historico_mensal || [];
-    const mesRef = historico[historico.length - 2];
-    const total = mesRef?.total || 0;
-    const topCat = data.top_categorias?.[0];
-
-    try {
-      await Share.share({
-        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
-      });
-    } catch (e) {}
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const historico = data?.historico_mensal || [];
-  const mesAnterior = historico[historico.length - 2];
-  const mesAtualData = historico[historico.length - 1];
-  const mesAntAnterior = historico[historico.length - 3];
-
-  const totalMesAnt = mesAnterior?.total || 0;
-  const totalMesAntAnt = mesAntAnterior?.total || 0;
-  const variacao = totalMesAntAnt > 0
-    ? ((totalMesAnt - totalMesAntAnt) / totalMesAntAnt) * 100
-    : null;
-
-  const topCats = (data?.top_categorias || []).slice(0, 5);
-  const streak = data?.streak_dias || 0;
-  const rendimento = data?.rendimento_mensal || 0;
-  const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
-  const nome = data?.nome || 'utilizador';
-
-  const nomeMesAnt = mesAnterior?.mes
-    ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
-    : 'Mês anterior';
-
-  return (
-    <ScrollView
-      style={styles.root}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-    >
-      {/* Header */}
-      <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
-        <View style={styles.headerTop}>
-          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerLabel}>Retrospetiva de</Text>
-            <Text style={styles.headerMes}>{nomeMesAnt}</Text>
-          </View>
-          <Pressable onPress={partilhar} style={styles.shareBtn}>
-            <Share2 size={16} color={C.brand} />
-          </Pressable>
-        </View>
-      </Animated.View>
-
-      {/* Hero — total gasto */}
-      <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
-        <Text style={styles.heroLabel}>Total gasto em {nomeMesAnt}</Text>
-        <Text style={styles.heroValor}>{fmt(totalMesAnt)} €</Text>
-
-        {variacao !== null && (
-          <View style={styles.variacaoRow}>
-            {variacao > 0
-              ? <TrendingUp size={14} color={C.red} />
-              : <TrendingDown size={14} color={C.green} />
-            }
-            <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
-              {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAntAnterior?.mes || 'mês anterior'}
-            </Text>
-          </View>
-        )}
-
-        {pctRendimento !== null && (
-          <Text style={styles.heroSub}>
-            {pctRendimento.toFixed(0)}% do teu rendimento mensal
-          </Text>
-        )}
-      </Animated.View>
-
-      {/* Histograma 6 meses */}
-      <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <BarChart2 size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
-        </View>
-        <Histograma historico={historico} />
-      </Animated.View>
-
-      {/* Top categorias */}
-      <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
-        <View style={styles.cardTitleRow}>
-          <Target size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-        </View>
-        <MiniBarChart dados={topCats} />
-      </Animated.View>
-
-      {/* Streak */}
-      {streak > 0 && (
-        <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
-          <View style={styles.cardTitleRow}>
-            <Flame size={18} color='#FF7340' />
-            <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
-          </View>
-          <Text style={styles.streakSub}>
-            Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
-            {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
-          </Text>
-        </Animated.View>
-      )}
-
-      {/* Dica da Verly para este mês */}
-      <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
-        <View style={styles.cardTitleRow}>
-          <Zap size={16} color={C.brand} />
-          <Text style={styles.cardTitle}>O que melhorar em {nomesMesAtual}</Text>
-        </View>
-        {variacao !== null && variacao > 15 ? (
-          <Text style={styles.dicaText}>
-            Gastaste {variacao.toFixed(0)}% mais do que em {mesAntAnterior?.mes || 'mês anterior'}.
-            Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
-            Define um limite concreto para este mês.
-          </Text>
-        ) : variacao !== null && variacao < -10 ? (
-          <Text style={styles.dicaText}>
-            Excelente! Reduziu{Math.abs(variacao).toFixed(0)}% face ao mês anterior.
-            Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
-            (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
-          </Text>
-        ) : (
-          <Text style={styles.dicaText}>
-            Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-            A regra 50/30/20 de Elizabeth Warren sugere: 50% necessidades, 30% desejos, 20% poupança.
-            {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
-          </Text>
-        )}
-      </Animated.View>
-
-      {/* Botão exportar PDF */}
-      <Animated.View entering={FadeInDown.delay(500)}>
-        <Pressable
-          onPress={async () => {
-            try {
-              const { getToken } = await import('../services/api');
-              const token = await getToken();
-              const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-              // Abre o PDF no browser externo (RN não tem download direto sem expo-file-system)
-              const { Linking } = require('react-native');
-              Linking.openURL(`${BASE_URL}/exportar/pdf?token=${token}`);
-            } catch (e) {
-              console.error(e);
-            }
-          }}
-          style={styles.exportBtn}
-        >
-          <Download size={18} color="#fff" />
-          <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
-        </Pressable>
-      </Animated.View>
-    </ScrollView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  backBtn: { padding: 4, marginRight: 8 },
-  header: { marginBottom: SPACE.lg, paddingTop: 8 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
-  headerMes: { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2 },
-  shareBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  heroCard: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 24,
-    marginBottom: SPACE.lg,
-    alignItems: 'center',
-  },
-  heroLabel: { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor: { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
-  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
-  variacaoText: { fontSize: FONT.sm, fontWeight: '700' },
-  heroSub: { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: 16,
-    marginBottom: SPACE.md,
-  },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
-
-  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
-  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  dicaCard: { borderColor: C.brand + '30' },
-  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  exportBtn: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
-});
-</file>
-
 <file path="verly-mobile/src/screens/SubscricoesScreen.js">
 /**
  * src/screens/SubscricoesScreen.js
@@ -16380,306 +15619,6 @@ dados_reduzidos/
 *.pyc
 verly-mobile/node_modules/
 verly-mobile/.expo/
-</file>
-
-<file path="app/api/exportar_mobile.py">
-"""
-app/api/exportar_mobile.py
-Endpoints de exportação para o mobile.
-
-GET  /api/v1/exportar/resumo  → JSON com resumo completo (streak, garantias, previsão)
-GET  /api/v1/exportar/pdf     → PDF do relatório mensal
-"""
-
-import logging
-from datetime import datetime, date
-from calendar import monthrange
-from flask import request, jsonify, make_response
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import User, Fatura
-from app import db
-
-logger = logging.getLogger(__name__)
-
-
-def _get_garantias_ativas(faturas):
-    """Retorna lista de garantias ativas a partir das faturas."""
-    hoje = date.today()
-    garantias = []
-    for f in faturas:
-        if not f.garantia_meses or f.garantia_meses <= 0:
-            continue
-        if not f.data:
-            continue
-        data_fatura = f.data if isinstance(f.data, date) else f.data.date()
-        from dateutil.relativedelta import relativedelta
-        data_fim = data_fatura + relativedelta(months=f.garantia_meses)
-        dias_restantes = (data_fim - hoje).days
-        if dias_restantes >= 0:
-            garantias.append({
-                'id':              f.id,
-                'loja':            f.loja or 'Desconhecida',
-                'total':           float(f.total or 0),
-                'data':            data_fatura.isoformat(),
-                'data_fim':        data_fim.isoformat(),
-                'dias_restantes':  dias_restantes,
-                'garantia_meses':  f.garantia_meses,
-            })
-    garantias.sort(key=lambda x: x['dias_restantes'])
-    return garantias
-
-
-def _get_historico_mensal(faturas, meses=6):
-    """Retorna histórico de gastos dos últimos N meses."""
-    from collections import defaultdict
-    hoje = date.today()
-    historico = defaultdict(float)
-
-    for f in faturas:
-        if not f.data:
-            continue
-        data_f = f.data if isinstance(f.data, date) else f.data.date()
-        diff_meses = (hoje.year - data_f.year) * 12 + (hoje.month - data_f.month)
-        if 0 <= diff_meses < meses:
-            chave = data_f.strftime('%Y-%m')
-            historico[chave] += float(f.total or 0)
-
-    resultado = []
-    for i in range(meses - 1, -1, -1):
-        from dateutil.relativedelta import relativedelta
-        mes_data = hoje - relativedelta(months=i)
-        chave = mes_data.strftime('%Y-%m')
-        resultado.append({
-            'mes':   mes_data.strftime('%b'),
-            'chave': chave,
-            'total': round(historico.get(chave, 0), 2),
-        })
-    return resultado
-
-
-def _get_top_categorias(faturas, mes=None, ano=None):
-    """Retorna top categorias do mês."""
-    from collections import defaultdict
-    hoje = date.today()
-    mes = mes or hoje.month
-    ano = ano or hoje.year
-
-    categorias = defaultdict(float)
-    for f in faturas:
-        if not f.data:
-            continue
-        data_f = f.data if isinstance(f.data, date) else f.data.date()
-        if data_f.month == mes and data_f.year == ano:
-            cat = f.categoria or 'Outros'
-            categorias[cat] += float(f.total or 0)
-
-    return sorted(
-        [{'categoria': k, 'total': round(v, 2)} for k, v in categorias.items()],
-        key=lambda x: x['total'],
-        reverse=True
-    )[:5]
-
-
-def _calcular_previsao(faturas, orcamento):
-    """Calcula previsão de gasto até fim do mês."""
-    hoje = date.today()
-    dias_no_mes = monthrange(hoje.year, hoje.month)[1]
-    dia_atual = hoje.day
-
-    total_mes = sum(
-        float(f.total or 0)
-        for f in faturas
-        if f.data and (
-            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
-            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
-        )
-    )
-
-    if dia_atual > 0:
-        previsao = (total_mes / dia_atual) * dias_no_mes
-    else:
-        previsao = total_mes
-
-    return {
-        'gasto_atual':    round(total_mes, 2),
-        'previsao_mes':   round(previsao, 2),
-        'orcamento':      float(orcamento or 0),
-        'vai_ultrapassar': previsao > float(orcamento or 0) if orcamento else False,
-        'percentagem':    round((total_mes / float(orcamento)) * 100, 1) if orcamento else 0,
-    }
-
-
-@api_bp.route('/exportar/resumo', methods=['GET'])
-@jwt_required()
-def exportar_resumo():
-    """
-    GET /api/v1/exportar/resumo
-    Retorna resumo completo: streak, garantias ativas, previsão, histórico, top categorias.
-    """
-    user_id = int(get_jwt_identity())
-    user = User.query.get_or_404(user_id)
-    faturas = Fatura.query.filter_by(utilizador_id=user_id).all()
-
-    garantias = _get_garantias_ativas(faturas)
-    historico = _get_historico_mensal(faturas)
-    top_cats  = _get_top_categorias(faturas)
-    previsao  = _calcular_previsao(faturas, user.orcamento_mensal)
-
-    return jsonify({
-        'streak_dias':      getattr(user, 'streak_dias', 0) or 0,
-        'garantias_ativas': garantias,
-        'num_garantias':    len(garantias),
-        'historico_mensal': historico,
-        'top_categorias':   top_cats,
-        'previsao':         previsao,
-        'orcamento_mensal': float(user.orcamento_mensal or 0),
-        'gerado_em':        datetime.utcnow().isoformat(),
-    })
-
-
-@api_bp.route('/exportar/pdf', methods=['GET'])
-@jwt_required(optional=True)
-def exportar_pdf():
-    """
-    GET /api/v1/exportar/pdf
-    Gera PDF do relatório mensal.
-    Aceita token via query param ?_token= para abrir no browser.
-    """
-    from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity as get_identity
-    from flask import current_app
-
-    # Suporte a token via query param (para abrir no browser)
-    _token = request.args.get('_token')
-    if _token:
-        try:
-            from flask_jwt_extended import decode_token
-            decoded = decode_token(_token)
-            user_id = int(decoded['sub'])
-        except Exception:
-            return jsonify({'error': 'Token inválido.'}), 401
-    else:
-        try:
-            verify_jwt_in_request()
-            user_id = int(get_identity())
-        except Exception:
-            return jsonify({'error': 'Autenticação necessária.'}), 401
-
-    user = User.query.get_or_404(user_id)
-    faturas = Fatura.query.filter_by(utilizador_id=user_id).order_by(Fatura.data.desc()).all()
-
-    hoje = date.today()
-    top_cats = _get_top_categorias(faturas)
-    garantias = _get_garantias_ativas(faturas)
-    previsao = _calcular_previsao(faturas, user.orcamento_mensal)
-
-    total_mes = sum(
-        float(f.total or 0)
-        for f in faturas
-        if f.data and (
-            (f.data if isinstance(f.data, date) else f.data.date()).month == hoje.month and
-            (f.data if isinstance(f.data, date) else f.data.date()).year == hoje.year
-        )
-    )
-
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib import colors
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-        from reportlab.lib.units import cm
-        import io
-
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4,
-                                rightMargin=2*cm, leftMargin=2*cm,
-                                topMargin=2*cm, bottomMargin=2*cm)
-
-        styles = getSampleStyleSheet()
-        story = []
-
-        # Título
-        title_style = ParagraphStyle('Title', parent=styles['Title'],
-                                     fontSize=24, textColor=colors.HexColor('#7C6FE0'),
-                                     spaceAfter=6)
-        story.append(Paragraph('Verly — Relatório Financeiro', title_style))
-        story.append(Paragraph(f'{user.nome} · {hoje.strftime("%B %Y")}', styles['Normal']))
-        story.append(Spacer(1, 0.5*cm))
-
-        # Resumo
-        story.append(Paragraph('Resumo do Mês', styles['Heading2']))
-        resumo_data = [
-            ['Total gasto', f'{total_mes:.2f} €'],
-            ['Orçamento', f'{float(user.orcamento_mensal or 0):.2f} €'],
-            ['Previsão fim do mês', f'{previsao["previsao_mes"]:.2f} €'],
-            ['Streak', f'{getattr(user, "streak_dias", 0) or 0} dias'],
-            ['Garantias ativas', str(len(garantias))],
-        ]
-        t = Table(resumo_data, colWidths=[8*cm, 8*cm])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
-            ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
-            ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
-            ('FONTSIZE',   (0, 0), (-1, -1), 11),
-            ('PADDING',    (0, 0), (-1, -1), 6),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 0.5*cm))
-
-        # Top categorias
-        if top_cats:
-            story.append(Paragraph('Top Categorias', styles['Heading2']))
-            cat_data = [['Categoria', 'Total']] + [
-                [c['categoria'], f'{c["total"]:.2f} €'] for c in top_cats
-            ]
-            t2 = Table(cat_data, colWidths=[10*cm, 6*cm])
-            t2.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
-                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
-                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE',   (0, 0), (-1, -1), 11),
-                ('PADDING',    (0, 0), (-1, -1), 6),
-            ]))
-            story.append(t2)
-            story.append(Spacer(1, 0.5*cm))
-
-        # Garantias ativas
-        if garantias:
-            story.append(Paragraph('Garantias Ativas', styles['Heading2']))
-            gar_data = [['Loja', 'Expira em', 'Dias restantes']] + [
-                [g['loja'], g['data_fim'], str(g['dias_restantes'])] for g in garantias[:10]
-            ]
-            t3 = Table(gar_data, colWidths=[7*cm, 5*cm, 4*cm])
-            t3.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
-                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
-                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
-                ('FONTSIZE',   (0, 0), (-1, -1), 10),
-                ('PADDING',    (0, 0), (-1, -1), 6),
-            ]))
-            story.append(t3)
-
-        doc.build(story)
-        buffer.seek(0)
-
-        response = make_response(buffer.read())
-        response.headers['Content-Type'] = 'application/pdf'
-        response.headers['Content-Disposition'] = f'attachment; filename=verly_{hoje.strftime("%Y%m")}.pdf'
-        return response
-
-    except ImportError:
-        # Fallback: retorna JSON se reportlab não estiver instalado
-        return jsonify({
-            'error': 'reportlab não instalado. Adiciona ao requirements.txt.',
-            'resumo': {
-                'total_mes': total_mes,
-                'previsao':  previsao,
-                'garantias': garantias,
-            }
-        }), 500
-    except Exception as e:
-        logger.error(f'Erro ao gerar PDF: {e}')
-        return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
 </file>
 
 <file path="app/api/push_notifications.py">
@@ -18409,6 +17348,398 @@ const s = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/GarantiasScreen.js">
+// src/screens/GarantiasScreen.js
+// Centro de Garantias — todas as garantias ativas e expiradas num só sítio
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, RefreshControl, Dimensions,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import {
+  Shield, ShieldCheck, ShieldOff, ShieldAlert,
+  ChevronRight, Package, Calendar, AlertTriangle,
+} from 'lucide-react-native';
+import { apiFetch } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+function diasLabel(dias) {
+  if (dias === 0) return 'Expira hoje!';
+  if (dias === 1) return 'Expira amanhã!';
+  if (dias < 0) return `Expirou há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`;
+  return `${dias} dias restantes`;
+}
+
+function diasColor(dias) {
+  if (dias < 0) return C.textSub;
+  if (dias <= 7) return C.red;
+  if (dias <= 30) return C.yellow;
+  return C.green;
+}
+
+function GarantiaCard({ item, idx }) {
+  const dias = item.dias_restantes;
+  const cor = diasColor(dias);
+  const expirou = dias < 0;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(idx * 60).duration(350).springify()}>
+      <View style={[styles.card, expirou && { opacity: 0.55 }]}>
+        {/* Linha esquerda colorida */}
+        <View style={[styles.cardAccent, { backgroundColor: cor }]} />
+
+        <View style={{ flex: 1, paddingLeft: 14 }}>
+          {/* Header */}
+          <View style={styles.cardHeader}>
+            <View style={[styles.iconBox, { backgroundColor: cor + '22' }]}>
+              {expirou
+                ? <ShieldOff size={18} color={cor} />
+                : dias <= 7
+                  ? <ShieldAlert size={18} color={cor} />
+                  : <ShieldCheck size={18} color={cor} />
+              }
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.cardLoja} numberOfLines={1}>{item.loja}</Text>
+              <Text style={[styles.cardDias, { color: cor }]}>{diasLabel(dias)}</Text>
+            </View>
+            {/* CORRIGIDO: item.total em vez de item.valor */}
+            {item.total > 0 && (
+              <Text style={styles.cardValor}>{fmt(item.total)} €</Text>
+            )}
+          </View>
+
+          {/* Detalhes */}
+          <View style={styles.cardDetails}>
+            <View style={styles.detailRow}>
+              <Calendar size={12} color={C.textSub} />
+              {/* CORRIGIDO: item.data_fim em vez de item.data_garantia */}
+              <Text style={styles.detailText}>
+                Válida até {item.data_fim}
+              </Text>
+            </View>
+            {item.categoria && (
+              <View style={[styles.badge, { backgroundColor: C.brand + '22' }]}>
+                <Text style={[styles.badgeText, { color: C.brand }]}>{item.categoria}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Barra de progresso restante */}
+          {!expirou && dias <= 365 && (
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {
+                    width: `${Math.max(2, Math.min(100, (dias / 365) * 100))}%`,
+                    backgroundColor: cor,
+                  },
+                ]}
+              />
+            </View>
+          )}
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function GarantiasScreen({ navigation }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filtro, setFiltro] = useState('ativas'); // 'ativas' | 'todas' | 'urgentes'
+
+  const carregar = useCallback(async (isRefresh = false) => {
+    try {
+      const res = await apiFetch('/exportar/resumo');
+      setData(res);
+    } catch (e) {
+      console.error('GarantiasScreen:', e);
+    } finally {
+      setLoading(false);
+      if (isRefresh) setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
+
+  const onRefresh = () => { setRefreshing(true); carregar(true); };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const todas = data?.garantias_ativas || [];
+  const ativas = todas.filter(g => g.dias_restantes >= 0);
+  const urgentes = todas.filter(g => g.dias_restantes >= 0 && g.dias_restantes <= 30);
+  const expiradas = todas.filter(g => g.dias_restantes < 0);
+
+  const listaFiltrada =
+    filtro === 'ativas'   ? ativas :
+    filtro === 'urgentes' ? urgentes :
+    todas;
+
+  const totalAtivas = ativas.length;
+  const totalUrgentes = urgentes.length;
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+    >
+      {/* Header */}
+      <Animated.View entering={FadeIn.duration(400)}>
+        <View style={styles.header}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <Shield size={28} color={C.brand} style={{ marginLeft: 8 }} />
+          <View style={{ marginLeft: 12 }}>
+            <Text style={styles.headerTitle}>Centro de Garantias</Text>
+            <Text style={styles.headerSub}>
+              {totalAtivas} ativ{totalAtivas !== 1 ? 'as' : 'a'}
+              {totalUrgentes > 0 ? ` · ${totalUrgentes} urgente${totalUrgentes !== 1 ? 's' : ''}` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* Stats rápidas */}
+        <View style={styles.statsRow}>
+          <View style={[styles.statCard, { borderColor: C.green + '40' }]}>
+            <ShieldCheck size={20} color={C.green} />
+            <Text style={[styles.statNum, { color: C.green }]}>{totalAtivas}</Text>
+            <Text style={styles.statLabel}>Ativas</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.yellow + '40' }]}>
+            <ShieldAlert size={20} color={C.yellow} />
+            <Text style={[styles.statNum, { color: C.yellow }]}>{urgentes.length}</Text>
+            <Text style={styles.statLabel}>30 dias</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.red + '40' }]}>
+            <AlertTriangle size={20} color={C.red} />
+            <Text style={[styles.statNum, { color: C.red }]}>{urgentes.filter(g => g.dias_restantes <= 7).length}</Text>
+            <Text style={styles.statLabel}>7 dias</Text>
+          </View>
+          <View style={[styles.statCard, { borderColor: C.textSub + '30' }]}>
+            <ShieldOff size={20} color={C.textSub} />
+            <Text style={[styles.statNum, { color: C.textSub }]}>{expiradas.length}</Text>
+            <Text style={styles.statLabel}>Expiradas</Text>
+          </View>
+        </View>
+
+        {/* Filtros */}
+        <View style={styles.filtros}>
+          {[
+            { key: 'ativas',   label: `Ativas (${ativas.length})` },
+            { key: 'urgentes', label: `Urgentes (${urgentes.length})` },
+            { key: 'todas',    label: `Todas (${todas.length})` },
+          ].map(f => (
+            <Pressable
+              key={f.key}
+              onPress={() => setFiltro(f.key)}
+              style={[styles.filtroBtn, filtro === f.key && styles.filtroBtnActive]}
+            >
+              <Text style={[styles.filtroText, filtro === f.key && styles.filtroTextActive]}>
+                {f.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </Animated.View>
+
+      {/* Lista */}
+      {listaFiltrada.length === 0 ? (
+        <Animated.View entering={FadeIn.delay(200)} style={styles.emptyBox}>
+          <ShieldCheck size={48} color={C.green} style={{ marginBottom: 16 }} />
+          <Text style={styles.emptyTitle}>
+            {filtro === 'urgentes' ? 'Nenhuma garantia urgente' : 'Nenhuma garantia aqui'}
+          </Text>
+          <Text style={styles.emptySub}>
+            {filtro === 'urgentes'
+              ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
+              : 'Quando fizeres upload de faturas com data de garantia, aparecem aqui automaticamente.'}
+          </Text>
+        </Animated.View>
+      ) : (
+        listaFiltrada.map((item, idx) => (
+          <GarantiaCard key={`${item.id}-${idx}`} item={item} idx={idx} />
+        ))
+      )}
+
+      {/* Dica */}
+      <Animated.View entering={FadeInDown.delay(400)} style={styles.dicaBox}>
+        <Package size={16} color={C.textSub} />
+        <Text style={styles.dicaText}>
+          A Verly extrai automaticamente datas de garantia das tuas faturas.
+          Guarda sempre o PDF original para reclamar quando necessário.
+        </Text>
+      </Animated.View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  content: { padding: SPACE.lg, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+
+  backBtn: { padding: 4, marginRight: 4 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: SPACE.lg,
+    paddingTop: 8,
+  },
+  headerTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  headerSub:   { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+
+  statsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: SPACE.lg,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 4,
+  },
+  statNum:   { fontSize: FONT.lg, fontWeight: '900', color: C.text },
+  statLabel: { fontSize: 10, color: C.textSub, fontWeight: '600' },
+
+  filtros: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: SPACE.lg,
+  },
+  filtroBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+  },
+  filtroBtnActive: {
+    backgroundColor: C.brandDim,
+    borderColor: C.brand + '60',
+  },
+  filtroText:       { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
+  filtroTextActive: { color: C.brand },
+
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginBottom: 12,
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  cardAccent: { width: 4, minHeight: '100%' },
+
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  iconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardLoja:  { fontSize: FONT.md, fontWeight: '700', color: C.text },
+  cardDias:  { fontSize: FONT.xs, fontWeight: '700', marginTop: 2 },
+  cardValor: { fontSize: FONT.sm, fontWeight: '800', color: C.text },
+
+  cardDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  detailText: { fontSize: 11, color: C.textSub },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  badgeText: { fontSize: 10, fontWeight: '700' },
+
+  progressTrack: {
+    height: 3,
+    backgroundColor: C.surface3,
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 2,
+    marginBottom: 12,
+  },
+  progressFill: { height: '100%', borderRadius: 2 },
+
+  emptyBox: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 24,
+  },
+  emptyTitle: {
+    fontSize: FONT.lg,
+    fontWeight: '800',
+    color: C.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptySub: {
+    fontSize: FONT.sm,
+    color: C.textMid,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+
+  dicaBox: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.border,
+    marginTop: 16,
+    alignItems: 'flex-start',
+  },
+  dicaText: {
+    flex: 1,
+    fontSize: 11,
+    color: C.textSub,
+    lineHeight: 17,
+  },
+});
+</file>
+
 <file path="verly-mobile/src/screens/InsightsScreen.js">
 // src/screens/InsightsScreen.js — Verly Insights v6 — Donut Chart PocketGuard Style
 import React, { useState, useCallback, useRef } from 'react';
@@ -19754,6 +19085,374 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
+// src/screens/RetrospetivaMensalScreen.js
+// Retrospetiva Mensal — resumo do mês anterior estilo Spotify Wrapped
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, Dimensions,
+  Share, RefreshControl, Linking,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import Animated, {
+  FadeInDown, FadeIn, ZoomIn,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import {
+  TrendingUp, TrendingDown, Award, Flame, Target,
+  BarChart2, Download, Share2, Calendar, Zap,
+  ChevronRight,
+} from 'lucide-react-native';
+import { apiFetch, getToken } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
+
+const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+                  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const MESES_SHORT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+                     'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+const CAT_COLORS = [
+  '#7C6FE0', '#E24B4A', '#00D68F', '#FFB300',
+  '#45B7D1', '#FF7340', '#B06FE0', '#E07090',
+];
+
+const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+
+// ─── Mini bar chart horizontal ────────────────────────────────────────────────
+function MiniBarChart({ dados }) {
+  if (!dados || dados.length === 0) return null;
+  const maxVal = Math.max(...dados.map(d => d.total), 1);
+
+  return (
+    <View style={{ gap: 10 }}>
+      {dados.map((d, i) => {
+        const pct = d.total / maxVal;
+        const cor = CAT_COLORS[i % CAT_COLORS.length];
+        return (
+          <View key={i}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
+                {d.categoria}
+              </Text>
+              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
+            </View>
+            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+              <Animated.View
+                entering={FadeIn.delay(i * 80)}
+                style={{
+                  height: '100%',
+                  width: `${pct * 100}%`,
+                  backgroundColor: cor,
+                  borderRadius: 3,
+                }}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+// ─── Histograma de 6 meses ────────────────────────────────────────────────────
+function Histograma({ historico }) {
+  if (!historico || historico.length === 0) return null;
+  const maxVal = Math.max(...historico.map(d => d.total), 1);
+  const BAR_H = 80;
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: BAR_H + 30 }}>
+      {historico.map((d, i) => {
+        const h = Math.max((d.total / maxVal) * BAR_H, 4);
+        const isCurrent = i === historico.length - 1;
+        return (
+          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={{ fontSize: 9, color: C.textSub, marginBottom: 4 }}>
+              {d.total > 0 ? `${(d.total / 1000).toFixed(d.total >= 1000 ? 1 : 0)}${d.total >= 1000 ? 'k' : ''}` : ''}
+            </Text>
+            <MotiView
+              from={{ height: 4 }}
+              animate={{ height: h }}
+              transition={{ type: 'spring', delay: i * 60 }}
+              style={{
+                width: '100%',
+                backgroundColor: isCurrent ? C.brand : C.surface3,
+                borderRadius: 4,
+              }}
+            />
+            <Text style={{ fontSize: 9, color: isCurrent ? C.brand : C.textSub, marginTop: 5, fontWeight: isCurrent ? '800' : '500' }}>
+              {d.mes}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+export default function RetrospetivaMensalScreen({ navigation }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const hoje = new Date();
+  const mesAtual = hoje.getMonth(); // 0-indexed
+  const nomesMesAtual = MESES_PT[mesAtual];
+
+  const carregar = useCallback(async (isRefresh = false) => {
+    try {
+      const res = await apiFetch('/exportar/resumo');
+      setData(res);
+    } catch (e) {
+      console.error('RetrospetivaMensal:', e);
+    } finally {
+      setLoading(false);
+      if (isRefresh) setRefreshing(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
+
+  const onRefresh = () => { setRefreshing(true); carregar(true); };
+
+  const partilhar = async () => {
+    if (!data) return;
+    const historico = data.historico_mensal || [];
+    const mesRef = historico[historico.length - 2];
+    const total = mesRef?.total || 0;
+    const topCat = data.top_categorias?.[0];
+
+    try {
+      await Share.share({
+        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
+      });
+    } catch (e) {}
+  };
+
+  const exportarPDF = async () => {
+    try {
+      const token = await getToken();
+      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
+    } catch (e) {
+      console.error('Exportar PDF:', e);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const historico = data?.historico_mensal || [];
+  const mesAnterior = historico[historico.length - 2];
+  const mesAtualData = historico[historico.length - 1];
+  const mesAntAnterior = historico[historico.length - 3];
+
+  const totalMesAnt = mesAnterior?.total || 0;
+  const totalMesAntAnt = mesAntAnterior?.total || 0;
+  const variacao = totalMesAntAnt > 0
+    ? ((totalMesAnt - totalMesAntAnt) / totalMesAntAnt) * 100
+    : null;
+
+  const topCats = (data?.top_categorias || []).slice(0, 5);
+  const streak = data?.streak_dias || 0;
+  const rendimento = data?.rendimento_mensal || 0;
+  const pctRendimento = rendimento > 0 ? (totalMesAnt / rendimento) * 100 : null;
+
+  const nomeMesAnt = mesAnterior?.mes
+    ? MESES_PT[MESES_SHORT.indexOf(mesAnterior.mes)] || mesAnterior.mes
+    : 'Mês anterior';
+
+  return (
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.content}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+    >
+      {/* Header */}
+      <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
+        <View style={styles.headerTop}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <ChevronRight size={22} color={C.text} style={{ transform: [{ rotate: '180deg' }] }} />
+          </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerLabel}>Retrospetiva de</Text>
+            <Text style={styles.headerMes}>{nomeMesAnt}</Text>
+          </View>
+          <Pressable onPress={partilhar} style={styles.shareBtn}>
+            <Share2 size={16} color={C.brand} />
+          </Pressable>
+        </View>
+      </Animated.View>
+
+      {/* Hero — total gasto */}
+      <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
+        <Text style={styles.heroLabel}>Total gasto em {nomeMesAnt}</Text>
+        <Text style={styles.heroValor}>{fmt(totalMesAnt)} €</Text>
+
+        {variacao !== null && (
+          <View style={styles.variacaoRow}>
+            {variacao > 0
+              ? <TrendingUp size={14} color={C.red} />
+              : <TrendingDown size={14} color={C.green} />
+            }
+            <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
+              {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAntAnterior?.mes || 'mês anterior'}
+            </Text>
+          </View>
+        )}
+
+        {pctRendimento !== null && (
+          <Text style={styles.heroSub}>
+            {pctRendimento.toFixed(0)}% do teu rendimento mensal
+          </Text>
+        )}
+      </Animated.View>
+
+      {/* Histograma 6 meses */}
+      <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <BarChart2 size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
+        </View>
+        <Histograma historico={historico} />
+      </Animated.View>
+
+      {/* Top categorias */}
+      <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
+        <View style={styles.cardTitleRow}>
+          <Target size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+        </View>
+        {topCats.length > 0
+          ? <MiniBarChart dados={topCats} />
+          : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
+        }
+      </Animated.View>
+
+      {/* Streak */}
+      {streak > 0 && (
+        <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
+          <View style={styles.cardTitleRow}>
+            <Flame size={18} color='#FF7340' />
+            <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
+          </View>
+          <Text style={styles.streakSub}>
+            Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
+            {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
+          </Text>
+        </Animated.View>
+      )}
+
+      {/* Dica da Verly */}
+      <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
+        <View style={styles.cardTitleRow}>
+          <Zap size={16} color={C.brand} />
+          <Text style={styles.cardTitle}>O que melhorar em {nomesMesAtual}</Text>
+        </View>
+        {variacao !== null && variacao > 15 ? (
+          <Text style={styles.dicaText}>
+            Gastaste {variacao.toFixed(0)}% mais do que em {mesAntAnterior?.mes || 'mês anterior'}.
+            Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
+            Define um limite concreto para este mês.
+          </Text>
+        ) : variacao !== null && variacao < -10 ? (
+          <Text style={styles.dicaText}>
+            Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
+            Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
+            (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMesAnt * 4)}€).
+          </Text>
+        ) : (
+          <Text style={styles.dicaText}>
+            Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
+            A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
+            {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
+          </Text>
+        )}
+      </Animated.View>
+
+      {/* Botão exportar PDF */}
+      <Animated.View entering={FadeInDown.delay(500)}>
+        <Pressable onPress={exportarPDF} style={styles.exportBtn}>
+          <Download size={18} color="#fff" />
+          <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
+        </Pressable>
+      </Animated.View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  content: { padding: SPACE.lg, paddingBottom: 40 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+
+  backBtn: { padding: 4, marginRight: 8 },
+  header: { marginBottom: SPACE.lg, paddingTop: 8 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
+  headerMes: { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2 },
+  shareBtn: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  heroCard: {
+    backgroundColor: C.brand,
+    borderRadius: RADIUS.lg,
+    padding: 24,
+    marginBottom: SPACE.lg,
+    alignItems: 'center',
+  },
+  heroLabel: { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroValor: { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
+  variacaoText: { fontSize: FONT.sm, fontWeight: '700' },
+  heroSub: { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+
+  card: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 16,
+    marginBottom: SPACE.md,
+  },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+
+  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
+  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+
+  dicaCard: { borderColor: C.brand + '30' },
+  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+
+  exportBtn: {
+    backgroundColor: C.brand,
+    borderRadius: RADIUS.lg,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 8,
+  },
+  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
+});
+</file>
+
 <file path="verly-mobile/src/screens/ScoreScreen.js">
 /**
  * src/screens/ScoreScreen.js
@@ -20198,6 +19897,306 @@ const s = StyleSheet.create({
   lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface2, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border },
   lojasBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
 });
+</file>
+
+<file path="app/api/exportar_mobile.py">
+"""
+app/api/exportar_mobile.py
+Endpoints de exportação para o mobile.
+
+GET  /api/v1/exportar/resumo  → JSON com resumo completo (streak, garantias, previsão)
+GET  /api/v1/exportar/pdf     → PDF do relatório mensal
+"""
+
+import logging
+from datetime import datetime, date
+from calendar import monthrange
+from flask import request, jsonify, make_response
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import User, Fatura
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _parse_data(data_str):
+    """Converte string de data para objeto date. Aceita vários formatos."""
+    if not data_str:
+        return None
+    if isinstance(data_str, (date, datetime)):
+        return data_str.date() if isinstance(data_str, datetime) else data_str
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(data_str.strip(), fmt).date()
+        except (ValueError, AttributeError):
+            continue
+    return None
+
+
+def _get_garantias_ativas(faturas):
+    """Retorna lista de garantias ativas a partir das faturas."""
+    hoje = date.today()
+    garantias = []
+    for f in faturas:
+        # O modelo usa data_garantia (string) como data de fim da garantia
+        data_fim = _parse_data(f.data_garantia)
+        if not data_fim:
+            continue
+        dias_restantes = (data_fim - hoje).days
+        data_compra = _parse_data(f.data_compra)
+        garantias.append({
+            'id':             f.id,
+            'loja':           f.loja or 'Desconhecida',
+            'total':          float(f.total or 0),
+            'data':           data_compra.isoformat() if data_compra else '',
+            'data_fim':       data_fim.isoformat(),
+            'data_garantia':  data_fim.isoformat(),
+            'dias_restantes': dias_restantes,
+            'categoria':      f.categoria or 'Outros',
+        })
+    # Primeiro as que expiram mais cedo (positivas primeiro, depois negativas)
+    garantias.sort(key=lambda x: x['dias_restantes'], reverse=False)
+    return garantias
+
+
+def _get_historico_mensal(faturas, meses=6):
+    """Retorna histórico de gastos dos últimos N meses."""
+    from collections import defaultdict
+    from dateutil.relativedelta import relativedelta
+    hoje = date.today()
+    historico = defaultdict(float)
+
+    for f in faturas:
+        data_f = _parse_data(f.data_compra)
+        if not data_f:
+            continue
+        diff_meses = (hoje.year - data_f.year) * 12 + (hoje.month - data_f.month)
+        if 0 <= diff_meses < meses:
+            chave = data_f.strftime('%Y-%m')
+            historico[chave] += float(f.total or 0)
+
+    resultado = []
+    for i in range(meses - 1, -1, -1):
+        mes_data = hoje - relativedelta(months=i)
+        chave = mes_data.strftime('%Y-%m')
+        resultado.append({
+            'mes':   mes_data.strftime('%b'),
+            'chave': chave,
+            'total': round(historico.get(chave, 0), 2),
+        })
+    return resultado
+
+
+def _get_top_categorias(faturas, mes=None, ano=None):
+    """Retorna top categorias do mês."""
+    from collections import defaultdict
+    hoje = date.today()
+    mes = mes or hoje.month
+    ano = ano or hoje.year
+
+    categorias = defaultdict(float)
+    for f in faturas:
+        data_f = _parse_data(f.data_compra)
+        if not data_f:
+            continue
+        if data_f.month == mes and data_f.year == ano:
+            cat = f.categoria or 'Outros'
+            categorias[cat] += float(f.total or 0)
+
+    return sorted(
+        [{'categoria': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        key=lambda x: x['total'],
+        reverse=True
+    )[:5]
+
+
+def _calcular_previsao(faturas, orcamento):
+    """Calcula previsão de gasto até fim do mês."""
+    hoje = date.today()
+    dias_no_mes = monthrange(hoje.year, hoje.month)[1]
+    dia_atual = hoje.day
+
+    total_mes = sum(
+        float(f.total or 0)
+        for f in faturas
+        if _parse_data(f.data_compra) and
+        _parse_data(f.data_compra).month == hoje.month and
+        _parse_data(f.data_compra).year == hoje.year
+    )
+
+    previsao = (total_mes / dia_atual) * dias_no_mes if dia_atual > 0 else total_mes
+
+    return {
+        'gasto_atual':     round(total_mes, 2),
+        'previsao_mes':    round(previsao, 2),
+        'orcamento':       float(orcamento or 0),
+        'vai_ultrapassar': previsao > float(orcamento or 0) if orcamento else False,
+        'percentagem':     round((total_mes / float(orcamento)) * 100, 1) if orcamento else 0,
+    }
+
+
+@api_bp.route('/exportar/resumo', methods=['GET'])
+@jwt_required()
+def exportar_resumo():
+    """
+    GET /api/v1/exportar/resumo
+    Retorna resumo completo: streak, garantias ativas, previsão, histórico, top categorias.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    # CORRIGIDO: user_id em vez de utilizador_id
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    garantias = _get_garantias_ativas(faturas)
+    historico  = _get_historico_mensal(faturas)
+    top_cats   = _get_top_categorias(faturas)
+    previsao   = _calcular_previsao(faturas, user.orcamento_mensal)
+
+    return jsonify({
+        'streak_dias':      getattr(user, 'streak_dias', 0) or 0,
+        'garantias_ativas': garantias,
+        'num_garantias':    len(garantias),
+        'historico_mensal': historico,
+        'top_categorias':   top_cats,
+        'previsao':         previsao,
+        'orcamento_mensal': float(user.orcamento_mensal or 0),
+        'gerado_em':        datetime.utcnow().isoformat(),
+    })
+
+
+@api_bp.route('/exportar/pdf', methods=['GET'])
+@jwt_required(optional=True)
+def exportar_pdf():
+    """
+    GET /api/v1/exportar/pdf
+    Gera PDF do relatório mensal.
+    Aceita token via query param ?_token= para abrir no browser.
+    """
+    from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity as get_identity
+
+    _token = request.args.get('_token')
+    if _token:
+        try:
+            from flask_jwt_extended import decode_token
+            decoded = decode_token(_token)
+            user_id = int(decoded['sub'])
+        except Exception:
+            return jsonify({'error': 'Token inválido.'}), 401
+    else:
+        try:
+            verify_jwt_in_request()
+            user_id = int(get_identity())
+        except Exception:
+            return jsonify({'error': 'Autenticação necessária.'}), 401
+
+    user = User.query.get_or_404(user_id)
+    # CORRIGIDO: user_id em vez de utilizador_id, sem order_by(Fatura.data)
+    faturas = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
+
+    hoje = date.today()
+    top_cats  = _get_top_categorias(faturas)
+    garantias = _get_garantias_ativas(faturas)
+    previsao  = _calcular_previsao(faturas, user.orcamento_mensal)
+
+    total_mes = sum(
+        float(f.total or 0)
+        for f in faturas
+        if _parse_data(f.data_compra) and
+        _parse_data(f.data_compra).month == hoje.month and
+        _parse_data(f.data_compra).year == hoje.year
+    )
+
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.lib.units import cm
+        import io
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4,
+                                rightMargin=2*cm, leftMargin=2*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
+
+        styles = getSampleStyleSheet()
+        story = []
+
+        title_style = ParagraphStyle('Title', parent=styles['Title'],
+                                     fontSize=24, textColor=colors.HexColor('#7C6FE0'),
+                                     spaceAfter=6)
+        story.append(Paragraph('Verly — Relatório Financeiro', title_style))
+        story.append(Paragraph(f'{user.nome} · {hoje.strftime("%B %Y")}', styles['Normal']))
+        story.append(Spacer(1, 0.5*cm))
+
+        story.append(Paragraph('Resumo do Mês', styles['Heading2']))
+        resumo_data = [
+            ['Total gasto', f'{total_mes:.2f} €'],
+            ['Orçamento', f'{float(user.orcamento_mensal or 0):.2f} €'],
+            ['Previsão fim do mês', f'{previsao["previsao_mes"]:.2f} €'],
+            ['Streak', f'{getattr(user, "streak_dias", 0) or 0} dias'],
+            ['Garantias ativas', str(len([g for g in garantias if g["dias_restantes"] >= 0]))],
+        ]
+        t = Table(resumo_data, colWidths=[8*cm, 8*cm])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+            ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+            ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTSIZE',   (0, 0), (-1, -1), 11),
+            ('PADDING',    (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.5*cm))
+
+        if top_cats:
+            story.append(Paragraph('Top Categorias', styles['Heading2']))
+            cat_data = [['Categoria', 'Total']] + [
+                [c['categoria'], f'{c["total"]:.2f} €'] for c in top_cats
+            ]
+            t2 = Table(cat_data, colWidths=[10*cm, 6*cm])
+            t2.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE',   (0, 0), (-1, -1), 11),
+                ('PADDING',    (0, 0), (-1, -1), 6),
+            ]))
+            story.append(t2)
+            story.append(Spacer(1, 0.5*cm))
+
+        ativas = [g for g in garantias if g['dias_restantes'] >= 0]
+        if ativas:
+            story.append(Paragraph('Garantias Ativas', styles['Heading2']))
+            gar_data = [['Loja', 'Expira em', 'Dias restantes']] + [
+                [g['loja'], g['data_fim'], str(g['dias_restantes'])] for g in ativas[:10]
+            ]
+            t3 = Table(gar_data, colWidths=[7*cm, 5*cm, 4*cm])
+            t3.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#7C6FE0')),
+                ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+                ('GRID',       (0, 0), (-1, -1), 0.5, colors.grey),
+                ('FONTSIZE',   (0, 0), (-1, -1), 10),
+                ('PADDING',    (0, 0), (-1, -1), 6),
+            ]))
+            story.append(t3)
+
+        doc.build(story)
+        buffer.seek(0)
+
+        response = make_response(buffer.read())
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = f'attachment; filename=verly_{hoje.strftime("%Y%m")}.pdf'
+        return response
+
+    except ImportError:
+        return jsonify({
+            'error': 'reportlab não instalado.',
+            'resumo': {'total_mes': total_mes, 'previsao': previsao, 'garantias': garantias},
+        }), 500
+    except Exception as e:
+        logger.error(f'Erro ao gerar PDF: {e}')
+        return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
 </file>
 
 <file path="app/api/insights.py">

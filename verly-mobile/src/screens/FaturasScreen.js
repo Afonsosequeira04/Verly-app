@@ -8,7 +8,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   TextInput, RefreshControl, ActivityIndicator, Alert,
-  Animated, PanResponder, Dimensions,
+  Animated, PanResponder, Dimensions, Image,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker   from 'expo-image-picker';
@@ -53,6 +53,60 @@ const CAT_COLORS = {
 };
 
 // ── Swipeable card ────────────────────────────────────────────────────────────
+
+// ── Mapa de domínios para lojas portuguesas comuns ───────────────────────────
+const MERCHANT_DOMAINS = {
+  'worten': 'worten.pt', 'fnac': 'fnac.pt', 'continente': 'continente.pt',
+  'pingo doce': 'pingodoce.pt', 'lidl': 'lidl.pt', 'aldi': 'aldi.pt',
+  'ikea': 'ikea.com', 'zara': 'zara.com', 'pull&bear': 'pullandbear.com',
+  'pull and bear': 'pullandbear.com', 'bershka': 'bershka.com',
+  'stradivarius': 'stradivarius.com', 'mango': 'mango.com', 'h&m': 'hm.com',
+  'sport zone': 'sportzone.pt', 'decathlon': 'decathlon.pt',
+  'amazon': 'amazon.es', 'spotify': 'spotify.com', 'netflix': 'netflix.com',
+  'apple': 'apple.com', 'google': 'google.com', 'uber': 'uber.com',
+  'glovo': 'glovoapp.com', 'bolt': 'bolt.eu', 'mcdonald': 'mcdonalds.com',
+  'kfc': 'kfc.com', 'burger king': 'burgerking.com', 'nandos': 'nandos.com',
+  'el corte inglés': 'elcorteingles.pt', 'modelo': 'continente.pt',
+  'intermarché': 'intermarche.pt', 'pingo': 'pingodoce.pt',
+};
+
+function getMerchantDomain(loja = '') {
+  const lower = loja.toLowerCase().trim();
+  for (const [key, domain] of Object.entries(MERCHANT_DOMAINS)) {
+    if (lower.includes(key)) return domain;
+  }
+  // fallback: normaliza o nome
+  return lower.replace(/[^a-z0-9]/g, '') + '.com';
+}
+
+function MerchantLogo({ loja, size = 42 }) {
+  const [failed, setFailed] = useState(false);
+  const domain = getMerchantDomain(loja);
+  const initials = (loja || '?').split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
+
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size * 0.28,
+      backgroundColor: '#1C1C2E',
+      borderWidth: 1, borderColor: '#252540',
+      justifyContent: 'center', alignItems: 'center',
+      marginRight: 12, overflow: 'hidden',
+    }}>
+      {!failed ? (
+        <Image
+          source={{ uri: `https://img.logo.dev/${domain}?token=pk_f4DgLXo8T6Kz3jKpLqQv2A` }}
+          style={{ width: size - 10, height: size - 10, borderRadius: 4 }}
+          resizeMode="contain"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <Text style={{ fontSize: size * 0.33, fontWeight: '800', color: C.brand }}>
+          {initials}
+        </Text>
+      )}
+    </View>
+  );
+}
 
 function SwipeableFaturaCard({ fatura, onPress, onDelete, onScore }) {
   const translateX = useRef(new Animated.Value(0)).current;
@@ -125,8 +179,8 @@ function SwipeableFaturaCard({ fatura, onPress, onDelete, onScore }) {
           onPress={() => { if (!isSwipingRef.current) { resetSwipe(); onPress(); } }}
           activeOpacity={0.8}
         >
-          {/* Linha de acento lateral */}
-          <View style={[styles.accentLine, { backgroundColor: accentColor }]} />
+          {/* Logo da marca */}
+          <MerchantLogo loja={fatura.loja} />
 
           {/* Conteúdo */}
           <View style={styles.cardBody}>
