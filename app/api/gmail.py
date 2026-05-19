@@ -615,53 +615,24 @@ def gmail_sync():
         conn.faturas_importadas = (conn.faturas_importadas or 0) + faturas_criadas
         db.session.commit()
 
+        # ── Auto-deteção de subscrições após sync ─────────────────────────────
+        try:
+            from app.api.subscricoes import _detetar_e_guardar
+            subs_novas = _detetar_e_guardar(user_id)
+        except Exception as sub_err:
+            logger.warning(f'Auto-deteção subscrições falhou: {sub_err}')
+            subs_novas = 0
+
         return jsonify({
             'success': True,
             'emails_analisados': len(messages),
             'emails_compra':     emails_processados,
             'faturas_criadas':   faturas_criadas,
             'ultima_sync':       conn.ultima_sync.isoformat(),
+            'subscricoes_detetadas': subs_novas,
         })
 
     except Exception as e:
         logger.error(f'Erro na sync Gmail: {e}')
         db.session.rollback()
         return jsonify({'error': f'Erro na sincronizacao: {str(e)}'}), 500
-
-
-        # Atualizar estado da ligação
-        conn.ultima_sync = datetime.utcnow()
-        conn.faturas_importadas = (conn.faturas_importadas or 0) + faturas_criadas
-        db.session.commit()
-
-        return jsonify({
-            'success': True,
-            'emails_analisados': len(messages),
-            'emails_compra':     emails_processados,
-            'faturas_criadas':   faturas_criadas,
-            'ultima_sync':       conn.ultima_sync.isoformat(),
-        })
-
-    except Exception as e:
-        logger.error(f'Erro na sync Gmail: {e}')
-        db.session.rollback()
-        return jsonify({'error': f'Erro na sincronização: {str(e)}'}), 500
-
-
-@api_bp.route('/gmail/sync/status', methods=['GET'])
-@jwt_required()
-def gmail_sync_status():
-    """Estado da última sincronização Gmail."""
-    from app.models import GmailConnection
-    user_id = int(get_jwt_identity())
-    conn = GmailConnection.query.filter_by(user_id=user_id, ativa=True).first()
-
-    if not conn:
-        return jsonify({'ligado': False})
-
-    return jsonify({
-        'ligado':             True,
-        'gmail_email':        conn.gmail_email,
-        'ultima_sync':        conn.ultima_sync.isoformat() if conn.ultima_sync else None,
-        'faturas_importadas': conn.faturas_importadas or 0,
-    })

@@ -23,6 +23,7 @@ import FaturasScreen           from '../screens/FaturasScreen';
 import FaturaDetalheScreen     from '../screens/FaturaDetalheScreen';
 import ChatScreen              from '../screens/ChatScreen';
 import SubscricoesScreen       from '../screens/SubscricoesScreen';
+import MinhasSubscricoesScreen from '../screens/MinhasSubscricoesScreen';
 import PerfilScreen            from '../screens/PerfilScreen';
 import NotificacoesScreen      from '../screens/NotificacoesScreen';
 import MetasScreen             from '../screens/MetasScreen';
@@ -280,14 +281,14 @@ function MenuScreen({ navigation }) {
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
         { label: 'Estatísticas', screen: 'Estatisticas', icon: 'barchart'  },
         { label: 'Relatório',    screen: 'Relatorio',    icon: 'filereport'},
-        { label: 'Histórico',    screen: 'Historico',    icon: 'clock'     },
       ],
     },
     {
       label: 'Ferramentas',
       items: [
-        { label: 'Score de compra', screen: 'Score',       icon: 'star'   },
-        { label: 'Subscrições',     screen: 'Subscricoes', icon: 'shield' },
+        { label: '⚡ Score de compra', screen: 'Score',            icon: 'star'   },
+        { label: 'As minhas subscrições', screen: 'MinhasSubscricoes', icon: 'shield' },
+        { label: 'Premium',           screen: 'Premium',           icon: 'star'   },
       ],
     },
     {
@@ -530,7 +531,8 @@ function MainStackNav() {
       <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...hdr, headerTitle: 'Fatura' }} />
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...hdr, headerTitle: 'Notificações' }} />
       <MainStack.Screen name="Metas"         component={MetasScreen}         options={{ ...hdr, headerTitle: 'Metas' }} />
-      <MainStack.Screen name="Subscricoes"   component={SubscricoesScreen}   options={{ ...hdr, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="Premium"        component={SubscricoesScreen}        options={{ ...hdr, headerTitle: 'Premium' }} />
+      <MainStack.Screen name="MinhasSubscricoes" component={MinhasSubscricoesScreen} options={{ ...hdr, headerTitle: 'Subscrições' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...hdr, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Score de compra' }} />
       <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...hdr, headerTitle: 'Relatório' }} />

@@ -132,7 +132,7 @@ export default function GmailScreen({ navigation }) {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+        <ActivityIndicator size="large" color={COLORS.brand} />
       </View>
     );
   }
@@ -214,7 +214,7 @@ export default function GmailScreen({ navigation }) {
         <RefreshControl refreshing={refreshing} onRefresh={() => {
           setRefreshing(true);
           loadStatus();
-        }} tintColor={COLORS.primary} />
+        }} tintColor={COLORS.brand} />
       }
     >
       <View style={styles.connectedBadge}>
@@ -226,7 +226,7 @@ export default function GmailScreen({ navigation }) {
         <StatCard
           label="Faturas importadas"
           value={status.faturas_importadas ?? 0}
-          color={COLORS.primary}
+          color={COLORS.brand}
         />
         <StatCard
           label="Última sync"
@@ -301,13 +301,13 @@ export default function GmailScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.bg,
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.background,
+    backgroundColor: COLORS.bg,
   },
 
   // Ecrã não ligado — flexGrow garante que o scroll funciona e o botão aparece
@@ -337,7 +337,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: FONT.sm,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     textAlign: 'center',
     lineHeight: 22,
     marginBottom: SPACE.lg,
@@ -367,13 +367,13 @@ const styles = StyleSheet.create({
   howText: {
     flex: 1,
     fontSize: FONT.xs,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     lineHeight: 20,
   },
 
   sectionLabel: {
     fontSize: FONT.xs,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     alignSelf: 'flex-start',
     marginBottom: SPACE.sm,
     textTransform: 'uppercase',
@@ -392,11 +392,11 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: RADIUS.sm,
   },
-  chipText: { fontSize: FONT.xs, color: COLORS.textMuted },
+  chipText: { fontSize: FONT.xs, color: COLORS.textSub },
 
   privacyNote: {
     fontSize: 11,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     textAlign: 'center',
     marginTop: SPACE.sm,
     opacity: 0.7,
@@ -449,7 +449,7 @@ const styles = StyleSheet.create({
   },
   statLabel: {
     fontSize: 11,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     marginTop: 4,
     textAlign: 'center',
   },
@@ -475,17 +475,17 @@ const styles = StyleSheet.create({
   resultTitleNeutral: {
     fontSize: FONT.sm,
     fontWeight: '600',
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     marginBottom: 4,
   },
   resultSub: {
     fontSize: FONT.xs,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
   },
 
   syncNote: {
     fontSize: FONT.xs,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     textAlign: 'center',
     marginTop: SPACE.sm,
     marginBottom: SPACE.md,
@@ -505,7 +505,7 @@ const styles = StyleSheet.create({
   },
   privacyBody: {
     fontSize: FONT.xs,
-    color: COLORS.textMuted,
+    color: COLORS.textSub,
     lineHeight: 20,
   },
 
@@ -515,7 +515,7 @@ const styles = StyleSheet.create({
   },
   disconnectText: {
     fontSize: FONT.sm,
-    color: COLORS.danger || '#E24B4A',
+    color: COLORS.red,
   },
 
   // Botões

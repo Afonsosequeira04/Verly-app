@@ -55,7 +55,7 @@ def gerar_alertas_push(user, faturas, orcamento, hoje):
     mes_atual = hoje.month
     ano_atual = hoje.year
 
-    # ── 1. Garantias a expirar em ≤7 dias ────────────────────────────────────
+    # ── 1. Garantias a expirar em <=7 dias ───────────────────────────────────
     for f in faturas:
         data_gar = _parse_date(f.data_garantia)
         if data_gar and data_gar >= hoje:
@@ -63,12 +63,12 @@ def gerar_alertas_push(user, faturas, orcamento, hoje):
             if dias <= 7:
                 loja = f.loja or f.nome_ficheiro or 'produto'
                 alertas.append({
-                    'titulo': f'🛡️ Garantia expira em {dias} dia{"s" if dias != 1 else ""}!',
+                    'titulo': f'Garantia expira em {dias} dia{"s" if dias != 1 else ""}!',
                     'corpo': f'A garantia de {loja} termina em {data_gar.strftime("%d/%m/%Y")}. Guarda bem o teu comprovativo.',
                     'tipo': 'garantia',
                 })
 
-    # ── 2. Devoluções a expirar em ≤3 dias ───────────────────────────────────
+    # ── 2. Devoluções a expirar em <=3 dias ──────────────────────────────────
     for f in faturas:
         data_dev = _parse_date(f.data_devolucao)
         if data_dev and data_dev >= hoje:
@@ -76,12 +76,12 @@ def gerar_alertas_push(user, faturas, orcamento, hoje):
             if dias <= 3:
                 loja = f.loja or f.nome_ficheiro or 'produto'
                 alertas.append({
-                    'titulo': f'↩️ Prazo de devolução termina em {dias} dia{"s" if dias != 1 else ""}!',
-                    'corpo': f'{loja}: tens até {data_dev.strftime("%d/%m")} para devolver.',
+                    'titulo': f'Prazo de devolucao termina em {dias} dia{"s" if dias != 1 else ""}!',
+                    'corpo': f'{loja}: tens ate {data_dev.strftime("%d/%m")} para devolver.',
                     'tipo': 'devolucao',
                 })
 
-    # ── 3. Orçamento a 80%+ ───────────────────────────────────────────────────
+    # ── 3. Orcamento ─────────────────────────────────────────────────────────
     if orcamento > 0:
         total_mes = sum(
             f.total or 0 for f in faturas
@@ -90,17 +90,31 @@ def gerar_alertas_push(user, faturas, orcamento, hoje):
                _parse_date(f.data_compra).year == ano_atual
         )
         pct = (total_mes / orcamento) * 100 if orcamento > 0 else 0
+
+        # Dias restantes do mes
+        if hoje.month == 12:
+            fim_mes = datetime(hoje.year + 1, 1, 1)
+        else:
+            fim_mes = datetime(hoje.year, hoje.month + 1, 1)
+        dias_restantes = (fim_mes - hoje).days
+
         if pct >= 100:
             alertas.append({
-                'titulo': '🚨 Orçamento ultrapassado!',
-                'corpo': f'Gastaste {total_mes:.0f}€ de {orcamento:.0f}€ este mês ({pct:.0f}%). Hora de travar.',
+                'titulo': 'Orcamento ultrapassado!',
+                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR ({pct:.0f}%). Ainda faltam {dias_restantes} dias para o fim do mes.',
                 'tipo': 'orcamento',
             })
         elif pct >= 80:
             restante = orcamento - total_mes
             alertas.append({
-                'titulo': f'⚠️ Já usaste {pct:.0f}% do orçamento',
-                'corpo': f'Restam {restante:.0f}€ do teu orçamento mensal de {orcamento:.0f}€. Atenção aos próximos gastos.',
+                'titulo': f'Ja usaste {pct:.0f}% do orcamento',
+                'corpo': f'Restam {restante:.0f}EUR e {dias_restantes} dias para o fim do mes. Cuidado com os proximos gastos.',
+                'tipo': 'orcamento',
+            })
+        elif pct >= 50 and dias_restantes <= 10:
+            alertas.append({
+                'titulo': f'{pct:.0f}% usado, {dias_restantes} dias restantes',
+                'corpo': f'Gastaste {total_mes:.0f}EUR de {orcamento:.0f}EUR. Ao ritmo atual podes ultrapassar o orcamento.',
                 'tipo': 'orcamento',
             })
 
@@ -122,7 +136,7 @@ def main():
         logger.info('Firebase Admin SDK inicializado.')
     except Exception as e:
         logger.error(f'Erro Firebase: {e}')
-        logger.warning('Push não será enviada — continua com email.')
+        logger.warning('Push nao sera enviada — continua com email.')
 
     from app import create_app, db
     from app.models import User, Fatura
@@ -131,15 +145,13 @@ def main():
     hoje = datetime.utcnow()
 
     with app.app_context():
-        # Utilizadores com push ativas e FCM token
         try:
             utilizadores = User.query.filter(
                 User.fcm_token.isnot(None),
                 User.fcm_token != '',
             ).all()
         except Exception:
-            # Coluna fcm_token pode ainda não existir
-            logger.warning('Coluna fcm_token não encontrada. Executa a migration primeiro.')
+            logger.warning('Coluna fcm_token nao encontrada. Executa a migration primeiro.')
             utilizadores = []
 
         logger.info(f'{len(utilizadores)} utilizador(es) com FCM token.')
@@ -156,9 +168,8 @@ def main():
                 if not alertas:
                     continue
 
-                # Envia apenas o alerta mais urgente (para não spammar)
+                # Envia apenas o alerta mais urgente (para nao spammar)
                 alerta = alertas[0]
-                nome = (user.nome or '').split()[0] or 'utilizador'
 
                 try:
                     from firebase_admin import messaging
@@ -198,7 +209,7 @@ def main():
                 logger.error(f'Erro ao processar user {user.id}: {e}')
                 erros += 1
 
-        logger.info(f'Concluído — Enviadas: {enviados} | Erros: {erros}')
+        logger.info(f'Concluido — Enviadas: {enviados} | Erros: {erros}')
 
 
 if __name__ == '__main__':

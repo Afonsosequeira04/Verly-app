@@ -227,3 +227,58 @@ def pro_status():
     user_id = int(get_jwt_identity())
     is_pro  = _is_pro(user_id)
     return jsonify({'success': True, 'is_pro': is_pro})
+
+# ── Helper reutilizável (chamado pelo gmail sync) ─────────────────────────────
+
+def _detetar_e_guardar(user_id: int) -> int:
+    """
+    Deteta subscrições nas faturas do utilizador e guarda na BD.
+    Retorna o número de subscrições novas/atualizadas.
+    Chamado automaticamente após sync Gmail.
+    """
+    from app.models import Fatura, Subscricao
+    from app import db
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    detetadas = {}
+
+    for f in faturas:
+        nome = (f.loja or f.nome_ficheiro or '').lower()
+        for kw in SUBSCRIPTION_KEYWORDS:
+            if kw in nome:
+                chave = kw.strip()
+                if chave not in detetadas:
+                    detetadas[chave] = {
+                        'nome':  f.loja or f.nome_ficheiro or kw.title(),
+                        'preco': float(f.total or 0),
+                        'count': 1,
+                    }
+                else:
+                    detetadas[chave]['count'] += 1
+                    detetadas[chave]['preco'] = max(
+                        detetadas[chave]['preco'], float(f.total or 0)
+                    )
+                break
+
+    count = 0
+    for item in detetadas.values():
+        nome_display = item['nome'].title()
+        cat, icone   = _classify(nome_display)
+        preco        = round(item['preco'], 2)
+        risk         = 'high' if item['count'] >= 3 else ('medium' if item['count'] == 2 else 'ok')
+
+        existing = Subscricao.query.filter_by(user_id=user_id, nome=nome_display).first()
+        if existing:
+            existing.preco_mensal = preco
+            existing.meses_pago   = item['count']
+            existing.risk         = risk
+        else:
+            db.session.add(Subscricao(
+                user_id=user_id, nome=nome_display, categoria=cat,
+                icone=icone, preco_mensal=preco, meses_pago=item['count'],
+                risk=risk, fonte='gmail_auto',
+            ))
+            count += 1
+
+    db.session.commit()
+    return count

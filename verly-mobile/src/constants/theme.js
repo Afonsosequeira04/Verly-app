@@ -20,7 +20,7 @@ export const COLORS = {
   // Text
   text:     '#EEEEF8',
   textMid:  '#8888B0',
-  textSub:  '#5050780',
+  textSub:  '#505078',   // ← era '#5050780' (7 dígitos inválido → texto preto)
 
   // Status
   green:  '#00D68F',
