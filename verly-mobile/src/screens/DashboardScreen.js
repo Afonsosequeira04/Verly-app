@@ -41,6 +41,7 @@ import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import {
   Reveal, Card, Skeleton, SectionHeader,
   useScalePress, AnimatedListItem, PulseDot,
+  AnimatedCounter, GlowPulse,
 } from '../components/UI';
 
 const C   = COLORS;
@@ -370,14 +371,13 @@ function HeroCard({ data, onSearchPress }) {
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View>
             <Text style={s.label}>Gasto este mês</Text>
-            <MotiView
-              key={spent}
-              from={{ opacity: 0, translateY: 6 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: 'spring', damping: 18, delay: 80 }}
-            >
-              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
-            </MotiView>
+            <AnimatedCounter
+              value={spent}
+              suffix=" €"
+              decimals={2}
+              duration={1100}
+              style={[s.bigNum, { marginTop: 4 }]}
+            />
             {budget > 0 && <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>}
           </View>
           <Animated.View entering={FadeIn.delay(200)}>
@@ -417,25 +417,31 @@ function MetricsRow({ data }) {
 
   return (
     <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      {metrics.map((m, i) => (
-        <Animated.View
-          key={i}
-          entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
-          style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
-        >
-          {m.icon}
-          <MotiText
-            key={m.value}
-            from={{ opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: 'spring', damping: 16 }}
-            style={[s.metricVal, { color: m.color }]}
+      {metrics.map((m, i) => {
+        const hasAlert = i === 1 && (data?.alertas?.length ?? 0) > 0;
+        const inner = (
+          <Animated.View
+            key={i}
+            entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
+            style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
           >
-            {m.value}
-          </MotiText>
-          <Text style={s.label}>{m.label}</Text>
-        </Animated.View>
-      ))}
+            {m.icon}
+            <MotiText
+              key={m.value}
+              from={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: 'spring', damping: 16 }}
+              style={[s.metricVal, { color: m.color }]}
+            >
+              {m.value}
+            </MotiText>
+            <Text style={s.label}>{m.label}</Text>
+          </Animated.View>
+        );
+        return hasAlert
+          ? <GlowPulse key={i} color={C.red} intensity={0.4} period={1800}>{inner}</GlowPulse>
+          : inner;
+      })}
     </View>
   );
 }

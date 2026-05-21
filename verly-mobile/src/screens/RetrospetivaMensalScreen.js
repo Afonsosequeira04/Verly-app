@@ -1,5 +1,5 @@
-// src/screens/RetrospetivaMensalScreen.js
-// Retrospetiva Mensal — com navegação mês a mês
+// src/screens/RetrospetivaMensalScreen.js — FASE 2
+// Usa o novo endpoint /api/v1/estatisticas/mensal com dados reais por mês
 
 import React, { useState, useCallback } from 'react';
 import {
@@ -10,13 +10,16 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, {
+  useSharedValue, useAnimatedStyle,
+  withTiming, withDelay,
   FadeInDown, FadeIn, ZoomIn,
+  Easing,
 } from 'react-native-reanimated';
 import { MotiView } from 'moti';
 import {
   TrendingUp, TrendingDown, Award, Flame, Target,
   BarChart2, Download, Share2, Calendar, Zap,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ShoppingBag,
 } from 'lucide-react-native';
 import { apiFetch, getToken } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
@@ -24,53 +27,45 @@ import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 const C = COLORS;
 const W = Dimensions.get('window').width;
 const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
 
-const MESES_PT    = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-                     'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun',
-                     'Jul','Ago','Set','Out','Nov','Dez'];
+const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 const CAT_COLORS = [
-  '#7C6FE0','#E24B4A','#00D68F','#FFB300',
+  '#7C6FE0','#00D68F','#FFB300','#FF5370',
   '#45B7D1','#FF7340','#B06FE0','#E07090',
 ];
 
 const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
 
-// ─── Mini bar chart horizontal ────────────────────────────────────────────────
-function MiniBarChart({ dados }) {
-  if (!dados || dados.length === 0) return null;
-  const maxVal = Math.max(...dados.map(d => d.total), 1);
+// ─── Barra horizontal animada ─────────────────────────────────────────────────
+function AnimBar({ categoria, total, max, color, index }) {
+  const width = useSharedValue(0);
+
+  React.useEffect(() => {
+    const pct = max > 0 ? (total / max) * 100 : 0;
+    width.value = withDelay(
+      index * 80,
+      withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [total, max]);
+
+  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
 
   return (
-    <View style={{ gap: 10 }}>
-      {dados.map((d, i) => {
-        const pct = d.total / maxVal;
-        const cor = CAT_COLORS[i % CAT_COLORS.length];
-        return (
-          <View key={i}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
-                {d.categoria}
-              </Text>
-              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
-            </View>
-            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-              <Animated.View
-                entering={FadeIn.delay(i * 80)}
-                style={{
-                  height: '100%',
-                  width: `${pct * 100}%`,
-                  backgroundColor: cor,
-                  borderRadius: 3,
-                }}
-              />
-            </View>
-          </View>
-        );
-      })}
-    </View>
+    <Animated.View entering={FadeIn.delay(index * 60)}>
+      <View style={{ marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
+            {categoria}
+          </Text>
+          <Text style={{ fontSize: 12, color, fontWeight: '800' }}>{fmt(total)} €</Text>
+        </View>
+        <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+          <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
+        </View>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -78,29 +73,36 @@ function MiniBarChart({ dados }) {
 function Histograma({ historico, mesAtivo }) {
   if (!historico || historico.length === 0) return null;
   const maxVal = Math.max(...historico.map(d => d.total), 1);
+  const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 80 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 90 }}>
       {historico.map((d, i) => {
-        const pct = d.total / maxVal;
+        const pct    = d.total / maxVal;
         const isAtivo = d.mes === mesAtivo;
+        const m = parseInt(d.mes.split('-')[1], 10) - 1;
+        const label = MESES_SHORT[m] || d.mes;
+
+        const height = useSharedValue(4);
+        React.useEffect(() => {
+          height.value = withDelay(i * 60, withTiming(Math.max(pct * 64, 4), {
+            duration: 650, easing: Easing.out(Easing.cubic),
+          }));
+        }, [d.total]);
+        const barStyle = useAnimatedStyle(() => ({ height: height.value }));
+
         return (
-          <View key={i} style={{ flex: 1, alignItems: 'center', gap: 4 }}>
-            <Animated.View
-              entering={FadeIn.delay(i * 60)}
-              style={{
-                width: '100%',
-                height: Math.max(pct * 64, 4),
-                backgroundColor: isAtivo ? C.brand : C.surface3,
-                borderRadius: 4,
-              }}
-            />
+          <View key={i} style={{ flex: 1, alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+            <Animated.View style={[{
+              width: '100%',
+              backgroundColor: isAtivo ? C.brand : C.surface3,
+              borderRadius: 4,
+            }, barStyle]} />
             <Text style={{
-              fontSize: 9,
+              fontSize: 9, fontWeight: isAtivo ? '800' : '500',
               color: isAtivo ? C.brand : C.textSub,
-              fontWeight: isAtivo ? '800' : '500',
             }}>
-              {d.mes}
+              {label}
             </Text>
           </View>
         );
@@ -111,54 +113,68 @@ function Histograma({ historico, mesAtivo }) {
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 export default function RetrospetivaMensalScreen({ navigation }) {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
+  const now = new Date();
+  const [ano, setAno] = useState(now.getFullYear());
+  const [mes, setMes] = useState(now.getMonth() + 1); // 1-12
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [mesesDisponiveis, setMesesDisponiveis] = useState([]);
 
-  // índice do mês selecionado dentro do historico (começa no penúltimo = mês anterior)
-  const [mesIdx, setMesIdx] = useState(null);
-
-  const carregar = useCallback(async (isRefresh = false) => {
+  const carregar = useCallback(async (a = ano, m = mes) => {
     try {
-      const res = await apiFetch('/exportar/resumo');
+      const res = await apiFetch(`/estatisticas/mensal?ano=${a}&mes=${m}`);
       setData(res);
-      // ao carregar, posicionar no penúltimo mês (mês anterior ao atual)
-      const hist = res?.historico_mensal || [];
-      if (mesIdx === null && hist.length >= 2) {
-        setMesIdx(hist.length - 2);
+      if (res.meses_disponiveis?.length) {
+        setMesesDisponiveis(res.meses_disponiveis);
       }
     } catch (e) {
       console.error('RetrospetivaMensal:', e);
     } finally {
       setLoading(false);
-      if (isRefresh) setRefreshing(false);
+      setRefreshing(false);
     }
-  }, []);
+  }, [ano, mes]);
 
-  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
+  useFocusEffect(useCallback(() => { carregar(ano, mes); }, [ano, mes]));
 
-  const onRefresh = () => { setRefreshing(true); carregar(true); };
+  const onRefresh = () => { setRefreshing(true); carregar(ano, mes); };
+
+  // Navegação mês a mês
+  const mesKey = `${ano}-${String(mes).padStart(2, '0')}`;
+  const idxAtual = mesesDisponiveis.indexOf(mesKey);
+  const podePrev = idxAtual > 0 || (idxAtual === -1 && mesesDisponiveis.length > 0);
+  const podeNext = idxAtual < mesesDisponiveis.length - 1;
+
+  const irParaMes = (chave) => {
+    const [a, m] = chave.split('-').map(Number);
+    setAno(a); setMes(m); setLoading(true); setData(null);
+  };
+
+  const navPrev = () => {
+    if (!podePrev) return;
+    const idx = idxAtual === -1 ? mesesDisponiveis.length - 1 : idxAtual - 1;
+    irParaMes(mesesDisponiveis[idx]);
+  };
+  const navNext = () => {
+    if (!podeNext) return;
+    irParaMes(mesesDisponiveis[idxAtual + 1]);
+  };
 
   const partilhar = async () => {
     if (!data) return;
-    const historico = data.historico_mensal || [];
-    const mesRef    = historico[mesIdx ?? historico.length - 2];
-    const total     = mesRef?.total || 0;
-    const topCat    = data.top_categorias?.[0];
     try {
       await Share.share({
-        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
+        message: `O meu resumo Verly de ${data.mes_nome} ${data.ano}:\n💸 ${fmt(data.total)} € gastos\n🏆 Categoria top: ${data.por_categoria?.[0]?.categoria || '—'}\n📱 verly.app`,
       });
-    } catch (e) {}
+    } catch {}
   };
 
   const exportarPDF = async () => {
     try {
       const token = await getToken();
       Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
-    } catch (e) {
-      console.error('Exportar PDF:', e);
-    }
+    } catch (e) { console.error('Exportar PDF:', e); }
   };
 
   if (loading) {
@@ -169,30 +185,17 @@ export default function RetrospetivaMensalScreen({ navigation }) {
     );
   }
 
-  const historico   = data?.historico_mensal || [];
-  const idx         = mesIdx ?? historico.length - 2;
-  const mesAtual_   = historico[idx];
-  const mesAnterior = historico[idx - 1];
-
-  const totalMes    = mesAtual_?.total || 0;
-  const totalAnt    = mesAnterior?.total || 0;
-  const variacao    = totalAnt > 0
-    ? ((totalMes - totalAnt) / totalAnt) * 100
-    : null;
-
-  const topCats     = (data?.top_categorias || []).slice(0, 5);
-  const streak      = data?.streak_dias || 0;
-  const rendimento  = data?.rendimento_mensal || 0;
-  const pctRend     = rendimento > 0 ? (totalMes / rendimento) * 100 : null;
-
-  const nomeMes = mesAtual_?.mes
-    ? MESES_PT[MESES_SHORT.indexOf(mesAtual_.mes)] ?? mesAtual_.mes
-    : 'Mês';
-
-  const mesProximo  = MESES_PT[(MESES_SHORT.indexOf(mesAtual_?.mes) + 1) % 12] || 'próximo mês';
-
-  const podePrev = idx > 0;
-  const podeNext = idx < historico.length - 1;
+  const total       = data?.total || 0;
+  const comp        = data?.comparacao || {};
+  const variacao    = comp.variacao_pct;
+  const subiu       = comp.subiu;
+  const topCats     = (data?.por_categoria || []).slice(0, 6);
+  const maxCat      = topCats[0]?.total || 1;
+  const historico   = data?.historico || [];
+  const meta        = data?.meta_orcamento;
+  const topLoja     = data?.top_loja;
+  const maiscara    = data?.fatura_mais_cara;
+  const nomeMes     = data?.mes_nome || MESES_PT[mes - 1];
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
@@ -202,138 +205,175 @@ export default function RetrospetivaMensalScreen({ navigation }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
       >
-        {/* Header */}
-        <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
-          <View style={styles.headerTop}>
+        {/* Header com navegação */}
+        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+          <Pressable onPress={() => navigation?.goBack()} style={styles.backBtn} hitSlop={10}>
+            <ChevronLeft size={22} color={C.text} />
+          </Pressable>
 
-            {/* Botão voltar */}
-            <Pressable
-              onPress={() => navigation.goBack()}
-              style={styles.backBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <ChevronLeft size={24} color={C.text} />
+          <View style={styles.mesNav}>
+            <Pressable onPress={navPrev} style={[styles.navBtn, !podePrev && styles.navBtnDisabled]} hitSlop={10}>
+              <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
             </Pressable>
-
-            {/* Navegação mês */}
-            <View style={styles.mesNav}>
-              <Pressable
-                onPress={() => podePrev && setMesIdx(idx - 1)}
-                style={[styles.navBtn, !podePrev && styles.navBtnDisabled]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
-              </Pressable>
-
-              <View style={{ alignItems: 'center' }}>
-                <Text style={styles.headerLabel}>Retrospetiva de</Text>
-                <Text style={styles.headerMes}>{nomeMes}</Text>
-              </View>
-
-              <Pressable
-                onPress={() => podeNext && setMesIdx(idx + 1)}
-                style={[styles.navBtn, !podeNext && styles.navBtnDisabled]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
-              </Pressable>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={styles.headerLabel}>Retrospetiva</Text>
+              <Text style={styles.headerMes}>{nomeMes} {ano}</Text>
             </View>
-
-            {/* Partilhar */}
-            <Pressable onPress={partilhar} style={styles.shareBtn}>
-              <Share2 size={16} color={C.brand} />
+            <Pressable onPress={navNext} style={[styles.navBtn, !podeNext && styles.navBtnDisabled]} hitSlop={10}>
+              <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
             </Pressable>
           </View>
+
+          <Pressable onPress={partilhar} style={styles.shareBtn}>
+            <Share2 size={16} color={C.brand} />
+          </Pressable>
         </Animated.View>
 
         {/* Hero — total gasto */}
-        <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
+        <Animated.View entering={ZoomIn.delay(80).duration(500)} style={styles.heroCard}>
           <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
-          <Text style={styles.heroValor}>{fmt(totalMes)} €</Text>
+          <Text style={styles.heroValor}>{fmt(total)} €</Text>
 
-          {variacao !== null && (
+          {variacao != null && (
             <View style={styles.variacaoRow}>
-              {variacao > 0
+              {subiu
                 ? <TrendingUp size={14} color={C.red} />
                 : <TrendingDown size={14} color={C.green} />
               }
-              <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
-                {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAnterior?.mes || 'mês anterior'}
+              <Text style={[styles.variacaoText, { color: subiu ? C.red : C.green }]}>
+                {subiu ? '+' : '-'}{variacao}% vs mês anterior ({fmt(comp.total_anterior)} €)
               </Text>
             </View>
           )}
 
-          {pctRend !== null && (
+          {data?.num_faturas > 0 && (
             <Text style={styles.heroSub}>
-              {pctRend.toFixed(0)}% do teu rendimento mensal
+              {data.num_faturas} fatura{data.num_faturas !== 1 ? 's' : ''} · média {fmt(data.media_fatura)} €
             </Text>
           )}
         </Animated.View>
 
-        {/* Histograma 6 meses */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
-          <View style={styles.cardTitleRow}>
-            <BarChart2 size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
-          </View>
-          <Histograma historico={historico} mesAtivo={mesAtual_?.mes} />
-        </Animated.View>
-
-        {/* Top categorias */}
-        <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
-          <View style={styles.cardTitleRow}>
-            <Target size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-          </View>
-          {topCats.length > 0
-            ? <MiniBarChart dados={topCats} />
-            : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
-          }
-        </Animated.View>
-
-        {/* Streak */}
-        {streak > 0 && (
-          <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
+        {/* Orçamento */}
+        {meta && (
+          <Animated.View entering={FadeInDown.delay(140).duration(380).springify()} style={styles.card}>
             <View style={styles.cardTitleRow}>
-              <Flame size={18} color='#FF7340' />
-              <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
+              <Target size={15} color={meta.excedeu ? C.red : C.green} />
+              <Text style={styles.cardTitle}>Orçamento mensal</Text>
+              <Text style={[styles.pill, { backgroundColor: (meta.excedeu ? C.red : C.green) + '20', color: meta.excedeu ? C.red : C.green }]}>
+                {meta.excedeu ? 'Excedido' : 'Dentro do limite'}
+              </Text>
             </View>
-            <Text style={styles.streakSub}>
-              Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
-              {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
-            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontSize: 13, color: C.textSub }}>{fmt(meta.gasto)} € de {fmt(meta.orcamento)} €</Text>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: meta.excedeu ? C.red : C.green }}>{meta.pct}%</Text>
+            </View>
+            <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+              <MotiView
+                from={{ width: '0%' }}
+                animate={{ width: `${Math.min(meta.pct, 100)}%` }}
+                transition={{ type: 'timing', duration: 800, delay: 300 }}
+                style={{ height: '100%', backgroundColor: meta.excedeu ? C.red : C.green, borderRadius: 4 }}
+              />
+            </View>
           </Animated.View>
         )}
 
-        {/* Dica da Verly */}
-        <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
+        {/* Histograma */}
+        {historico.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(200).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <BarChart2 size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
+            </View>
+            <Histograma historico={historico} mesAtivo={mesKey} />
+          </Animated.View>
+        )}
+
+        {/* Categorias */}
+        {topCats.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(260).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Target size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+            </View>
+            {topCats.map((d, i) => (
+              <AnimBar
+                key={d.categoria}
+                categoria={d.categoria}
+                total={d.total}
+                max={maxCat}
+                color={CAT_COLORS[i % CAT_COLORS.length]}
+                index={i}
+              />
+            ))}
+          </Animated.View>
+        )}
+
+        {/* Destaques */}
+        {(topLoja || maiscara) && (
+          <Animated.View entering={FadeInDown.delay(320).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Award size={15} color={C.yellow} />
+              <Text style={styles.cardTitle}>Destaques do mês</Text>
+            </View>
+            {topLoja && (
+              <View style={styles.destaqueRow}>
+                <ShoppingBag size={14} color={C.brand} />
+                <Text style={styles.destaqueLabel}>Loja favorita</Text>
+                <Text style={styles.destaqueVal}>{topLoja.nome} · {fmt(topLoja.total)} €</Text>
+              </View>
+            )}
+            {maiscare && (
+              <View style={styles.destaqueRow}>
+                <Zap size={14} color={C.yellow} />
+                <Text style={styles.destaqueLabel}>Compra mais cara</Text>
+                <Text style={styles.destaqueVal}>{maiscare.loja} · {fmt(maiscare.total)} €</Text>
+              </View>
+            )}
+          </Animated.View>
+        )}
+
+        {/* Dica */}
+        <Animated.View entering={FadeInDown.delay(380).duration(380).springify()} style={[styles.card, styles.dicaCard]}>
           <View style={styles.cardTitleRow}>
-            <Zap size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>O que melhorar em {mesProximo}</Text>
+            <Zap size={15} color={C.brand} />
+            <Text style={styles.cardTitle}>Dica para o próximo mês</Text>
           </View>
-          {variacao !== null && variacao > 15 ? (
+          {variacao != null && subiu && variacao > 15 ? (
             <Text style={styles.dicaText}>
-              Gastaste {variacao.toFixed(0)}% mais do que em {mesAnterior?.mes || 'mês anterior'}.
-              Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
-              Define um limite concreto para o próximo mês.
+              Gastaste {variacao}% mais do que no mês anterior. Tenta identificar o que mudou e define um teto concreto para o mês que vem.
             </Text>
-          ) : variacao !== null && variacao < -10 ? (
+          ) : variacao != null && !subiu && variacao > 10 ? (
             <Text style={styles.dicaText}>
-              Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
-              Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
-              (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMes * 4)}€).
+              Excelente! Poupaste {variacao}% face ao mês anterior. Considera direcionar essa diferença ({fmt(Math.abs(comp.delta))} €) para poupança ou investimento.
             </Text>
           ) : (
             <Text style={styles.dicaText}>
-              Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-              A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
-              {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
+              Gastos estáveis — sinal de consistência. A regra 50/30/20 sugere 20% do rendimento em poupança. Estás no caminho certo?
             </Text>
           )}
         </Animated.View>
 
-        {/* Botão exportar PDF */}
-        <Animated.View entering={FadeInDown.delay(500)}>
+        {/* Sem dados */}
+        {data?.num_faturas === 0 && (
+          <MotiView
+            from={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', damping: 18 }}
+            style={styles.emptyState}
+          >
+            <Text style={{ fontSize: 40 }}>📭</Text>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: C.text, marginTop: 12 }}>
+              Sem faturas em {nomeMes}
+            </Text>
+            <Text style={{ fontSize: 13, color: C.textSub, marginTop: 6, textAlign: 'center' }}>
+              Navega para outro mês ou adiciona faturas.
+            </Text>
+          </MotiView>
+        )}
+
+        {/* Exportar PDF */}
+        <Animated.View entering={FadeInDown.delay(440).duration(380).springify()}>
           <Pressable onPress={exportarPDF} style={styles.exportBtn}>
             <Download size={18} color="#fff" />
             <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
@@ -346,77 +386,39 @@ export default function RetrospetivaMensalScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   root:    { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+  content: { padding: 20, paddingBottom: 48 },
+  center:  { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
 
-  header:    { marginBottom: SPACE.lg, paddingTop: 4 },
-  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-
-  backBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.surface2,
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  mesNav: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginHorizontal: 8,
-  },
-  navBtn:         { padding: 4 },
+  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  backBtn:   { width: 36, height: 36, borderRadius: 10, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center' },
+  mesNav:    { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginHorizontal: 8 },
+  navBtn:    { padding: 4 },
   navBtnDisabled: { opacity: 0.3 },
+  headerLabel: { fontSize: 10, color: C.textSub, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  headerMes:   { fontSize: 20, fontWeight: '900', color: C.text },
+  shareBtn:  { width: 36, height: 36, borderRadius: 10, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40', justifyContent: 'center', alignItems: 'center' },
 
-  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', textAlign: 'center' },
-  headerMes:   { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2, textAlign: 'center' },
-
-  shareBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  heroCard: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 24,
-    marginBottom: SPACE.lg,
-    alignItems: 'center',
-  },
-  heroLabel:   { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroCard:    { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 24, marginBottom: 16, alignItems: 'center' },
+  heroLabel:   { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
   heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
-  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
-  variacaoText:{ fontSize: FONT.sm, fontWeight: '700' },
-  heroSub:     { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+  variacaoRow: { flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 10 },
+  variacaoText:{ fontSize: 13, fontWeight: '700' },
+  heroSub:     { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
 
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: 16,
-    marginBottom: SPACE.md,
-  },
+  card:         { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 14 },
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle:    { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  cardTitle:    { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
+  pill:         { fontSize: 10, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
 
-  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
-  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+  destaqueRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  destaqueLabel:{ fontSize: 12, color: C.textSub, fontWeight: '600', width: 100 },
+  destaqueVal:  { fontSize: 13, color: C.text, fontWeight: '700', flex: 1 },
 
   dicaCard: { borderColor: C.brand + '30' },
-  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
+  dicaText: { fontSize: 13, color: C.textMid, lineHeight: 21 },
 
-  exportBtn: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
+  emptyState: { alignItems: 'center', paddingVertical: 40 },
+
+  exportBtn:     { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 6 },
+  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
 });

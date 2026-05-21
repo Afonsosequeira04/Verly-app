@@ -48,6 +48,7 @@ app/api/amizades.py
 app/api/auth.py
 app/api/chat.py
 app/api/dashboard.py
+app/api/estatisticas.py
 app/api/exportar_mobile.py
 app/api/faturas.py
 app/api/gmail.py
@@ -234,6 +235,241 @@ verly-mobile/src/services/api.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/estatisticas.py">
+"""
+app/api/estatisticas.py — FASE 2
+GET /api/v1/estatisticas          → estatísticas gerais (todos os meses)
+GET /api/v1/estatisticas/mensal   → retrospetiva de um mês específico
+    ?ano=2025&mes=4               → filtro por mês
+
+Regista no __init__.py do api_bp se ainda não estiver:
+    from app.api import estatisticas   # ← adicionar no app/api/__init__.py
+"""
+
+import json
+import logging
+from collections import defaultdict
+from datetime import datetime, date
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura
+from app import db
+
+logger = logging.getLogger(__name__)
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+MESES_PT = ['', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+            'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(date_str.strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _get_fatura_date(f) -> date | None:
+    d = _parse_date(f.data_compra)
+    if d:
+        return d
+    if f.data_upload:
+        return f.data_upload.date() if hasattr(f.data_upload, 'date') else f.data_upload
+    return None
+
+
+# ─── GET /api/v1/estatisticas ─────────────────────────────────────────────────
+
+@api_bp.route('/estatisticas', methods=['GET'])
+@jwt_required()
+def estatisticas_geral():
+    """
+    Estatísticas globais do utilizador (sem filtro de mês).
+    Usado pela EstatisticasScreen.
+    """
+    user_id = int(get_jwt_identity())
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    por_categoria = defaultdict(float)
+    por_mes       = defaultdict(float)
+    por_loja      = defaultdict(float)
+    total_geral   = 0.0
+
+    for f in faturas:
+        valor = f.total or 0
+        total_geral += valor
+
+        cat  = f.categoria or 'Outros'
+        loja = f.loja or 'Desconhecida'
+        por_categoria[cat]  += valor
+        por_loja[loja]      += valor
+
+        d = _get_fatura_date(f)
+        if d:
+            mes_key = f"{d.year}-{d.month:02d}"
+            por_mes[mes_key] += valor
+
+    # Últimos 12 meses ordenados
+    meses_sorted = sorted(por_mes.keys())[-12:]
+
+    return jsonify({
+        'total_geral':  round(total_geral, 2),
+        'num_faturas':  len(faturas),
+        'media_fatura': round(total_geral / len(faturas), 2) if faturas else 0,
+        'por_categoria': [
+            {'categoria': k, 'total': round(v, 2)}
+            for k, v in sorted(por_categoria.items(), key=lambda x: -x[1])
+        ],
+        'por_mes': [
+            {'mes': mk, 'total': round(por_mes[mk], 2)}
+            for mk in meses_sorted
+        ],
+        'top_lojas': [
+            {'loja': k, 'total': round(v, 2)}
+            for k, v in sorted(por_loja.items(), key=lambda x: -x[1])[:8]
+        ],
+    })
+
+
+# ─── GET /api/v1/estatisticas/mensal ─────────────────────────────────────────
+
+@api_bp.route('/estatisticas/mensal', methods=['GET'])
+@jwt_required()
+def estatisticas_mensal():
+    """
+    Retrospetiva de um mês específico.
+    Usado pela RetrospetivaMensalScreen.
+
+    Query params:
+        ano=2025&mes=4   (inteiros)
+
+    Resposta inclui:
+        - total, num_faturas, media_fatura
+        - por_categoria (para mini bar chart)
+        - historico (6 meses anteriores para o histograma)
+        - top_loja, dia_mais_caro
+        - comparacao (vs mês anterior: delta, pct, subiu)
+        - meta_orcamento (orcamento do user e pct usado)
+        - meses_disponiveis (para navegação mês a mês)
+    """
+    from app.models import User
+
+    user_id = int(get_jwt_identity())
+    user    = User.query.get_or_404(user_id)
+
+    try:
+        ano = int(request.args.get('ano', datetime.utcnow().year))
+        mes = int(request.args.get('mes', datetime.utcnow().month))
+        if not (1 <= mes <= 12) or ano < 2000:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({'error': 'ano e mes inválidos'}), 400
+
+    faturas_todas = Fatura.query.filter_by(user_id=user_id).all()
+
+    # Agrupa por mês
+    por_mes_dict: dict[str, list] = defaultdict(list)
+    for f in faturas_todas:
+        d = _get_fatura_date(f)
+        if d:
+            por_mes_dict[f"{d.year}-{d.month:02d}"].append(f)
+
+    mes_key = f"{ano}-{mes:02d}"
+    faturas_mes = por_mes_dict.get(mes_key, [])
+
+    # Totais do mês
+    total_mes   = sum(f.total or 0 for f in faturas_mes)
+    num_faturas = len(faturas_mes)
+
+    # Por categoria
+    por_cat = defaultdict(float)
+    for f in faturas_mes:
+        por_cat[f.categoria or 'Outros'] += f.total or 0
+
+    # Top loja
+    por_loja = defaultdict(float)
+    for f in faturas_mes:
+        por_loja[f.loja or 'Desconhecida'] += f.total or 0
+    top_loja = max(por_loja, key=por_loja.get) if por_loja else None
+    top_loja_val = round(por_loja[top_loja], 2) if top_loja else 0
+
+    # Fatura mais cara
+    fatura_mais_cara = max(faturas_mes, key=lambda f: f.total or 0, default=None)
+
+    # Comparação com mês anterior
+    from calendar import monthrange
+    mes_ant     = mes - 1 if mes > 1 else 12
+    ano_ant     = ano if mes > 1 else ano - 1
+    key_ant     = f"{ano_ant}-{mes_ant:02d}"
+    total_ant   = sum(f.total or 0 for f in por_mes_dict.get(key_ant, []))
+    delta       = total_mes - total_ant
+    pct_delta   = round(abs(delta / total_ant * 100), 1) if total_ant > 0 else None
+    subiu       = delta > 0
+
+    # Histórico dos 6 meses anteriores (para histograma)
+    historico = []
+    for i in range(5, -1, -1):
+        m_ = mes - i
+        a_ = ano
+        while m_ <= 0:
+            m_ += 12
+            a_ -= 1
+        k_ = f"{a_}-{m_:02d}"
+        historico.append({
+            'mes':   k_,
+            'total': round(sum(f.total or 0 for f in por_mes_dict.get(k_, [])), 2),
+        })
+
+    # Orçamento
+    orcamento = getattr(user, 'orcamento_mensal', 0) or 0
+    pct_orcamento = round((total_mes / orcamento * 100), 1) if orcamento > 0 else None
+
+    # Meses disponíveis (para navegação)
+    meses_disponiveis = sorted(por_mes_dict.keys())
+
+    return jsonify({
+        'ano':          ano,
+        'mes':          mes,
+        'mes_nome':     MESES_PT[mes],
+        'total':        round(total_mes, 2),
+        'num_faturas':  num_faturas,
+        'media_fatura': round(total_mes / num_faturas, 2) if num_faturas > 0 else 0,
+        'por_categoria': [
+            {'categoria': k, 'total': round(v, 2)}
+            for k, v in sorted(por_cat.items(), key=lambda x: -x[1])
+        ],
+        'historico':    historico,
+        'top_loja': {
+            'nome':  top_loja,
+            'total': top_loja_val,
+        } if top_loja else None,
+        'fatura_mais_cara': {
+            'loja':  fatura_mais_cara.loja or 'Desconhecida',
+            'total': round(fatura_mais_cara.total or 0, 2),
+            'data':  fatura_mais_cara.data_compra,
+        } if fatura_mais_cara else None,
+        'comparacao': {
+            'total_anterior': round(total_ant, 2),
+            'delta':          round(delta, 2),
+            'variacao_pct':   pct_delta,
+            'subiu':          subiu,
+        },
+        'meta_orcamento': {
+            'orcamento':      round(orcamento, 2),
+            'gasto':          round(total_mes, 2),
+            'pct':            pct_orcamento,
+            'excedeu':        total_mes > orcamento if orcamento > 0 else False,
+        } if orcamento > 0 else None,
+        'meses_disponiveis': meses_disponiveis,
+    })
+</file>
 
 <file path="app/api/amizades.py">
 """
@@ -7377,8 +7613,8 @@ const s = StyleSheet.create({
 
 <file path="verly-mobile/src/screens/EstatisticasScreen.js">
 /**
- * src/screens/EstatisticasScreen.js
- * Estatísticas — design luxury dark · sem emojis · Lucide icons
+ * src/screens/EstatisticasScreen.js — FASE 2
+ * Estatísticas com dados reais da API + barras animadas
  */
 
 import React, { useState, useCallback } from 'react';
@@ -7387,84 +7623,127 @@ import {
   ActivityIndicator, RefreshControl, Dimensions,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { BarChart2, TrendingUp, Receipt, Star } from 'lucide-react-native';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withTiming, withDelay, Easing, FadeInDown,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import { BarChart2, TrendingUp, Receipt, Star, ShoppingBag } from 'lucide-react-native';
 import { estatisticasAPI } from '../services/api';
+import { COLORS, RADIUS, FONT } from '../constants/theme';
 
-const C = {
-  bg:      '#0A0A12',
-  surface: '#111120',
-  surface2:'#181828',
-  surface3:'#1E1E32',
-  border:  '#22223A',
-  brand:   '#6C5CE7',
-  text:    '#F0F0F8',
-  textSub: '#6A6A90',
-  textMid: '#9898C0',
-  green:   '#00C896',
-  red:     '#FF5370',
-  yellow:  '#FFB300',
-};
-
-const BAR_COLORS = ['#6C5CE7','#00C896','#22D4FD','#FFB300','#FF5370','#C264DE','#FF8C42','#4ECDC4','#96CEB4','#45B7D1'];
+const C = COLORS;
 const W = Dimensions.get('window').width;
 
-function HorizBar({ categoria, total, max, color }) {
-  const pct = max > 0 ? total / max : 0;
-  const barW = (W - 80) * pct;
+const BAR_COLORS = [
+  '#6C5CE7','#00C896','#22D4FD','#FFB300',
+  '#FF5370','#C264DE','#FF8C42','#4ECDC4','#96CEB4','#45B7D1',
+];
+
+// ─── Barra horizontal animada ─────────────────────────────────────────────────
+function AnimHorizBar({ categoria, total, max, color, index }) {
+  const width = useSharedValue(0);
+
+  React.useEffect(() => {
+    const pct = max > 0 ? (total / max) * 100 : 0;
+    width.value = withDelay(
+      index * 80,
+      withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [total, max]);
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${width.value}%`,
+  }));
+
   return (
-    <View style={styles.barRow}>
-      <Text style={styles.barLabel} numberOfLines={1}>{categoria}</Text>
-      <View style={styles.barTrackRow}>
-        <View style={styles.barTrack}>
-          <View style={[styles.barFill, { width: Math.max(barW, 4), backgroundColor: color }]} />
+    <Animated.View entering={FadeInDown.delay(index * 60).duration(350).springify()}>
+      <View style={styles.barRow}>
+        <View style={styles.barLabelRow}>
+          <Text style={styles.barLabel} numberOfLines={1}>{categoria}</Text>
+          <Text style={[styles.barVal, { color }]}>{total.toFixed(0)}€</Text>
         </View>
-        <Text style={styles.barVal}>{total.toFixed(0)}€</Text>
+        <View style={styles.barTrack}>
+          <Animated.View style={[styles.barFill, { backgroundColor: color }, barStyle]} />
+        </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
-function VertBar({ mes, total, max, chartH }) {
-  const h = Math.max((total / max) * chartH, 4);
+// ─── Barra vertical animada ───────────────────────────────────────────────────
+function AnimVertBar({ mes, total, max, chartH, index }) {
+  const height = useSharedValue(0);
+
+  React.useEffect(() => {
+    const h = max > 0 ? (total / max) * chartH : 0;
+    height.value = withDelay(
+      index * 60,
+      withTiming(Math.max(h, 4), { duration: 650, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [total, max]);
+
+  const barStyle = useAnimatedStyle(() => ({ height: height.value }));
+
   const nomes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
   const m = parseInt(mes.split('-')[1], 10) - 1;
+
   return (
     <View style={styles.vertBarCol}>
       <Text style={styles.vertBarVal}>
         {total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total.toFixed(0)}€
       </Text>
-      <View style={[styles.vertBar, { height: h }]} />
+      <View style={{ justifyContent: 'flex-end', flex: 1 }}>
+        <Animated.View style={[styles.vertBar, barStyle]} />
+      </View>
       <Text style={styles.vertBarLabel}>{nomes[m] || mes}</Text>
     </View>
   );
 }
 
+// ─── Stat card ────────────────────────────────────────────────────────────────
+function StatCard({ icon, label, value, color, delay }) {
+  return (
+    <Animated.View entering={FadeInDown.delay(delay).duration(380).springify()} style={styles.statCard}>
+      <View style={[styles.statIcon, { backgroundColor: color + '20' }]}>{icon}</View>
+      <Text style={[styles.statValue, { color }]}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </Animated.View>
+  );
+}
+
+// ─── Ecrã principal ───────────────────────────────────────────────────────────
 export default function EstatisticasScreen() {
-  const [data,      setData]      = useState(null);
-  const [loading,   setLoading]   = useState(true);
-  const [refreshing,setRefresh]   = useState(false);
+  const [data,       setData]      = useState(null);
+  const [loading,    setLoading]   = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = async () => {
     try {
       const result = await estatisticasAPI.get();
       setData(result);
     } catch (e) {
-      console.error(e);
+      console.error('EstatisticasScreen:', e);
     } finally {
       setLoading(false);
-      setRefresh(false);
+      setRefreshing(false);
     }
   };
 
   useFocusEffect(useCallback(() => { fetchData(); }, []));
 
   if (loading) {
-    return <View style={styles.center}><ActivityIndicator size="large" color={C.brand} /></View>;
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
   }
 
   const maxCat = data?.por_categoria?.[0]?.total || 1;
-  const maxMes = data?.por_mes?.length ? Math.max(...data.por_mes.map(d => d.total), 1) : 1;
-  const chartH = 110;
+  const maxMes = data?.por_mes?.length
+    ? Math.max(...data.por_mes.map(d => d.total), 1)
+    : 1;
+  const chartH = 100;
 
   return (
     <ScrollView
@@ -7472,142 +7751,188 @@ export default function EstatisticasScreen() {
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={() => { setRefresh(true); fetchData(); }} tintColor={C.brand} />
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => { setRefreshing(true); fetchData(); }}
+          tintColor={C.brand}
+        />
       }
     >
-      {/* Resumo */}
-      <View style={styles.resumoRow}>
-        {[
-          { Icon: Receipt,   label: 'Total gasto',  value: `${(data?.total_geral || 0).toFixed(2)}€`, color: C.brand },
-          { Icon: TrendingUp,label: 'Média/mês',    value: `${(data?.media_mensal || 0).toFixed(0)}€`, color: C.green },
-          { Icon: BarChart2, label: 'Faturas',      value: `${data?.num_faturas || 0}`,                color: C.yellow },
-        ].map(s => (
-          <View key={s.label} style={styles.resumoCard}>
-            <View style={[styles.resumoIconWrap, { backgroundColor: s.color + '18' }]}>
-              <s.Icon size={16} color={s.color} />
-            </View>
-            <Text style={styles.resumoVal}>{s.value}</Text>
-            <Text style={styles.resumoLabel}>{s.label}</Text>
-          </View>
-        ))}
+      {/* Header */}
+      <Animated.View entering={FadeInDown.duration(400).springify()}>
+        <Text style={styles.pageTitle}>Estatísticas</Text>
+        <Text style={styles.pageSubtitle}>Visão geral dos teus gastos</Text>
+      </Animated.View>
+
+      {/* Stats resumo */}
+      <View style={styles.statsRow}>
+        <StatCard
+          icon={<Receipt size={16} color={C.brand} />}
+          label="Total gasto"
+          value={`${(data?.total_geral || 0).toFixed(0)}€`}
+          color={C.brand}
+          delay={60}
+        />
+        <StatCard
+          icon={<ShoppingBag size={16} color={C.green} />}
+          label="Faturas"
+          value={data?.num_faturas || 0}
+          color={C.green}
+          delay={120}
+        />
+        <StatCard
+          icon={<TrendingUp size={16} color={C.yellow} />}
+          label="Média/fatura"
+          value={`${(data?.media_fatura || 0).toFixed(0)}€`}
+          color={C.yellow}
+          delay={180}
+        />
       </View>
 
-      {/* Categoria top */}
-      {data?.categoria_top && (
-        <View style={styles.topCard}>
-          <Star size={16} color={C.brand} />
-          <View>
-            <Text style={styles.topLabel}>Categoria com mais gastos</Text>
-            <Text style={styles.topVal}>{data.categoria_top}</Text>
-          </View>
-        </View>
-      )}
-
-      {/* Gastos por mês */}
+      {/* Evolução mensal */}
       {data?.por_mes?.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Gastos por mês</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.vertBarsScroll}>
-            <View style={[styles.vertBarsWrap, { height: chartH + 50 }]}>
-              {data.por_mes.slice(-8).map(item => (
-                <VertBar key={item.mes} mes={item.mes} total={item.total} max={maxMes} chartH={chartH} />
+        <Animated.View entering={FadeInDown.delay(200).duration(400).springify()} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <BarChart2 size={14} color={C.brand} />
+            <Text style={styles.sectionTitle}>EVOLUÇÃO MENSAL</Text>
+          </View>
+          <View style={[styles.card, { paddingTop: 20 }]}>
+            <View style={{ flexDirection: 'row', height: chartH + 40, alignItems: 'flex-end', justifyContent: 'space-around' }}>
+              {data.por_mes.map((d, i) => (
+                <AnimVertBar
+                  key={d.mes}
+                  mes={d.mes}
+                  total={d.total}
+                  max={maxMes}
+                  chartH={chartH}
+                  index={i}
+                />
               ))}
             </View>
-          </ScrollView>
-        </View>
+          </View>
+        </Animated.View>
       )}
 
       {/* Por categoria */}
       {data?.por_categoria?.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Por categoria</Text>
-          {data.por_categoria.map((item, i) => (
-            <HorizBar
-              key={item.categoria}
-              categoria={item.categoria}
-              total={item.total}
-              max={maxCat}
-              color={BAR_COLORS[i % BAR_COLORS.length]}
-            />
-          ))}
-        </View>
+        <Animated.View entering={FadeInDown.delay(300).duration(400).springify()} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Star size={14} color={C.brand} />
+            <Text style={styles.sectionTitle}>POR CATEGORIA</Text>
+          </View>
+          <View style={styles.card}>
+            {data.por_categoria.map((d, i) => (
+              <AnimHorizBar
+                key={d.categoria}
+                categoria={d.categoria}
+                total={d.total}
+                max={maxCat}
+                color={BAR_COLORS[i % BAR_COLORS.length]}
+                index={i}
+              />
+            ))}
+          </View>
+        </Animated.View>
       )}
 
-      {/* Lista detalhe */}
-      {data?.por_categoria?.length > 0 && (
-        <View style={[styles.card, { marginBottom: 40 }]}>
-          <Text style={styles.cardTitle}>Detalhe</Text>
-          {data.por_categoria.map((item, i) => (
-            <View key={item.categoria} style={styles.detalheRow}>
-              <View style={[styles.detalheDot, { backgroundColor: BAR_COLORS[i % BAR_COLORS.length] }]} />
-              <Text style={styles.detalheCat}>{item.categoria}</Text>
-              <Text style={styles.detalheCount}>{item.count}x</Text>
-              <Text style={styles.detalheTotal}>{item.total.toFixed(2)}€</Text>
-            </View>
-          ))}
-        </View>
+      {/* Top lojas */}
+      {data?.top_lojas?.length > 0 && (
+        <Animated.View entering={FadeInDown.delay(400).duration(400).springify()} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <ShoppingBag size={14} color={C.brand} />
+            <Text style={styles.sectionTitle}>TOP LOJAS</Text>
+          </View>
+          <View style={styles.card}>
+            {data.top_lojas.map((d, i) => (
+              <Animated.View
+                key={d.loja}
+                entering={FadeInDown.delay(i * 50).duration(300).springify()}
+                style={styles.lojaRow}
+              >
+                <View style={[styles.lojaBadge, { backgroundColor: BAR_COLORS[i % BAR_COLORS.length] + '20' }]}>
+                  <Text style={[styles.lojaBadgeText, { color: BAR_COLORS[i % BAR_COLORS.length] }]}>
+                    #{i + 1}
+                  </Text>
+                </View>
+                <Text style={styles.lojaNome} numberOfLines={1}>{d.loja}</Text>
+                <Text style={styles.lojaTotal}>{d.total.toFixed(0)}€</Text>
+              </Animated.View>
+            ))}
+          </View>
+        </Animated.View>
       )}
 
-      {(!data || data.num_faturas === 0) && (
-        <View style={styles.empty}>
-          <BarChart2 size={44} color={C.border} />
+      {/* Sem dados */}
+      {!data?.num_faturas && (
+        <MotiView
+          from={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ type: 'spring', damping: 18 }}
+          style={styles.emptyState}
+        >
+          <Text style={styles.emptyIcon}>📊</Text>
           <Text style={styles.emptyTitle}>Sem dados ainda</Text>
-          <Text style={styles.emptySub}>Carrega faturas para ver as tuas estatísticas.</Text>
-        </View>
+          <Text style={styles.emptySub}>Adiciona faturas para ver as tuas estatísticas.</Text>
+        </MotiView>
       )}
     </ScrollView>
   );
 }
 
+// ─── Estilos ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root:    { flex: 1, backgroundColor: C.bg },
-  content: { padding: 16, paddingBottom: 32 },
-  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+  content: { padding: 20, paddingBottom: 40 },
+  center:  { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
 
-  resumoRow:   { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  resumoCard:  { flex: 1, backgroundColor: C.surface, borderRadius: 14, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: C.border, gap: 6 },
-  resumoIconWrap:{ width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  resumoVal:   { fontSize: 16, fontWeight: '900', color: C.text },
-  resumoLabel: { fontSize: 10, color: C.textSub, textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.3 },
+  pageTitle:    { fontSize: 28, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  pageSubtitle: { fontSize: 14, color: C.textSub, marginTop: 4, marginBottom: 20 },
 
-  topCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: C.surface, borderRadius: 14, padding: 16,
-    marginBottom: 14, borderWidth: 1, borderColor: C.border,
-    borderLeftWidth: 3, borderLeftColor: C.brand,
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  statCard: {
+    flex: 1, backgroundColor: C.surface, borderRadius: RADIUS.lg,
+    padding: 14, alignItems: 'center', gap: 6,
+    borderWidth: 1, borderColor: C.border,
   },
-  topLabel: { fontSize: 11, color: C.textSub, marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.5 },
-  topVal:   { fontSize: 16, fontWeight: '800', color: C.brand },
+  statIcon:  { width: 32, height: 32, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  statValue: { fontSize: 18, fontWeight: '900', letterSpacing: -0.5 },
+  statLabel: { fontSize: 10, fontWeight: '700', color: C.textSub, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  card:      { backgroundColor: C.surface, borderRadius: 18, padding: 18, marginBottom: 14, borderWidth: 1, borderColor: C.border },
-  cardTitle: { fontSize: 11, fontWeight: '700', color: C.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 18 },
+  section:       { marginBottom: 20 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  sectionTitle:  { fontSize: 11, fontWeight: '800', color: C.textMid, letterSpacing: 1.2 },
 
-  // Vert bars (mês)
-  vertBarsScroll: { alignItems: 'flex-end' },
-  vertBarsWrap:   { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
-  vertBarCol:     { alignItems: 'center', gap: 4, minWidth: 44 },
-  vertBarVal:     { fontSize: 9, color: C.textSub },
-  vertBar:        { width: 22, borderRadius: 5, backgroundColor: C.brand, minHeight: 4 },
-  vertBarLabel:   { fontSize: 10, color: C.textSub },
+  card: {
+    backgroundColor: C.surface, borderRadius: RADIUS.lg,
+    padding: 16, borderWidth: 1, borderColor: C.border,
+  },
 
-  // Horiz bars (cat)
+  // Barras horizontais
   barRow:      { marginBottom: 14 },
-  barLabel:    { fontSize: 12, color: C.textMid, marginBottom: 6 },
-  barTrackRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  barTrack:    { flex: 1, height: 7, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' },
-  barFill:     { height: 7, borderRadius: 4 },
-  barVal:      { fontSize: 12, fontWeight: '700', color: C.text, minWidth: 44, textAlign: 'right' },
+  barLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  barLabel:    { fontSize: 13, color: C.textMid, fontWeight: '600', flex: 1, marginRight: 8 },
+  barVal:      { fontSize: 13, fontWeight: '800' },
+  barTrack:    { height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' },
+  barFill:     { height: '100%', borderRadius: 3 },
 
-  // Detalhe
-  detalheRow:   { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderTopWidth: 1, borderTopColor: C.border, gap: 10 },
-  detalheDot:   { width: 7, height: 7, borderRadius: 4 },
-  detalheCat:   { flex: 1, fontSize: 13, color: C.text, fontWeight: '600' },
-  detalheCount: { fontSize: 12, color: C.textSub, minWidth: 24 },
-  detalheTotal: { fontSize: 14, fontWeight: '800', color: C.brand, minWidth: 70, textAlign: 'right' },
+  // Barras verticais
+  vertBarCol:   { alignItems: 'center', flex: 1, gap: 4 },
+  vertBarVal:   { fontSize: 9, color: C.textSub, fontWeight: '700' },
+  vertBar:      { width: 18, backgroundColor: C.brand, borderRadius: 4 },
+  vertBarLabel: { fontSize: 9, color: C.textSub, fontWeight: '600' },
 
-  empty:      { alignItems: 'center', paddingTop: 60, gap: 12 },
-  emptyTitle: { fontSize: 17, fontWeight: '800', color: C.textSub },
-  emptySub:   { fontSize: 13, color: C.textSub, textAlign: 'center', lineHeight: 20 },
+  // Lojas
+  lojaRow:       { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  lojaBadge:     { width: 28, height: 28, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  lojaBadgeText: { fontSize: 11, fontWeight: '900' },
+  lojaNome:      { flex: 1, fontSize: 14, color: C.text, fontWeight: '600' },
+  lojaTotal:     { fontSize: 14, fontWeight: '800', color: C.text },
+
+  // Empty state
+  emptyState: { alignItems: 'center', paddingTop: 60, gap: 8 },
+  emptyIcon:  { fontSize: 48 },
+  emptyTitle: { fontSize: 18, fontWeight: '800', color: C.text },
+  emptySub:   { fontSize: 14, color: C.textSub, textAlign: 'center' },
 });
 </file>
 
@@ -7762,274 +8087,6 @@ const styles = StyleSheet.create({
   itemDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: COLORS.brand },
   itemText: { fontSize: 13, color: COLORS.text, flex: 1 },
 });
-</file>
-
-<file path="verly-mobile/src/screens/MinhasSubscricoesScreen.js">
-/**
- * src/screens/MinhasSubscricoesScreen.js
- * Subscrições detetadas automaticamente via faturas + Gmail
- */
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  ActivityIndicator, RefreshControl, Alert,
-} from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
-import { useFocusEffect } from '@react-navigation/native';
-import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
-import { apiFetch } from '../services/api';
-
-const C = COLORS;
-
-const RISK_CONFIG = {
-  high:   { color: C.red,    label: 'Alto risco',  bg: 'rgba(255,77,109,0.10)'  },
-  medium: { color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
-  ok:     { color: C.green,  label: 'Normal',      bg: 'rgba(0,214,143,0.10)'   },
-};
-
-function SubCard({ sub, onDelete, index }) {
-  const risk = RISK_CONFIG[sub.risk] || RISK_CONFIG.ok;
-
-  return (
-    <Animated.View entering={FadeInDown.delay(index * 60).springify()}>
-      <View style={{
-        backgroundColor: C.surface,
-        borderRadius: RADIUS.lg,
-        borderWidth: 1,
-        borderColor: C.border,
-        padding: 16,
-        marginBottom: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 14,
-      }}>
-        {/* Ícone */}
-        <View style={{
-          width: 44, height: 44, borderRadius: 12,
-          backgroundColor: risk.bg,
-          justifyContent: 'center', alignItems: 'center',
-        }}>
-          <Text style={{ fontSize: 22 }}>{sub.icone || '📦'}</Text>
-        </View>
-
-        {/* Info */}
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: FONT.md, fontWeight: '700', color: C.text }}>
-            {sub.nome}
-          </Text>
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, marginTop: 2 }}>
-            {sub.categoria} · pago {sub.meses_pago}x
-          </Text>
-          <View style={{
-            marginTop: 5, alignSelf: 'flex-start',
-            backgroundColor: risk.bg, borderRadius: 6,
-            paddingHorizontal: 7, paddingVertical: 2,
-          }}>
-            <Text style={{ fontSize: 10, fontWeight: '800', color: risk.color }}>
-              {risk.label.toUpperCase()}
-            </Text>
-          </View>
-        </View>
-
-        {/* Preço + delete */}
-        <View style={{ alignItems: 'flex-end', gap: 8 }}>
-          <Text style={{ fontSize: FONT.lg, fontWeight: '900', color: C.brand }}>
-            {sub.preco_mensal?.toFixed(2)}€
-          </Text>
-          <Text style={{ fontSize: 10, color: C.textSub }}>/ mês</Text>
-          <Pressable
-            onPress={() => onDelete(sub.id, sub.nome)}
-            hitSlop={8}
-            style={{ padding: 4 }}
-          >
-            <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
-export default function MinhasSubscricoesScreen({ navigation }) {
-  const [subs, setSubs]           = useState([]);
-  const [resumo, setResumo]       = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [refreshing, setRefresh]  = useState(false);
-  const [detetando, setDetetando] = useState(false);
-
-  const carregar = useCallback(async (refresh = false) => {
-    if (refresh) setRefresh(true);
-    else setLoading(true);
-    try {
-      const data = await apiFetch('/subscricoes');
-      if (data.success) {
-        setSubs(data.subscricoes || []);
-        setResumo(data.resumo || null);
-      }
-    } catch (e) {
-      console.warn('Erro subscrições:', e);
-    } finally {
-      setLoading(false);
-      setRefresh(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
-
-  const detetar = async () => {
-    setDetetando(true);
-    try {
-      const res = await apiFetch('/subscricoes/detetar', { method: 'POST' });
-      if (res.success) {
-        await carregar();
-        const msg = res.detetadas > 0
-          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas faturas!`
-          : 'Nenhuma subscrição nova detetada nas faturas atuais.';
-        Alert.alert('Deteção concluída', msg);
-      }
-    } catch (e) {
-      Alert.alert('Erro', 'Não foi possível detetar subscrições. Tenta novamente.');
-    } finally {
-      setDetetando(false);
-    }
-  };
-
-  const eliminar = (id, nome) => {
-    Alert.alert(
-      'Remover subscrição',
-      `Remover "${nome}" da lista?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Remover',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await apiFetch(`/subscricoes/${id}`, { method: 'DELETE' });
-              setSubs(prev => prev.filter(s => s.id !== id));
-            } catch (e) {
-              Alert.alert('Erro', 'Não foi possível remover.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const totalAnual = resumo?.total_anual || 0;
-  const highRisk   = resumo?.high_risk || 0;
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator color={C.brand} size="large" />
-      </View>
-    );
-  }
-
-  return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: C.bg }}
-      contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 60 }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={() => carregar(true)} tintColor={C.brand} />
-      }
-    >
-      {/* Resumo */}
-      {resumo && subs.length > 0 && (
-        <Animated.View
-          entering={FadeInDown.duration(400).springify()}
-          style={{
-            backgroundColor: C.surface,
-            borderRadius: RADIUS.lg,
-            borderWidth: 1,
-            borderColor: C.brand + '30',
-            padding: 20,
-            marginBottom: 20,
-          }}
-        >
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
-            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 }}>
-            Resumo
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: C.brand }}>
-                {resumo.total_mensal?.toFixed(2)}€
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por mês</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: C.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: C.text }}>
-                {totalAnual?.toFixed(0)}€
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por ano</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: C.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ fontSize: 22, fontWeight: '900', color: highRisk > 0 ? C.red : C.green }}>
-                {highRisk}
-              </Text>
-              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>alto risco</Text>
-            </View>
-          </View>
-        </Animated.View>
-      )}
-
-      {/* Botão detetar */}
-      <Pressable
-        onPress={detetar}
-        disabled={detetando}
-        style={({ pressed }) => ({
-          backgroundColor: detetando ? C.surface : C.brand,
-          borderRadius: RADIUS.lg,
-          padding: 16,
-          alignItems: 'center',
-          marginBottom: 20,
-          opacity: pressed ? 0.85 : 1,
-          flexDirection: 'row',
-          justifyContent: 'center',
-          gap: 10,
-        })}
-      >
-        {detetando
-          ? <ActivityIndicator color="#fff" size="small" />
-          : <Text style={{ fontSize: 18 }}>🔍</Text>
-        }
-        <Text style={{ fontSize: FONT.md, fontWeight: '800', color: '#fff' }}>
-          {detetando ? 'A detetar...' : 'Detetar subscrições automáticas'}
-        </Text>
-      </Pressable>
-
-      {/* Lista */}
-      {subs.length === 0 ? (
-        <Animated.View entering={FadeInDown.delay(200).springify()}
-          style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
-          <Text style={{ fontSize: 48 }}>📭</Text>
-          <Text style={{ fontSize: FONT.lg, fontWeight: '700', color: C.text }}>
-            Sem subscrições
-          </Text>
-          <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
-            Toca em "Detetar" para a Verly analisar as tuas faturas e encontrar subscrições automáticas.
-          </Text>
-        </Animated.View>
-      ) : (
-        <>
-          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
-            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
-            {subs.length} subscrição{subs.length !== 1 ? 'ões' : ''} encontrada{subs.length !== 1 ? 's' : ''}
-          </Text>
-          {subs.map((sub, i) => (
-            <SubCard key={sub.id} sub={sub} onDelete={eliminar} index={i} />
-          ))}
-        </>
-      )}
-    </ScrollView>
-  );
-}
 </file>
 
 <file path="verly-mobile/src/screens/NotificacoesScreen.js">
@@ -12567,8 +12624,10 @@ export default function TabIcon({ name, color, size = 22 }) {
 
 <file path="verly-mobile/src/components/UI.js">
 // src/components/UI.js — Componentes primitivos com Moti + Reanimated 4
-import React, { useEffect } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+// FASE 1: Adicionados AnimatedCounter, GlowPulse, ShimmerCard, ProgressRing, SpringList, ToastNotification
+
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, Pressable, StyleSheet, Dimensions } from 'react-native';
 import { MotiView, MotiText, useAnimationState } from 'moti';
 import Animated, {
   useSharedValue,
@@ -12579,15 +12638,21 @@ import Animated, {
   withRepeat,
   withDelay,
   interpolate,
+  runOnJS,
+  useDerivedValue,
+  useAnimatedProps,
   Easing,
   FadeInDown,
   FadeIn,
   ZoomIn,
   BounceIn,
+  SlideInRight,
 } from 'react-native-reanimated';
+import Svg, { Circle, Defs, LinearGradient as SvgGradient, Stop } from 'react-native-svg';
 import { COLORS, RADIUS, FONT } from '../constants/theme';
 
 const C = COLORS;
+const W = Dimensions.get('window').width;
 
 // ─── Hook: scale press com Reanimated 4 ──────────────────────────────────────
 export function useScalePress(to = 0.96) {
@@ -12672,7 +12737,6 @@ export function PressCard({ onPress, style, children, delay = 0, glowColor }) {
       style={animStyle}
     >
       <Pressable onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress} style={style}>
-        {/* Glow overlay ao pressionar */}
         <Animated.View
           pointerEvents="none"
           style={[
@@ -12752,7 +12816,6 @@ export function NumberTicker({ value, style, prefix = '', suffix = '' }) {
     });
   }, [value]);
 
-  // Usa MotiText para mostrar o valor formatado
   return (
     <MotiView
       key={value}
@@ -12829,7 +12892,6 @@ export function AnimatedListItem({ index = 0, children, style }) {
 // ─── IconButton — botão de ícone com feedback ────────────────────────────────
 export function IconButton({ onPress, children, active = false, activeColor, style }) {
   const scale = useSharedValue(1);
-  const bg    = useSharedValue(0);
 
   const animStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
@@ -12867,6 +12929,277 @@ export function ShimmerLine({ width = '100%', height = 14, radius = 6, style }) 
   );
 }
 
+// ════════════════════════════════════════════════════════════════
+// FASE 1 — NOVAS ANIMAÇÕES ABAIXO
+// ════════════════════════════════════════════════════════════════
+
+// ─── AnimatedCounter — saldo que conta de 0 até ao valor ─────────────────────
+// Uso: <AnimatedCounter value={1234.56} prefix="€ " style={styles.saldo} />
+export function AnimatedCounter({ value = 0, prefix = '', suffix = '', style, decimals = 2, duration = 1200 }) {
+  const [displayed, setDisplayed] = useState('0');
+  const animValue = useSharedValue(0);
+  const prevValue = useRef(0);
+
+  useEffect(() => {
+    const from = prevValue.current;
+    prevValue.current = value;
+    animValue.value = from;
+    animValue.value = withTiming(value, {
+      duration,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [value]);
+
+  // Atualiza o texto JS-side a partir do worklet
+  useDerivedValue(() => {
+    runOnJS(setDisplayed)(animValue.value.toFixed(decimals).replace('.', ','));
+  });
+
+  const scaleStyle = useAnimatedStyle(() => {
+    const s = interpolate(animValue.value, [0, value * 0.5, value], [0.94, 1.02, 1]);
+    return { transform: [{ scale: Math.max(s, 0.9) }] };
+  });
+
+  return (
+    <Animated.Text style={[style, scaleStyle]}>
+      {prefix}{displayed}{suffix}
+    </Animated.Text>
+  );
+}
+
+// ─── GlowPulse — card com brilho pulsante (para destaques) ───────────────────
+// Uso: <GlowPulse color={C.green}><View>...</View></GlowPulse>
+export function GlowPulse({ color = C.brand, children, style, intensity = 0.35, period = 2000 }) {
+  const glow = useSharedValue(0);
+
+  useEffect(() => {
+    glow.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: period / 2, easing: Easing.inOut(Easing.sine) }),
+        withTiming(0, { duration: period / 2, easing: Easing.inOut(Easing.sine) }),
+      ),
+      -1,
+      false,
+    );
+  }, []);
+
+  const glowStyle = useAnimatedStyle(() => ({
+    shadowColor: color,
+    shadowOpacity: glow.value * intensity,
+    shadowRadius: 18 + glow.value * 12,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 6 + glow.value * 8,
+  }));
+
+  return (
+    <Animated.View style={[style, glowStyle]}>
+      {children}
+    </Animated.View>
+  );
+}
+
+// ─── ProgressRing — círculo de progresso SVG animado ─────────────────────────
+// Uso: <ProgressRing value={72} max={100} size={120} color={C.brand} />
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
+export function ProgressRing({ value = 0, max = 100, size = 120, strokeWidth = 10, color = C.brand, bg = C.surface3, children }) {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const pct = useSharedValue(0);
+
+  useEffect(() => {
+    pct.value = withDelay(300, withTiming(value / max, {
+      duration: 1000,
+      easing: Easing.out(Easing.cubic),
+    }));
+  }, [value, max]);
+
+  const animProps = useAnimatedProps(() => ({
+    strokeDashoffset: circumference * (1 - pct.value),
+  }));
+
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} style={{ position: 'absolute' }}>
+        {/* Track */}
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={bg}
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        {/* Progress */}
+        <AnimatedCircle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          stroke={color}
+          strokeWidth={strokeWidth}
+          fill="none"
+          strokeDasharray={circumference}
+          animatedProps={animProps}
+          strokeLinecap="round"
+          rotation="-90"
+          origin={`${size / 2}, ${size / 2}`}
+        />
+      </Svg>
+      {children}
+    </View>
+  );
+}
+
+// ─── AnimatedBar — barra horizontal com fill animado ─────────────────────────
+// Uso: <AnimatedBar pct={0.65} color={C.brand} delay={200} />
+export function AnimatedBar({ pct = 0, color = C.brand, height = 6, radius = 4, delay = 0, style }) {
+  const width = useSharedValue(0);
+
+  useEffect(() => {
+    width.value = withDelay(delay, withTiming(Math.min(Math.max(pct, 0), 1) * 100, {
+      duration: 800,
+      easing: Easing.out(Easing.cubic),
+    }));
+  }, [pct]);
+
+  const barStyle = useAnimatedStyle(() => ({
+    width: `${width.value}%`,
+  }));
+
+  return (
+    <View style={[{ height, borderRadius: radius, backgroundColor: C.surface3, overflow: 'hidden' }, style]}>
+      <Animated.View style={[{ height: '100%', borderRadius: radius, backgroundColor: color }, barStyle]} />
+    </View>
+  );
+}
+
+// ─── SpringList — lista em que os itens entram com spring escalonado ──────────
+// Uso: <SpringList data={arr} renderItem={(item, i) => <Card key={i}>...</Card>} />
+export function SpringList({ data = [], renderItem, style, baseDelay = 0, stagger = 80 }) {
+  return (
+    <View style={style}>
+      {data.map((item, i) => (
+        <Animated.View
+          key={i}
+          entering={FadeInDown.delay(baseDelay + i * stagger).duration(400).springify().damping(18)}
+        >
+          {renderItem(item, i)}
+        </Animated.View>
+      ))}
+    </View>
+  );
+}
+
+// ─── ToastNotification — toast que aparece do topo e desaparece ────────────────
+// Uso: const { showToast, ToastComponent } = useToast();
+//      showToast('Fatura adicionada!', 'success');
+//      return <View>...<ToastComponent /></View>
+export function useToast() {
+  const [toast, setToast] = useState(null);
+  const translateY = useSharedValue(-100);
+  const opacity    = useSharedValue(0);
+  const timerRef   = useRef(null);
+
+  const showToast = (message, type = 'info', duration = 2800) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setToast({ message, type });
+    translateY.value = withSpring(0, { damping: 18, stiffness: 280 });
+    opacity.value    = withTiming(1, { duration: 200 });
+    timerRef.current = setTimeout(() => {
+      translateY.value = withTiming(-100, { duration: 300 });
+      opacity.value    = withTiming(0, { duration: 300 });
+      setTimeout(() => setToast(null), 350);
+    }, duration);
+  };
+
+  const toastStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: translateY.value }],
+    opacity: opacity.value,
+  }));
+
+  const COLORS_MAP = { success: C.green, error: C.red, info: C.brand, warning: '#FFB300' };
+
+  const ToastComponent = () => {
+    if (!toast) return null;
+    const col = COLORS_MAP[toast.type] || C.brand;
+    return (
+      <Animated.View style={[styles.toast, { borderLeftColor: col }, toastStyle]} pointerEvents="none">
+        <View style={[styles.toastDot, { backgroundColor: col }]} />
+        <Text style={styles.toastText}>{toast.message}</Text>
+      </Animated.View>
+    );
+  };
+
+  return { showToast, ToastComponent };
+}
+
+// ─── ScoreGauge — gauge semicircular SVG para o ScoreScreen ──────────────────
+// Uso: <ScoreGauge score={72} size={220} />
+export function ScoreGauge({ score = 0, size = 220, strokeWidth = 16 }) {
+  const radius = (size - strokeWidth) / 2;
+  const cx = size / 2;
+  const cy = size / 2 + 10; // ligeiramente abaixo para semicírculo
+  const circumference = Math.PI * radius; // só metade (semicírculo)
+  const pct = useSharedValue(0);
+
+  useEffect(() => {
+    pct.value = withDelay(400, withTiming(score / 100, {
+      duration: 1200,
+      easing: Easing.out(Easing.cubic),
+    }));
+  }, [score]);
+
+  const animProps = useAnimatedProps(() => ({
+    strokeDashoffset: circumference * (1 - pct.value),
+  }));
+
+  const color = score >= 75 ? C.green : score >= 50 ? '#FFB300' : score >= 25 ? '#FF8C00' : C.red;
+  const label = score >= 75 ? 'Excelente' : score >= 50 ? 'Razoável' : score >= 25 ? 'Fraco' : 'Mau';
+
+  return (
+    <View style={{ width: size, height: size / 2 + 30, alignItems: 'center', justifyContent: 'flex-end' }}>
+      <Svg width={size} height={size} style={{ position: 'absolute', top: 0 }}>
+        <Circle
+          cx={cx} cy={cy} r={radius}
+          stroke={C.surface3} strokeWidth={strokeWidth} fill="none"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={0}
+          rotation="180" origin={`${cx}, ${cy}`}
+          strokeLinecap="round"
+        />
+        <AnimatedCircle
+          cx={cx} cy={cy} r={radius}
+          stroke={color} strokeWidth={strokeWidth} fill="none"
+          strokeDasharray={`${circumference} ${circumference}`}
+          animatedProps={animProps}
+          rotation="180" origin={`${cx}, ${cy}`}
+          strokeLinecap="round"
+        />
+      </Svg>
+      <View style={{ alignItems: 'center', paddingBottom: 4 }}>
+        <Text style={{ fontSize: 48, fontWeight: '900', color, letterSpacing: -2 }}>{score}</Text>
+        <Text style={{ fontSize: 13, fontWeight: '700', color: C.textSub, marginTop: -4 }}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ─── ShimmerCard — skeleton completo de card com shimmer ─────────────────────
+export function ShimmerCard({ style }) {
+  return (
+    <MotiView
+      from={{ opacity: 0.4 }}
+      animate={{ opacity: 0.85 }}
+      transition={{ type: 'timing', duration: 750, loop: true, repeatReverse: true }}
+      style={[styles.shimmerCard, style]}
+    >
+      <View style={[styles.shimmerLine, { width: '40%', height: 10 }]} />
+      <View style={[styles.shimmerLine, { width: '70%', height: 28, marginTop: 8 }]} />
+      <View style={[styles.shimmerLine, { width: '55%', height: 10, marginTop: 12 }]} />
+    </MotiView>
+  );
+}
+
 const styles = StyleSheet.create({
   iconBtn: {
     width: 40, height: 40,
@@ -12875,6 +13208,47 @@ const styles = StyleSheet.create({
     borderColor: C.border,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  toast: {
+    position: 'absolute',
+    top: 56,
+    left: 16,
+    right: 16,
+    backgroundColor: C.surface2 || '#181828',
+    borderRadius: RADIUS.md || 12,
+    borderLeftWidth: 3,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 9999,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 12,
+  },
+  toastDot: {
+    width: 8, height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  toastText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.text || '#F0F0F8',
+    flex: 1,
+  },
+  shimmerCard: {
+    backgroundColor: C.surface || '#111120',
+    borderRadius: RADIUS.lg || 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: C.border || '#22223A',
+  },
+  shimmerLine: {
+    backgroundColor: C.surface3 || '#1E1E32',
+    borderRadius: 6,
   },
 });
 </file>
@@ -14094,6 +14468,274 @@ const s = StyleSheet.create({
   btn: { backgroundColor: C.brand, borderRadius: RADIUS.md, padding: 15, alignItems: 'center' },
   btnText: { color: '#fff', fontSize: FONT.md, fontWeight: '700' },
 });
+</file>
+
+<file path="verly-mobile/src/screens/MinhasSubscricoesScreen.js">
+/**
+ * src/screens/MinhasSubscricoesScreen.js
+ * Subscrições detetadas automaticamente via faturas + Gmail
+ */
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  ActivityIndicator, RefreshControl, Alert,
+} from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useFocusEffect } from '@react-navigation/native';
+import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
+import { apiFetch } from '../services/api';
+
+const C = COLORS;
+
+const RISK_CONFIG = {
+  high:   { color: C.red,    label: 'Alto risco',  bg: 'rgba(255,77,109,0.10)'  },
+  medium: { color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
+  ok:     { color: C.green,  label: 'Normal',      bg: 'rgba(0,214,143,0.10)'   },
+};
+
+function SubCard({ sub, onDelete, index }) {
+  const risk = RISK_CONFIG[sub.risk] || RISK_CONFIG.ok;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 60).springify()}>
+      <View style={{
+        backgroundColor: C.surface,
+        borderRadius: RADIUS.lg,
+        borderWidth: 1,
+        borderColor: C.border,
+        padding: 16,
+        marginBottom: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 14,
+      }}>
+        {/* Ícone */}
+        <View style={{
+          width: 44, height: 44, borderRadius: 12,
+          backgroundColor: risk.bg,
+          justifyContent: 'center', alignItems: 'center',
+        }}>
+          <Text style={{ fontSize: 22 }}>{sub.icone || '📦'}</Text>
+        </View>
+
+        {/* Info */}
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: FONT.md, fontWeight: '700', color: C.text }}>
+            {sub.nome}
+          </Text>
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, marginTop: 2 }}>
+            {sub.categoria} · pago {sub.meses_pago}x
+          </Text>
+          <View style={{
+            marginTop: 5, alignSelf: 'flex-start',
+            backgroundColor: risk.bg, borderRadius: 6,
+            paddingHorizontal: 7, paddingVertical: 2,
+          }}>
+            <Text style={{ fontSize: 10, fontWeight: '800', color: risk.color }}>
+              {risk.label.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        {/* Preço + delete */}
+        <View style={{ alignItems: 'flex-end', gap: 8 }}>
+          <Text style={{ fontSize: FONT.lg, fontWeight: '900', color: C.brand }}>
+            {sub.preco_mensal?.toFixed(2)}€
+          </Text>
+          <Text style={{ fontSize: 10, color: C.textSub }}>/ mês</Text>
+          <Pressable
+            onPress={() => onDelete(sub.id, sub.nome)}
+            hitSlop={8}
+            style={{ padding: 4 }}
+          >
+            <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function MinhasSubscricoesScreen({ navigation }) {
+  const [subs, setSubs]           = useState([]);
+  const [resumo, setResumo]       = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [refreshing, setRefresh]  = useState(false);
+  const [detetando, setDetetando] = useState(false);
+
+  const carregar = useCallback(async (refresh = false) => {
+    if (refresh) setRefresh(true);
+    else setLoading(true);
+    try {
+      const data = await apiFetch('/subscricoes');
+      if (data.success) {
+        setSubs(data.subscricoes || []);
+        setResumo(data.resumo || null);
+      }
+    } catch (e) {
+      console.warn('Erro subscrições:', e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
+
+  const detetar = async () => {
+    setDetetando(true);
+    try {
+      const res = await apiFetch('/subscricoes/detetar', { method: 'POST' });
+      if (res.success) {
+        await carregar();
+        const msg = res.detetadas > 0
+          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas faturas!`
+          : 'Nenhuma subscrição nova detetada nas faturas atuais.';
+        Alert.alert('Deteção concluída', msg);
+      }
+    } catch (e) {
+      Alert.alert('Erro', 'Não foi possível detetar subscrições. Tenta novamente.');
+    } finally {
+      setDetetando(false);
+    }
+  };
+
+  const eliminar = (id, nome) => {
+    Alert.alert(
+      'Remover subscrição',
+      `Remover "${nome}" da lista?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Remover',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await apiFetch(`/subscricoes/${id}`, { method: 'DELETE' });
+              setSubs(prev => prev.filter(s => s.id !== id));
+            } catch (e) {
+              Alert.alert('Erro', 'Não foi possível remover.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const totalAnual = resumo?.total_anual || 0;
+  const highRisk   = resumo?.high_risk || 0;
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator color={C.brand} size="large" />
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView
+      style={{ flex: 1, backgroundColor: C.bg }}
+      contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 60 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => carregar(true)} tintColor={C.brand} />
+      }
+    >
+      {/* Resumo */}
+      {resumo && subs.length > 0 && (
+        <Animated.View
+          entering={FadeInDown.duration(400).springify()}
+          style={{
+            backgroundColor: C.surface,
+            borderRadius: RADIUS.lg,
+            borderWidth: 1,
+            borderColor: C.brand + '30',
+            padding: 20,
+            marginBottom: 20,
+          }}
+        >
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 }}>
+            Resumo
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: C.brand }}>
+                {resumo.total_mensal?.toFixed(2)}€
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por mês</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: C.border }} />
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: C.text }}>
+                {totalAnual?.toFixed(0)}€
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>por ano</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: C.border }} />
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 22, fontWeight: '900', color: highRisk > 0 ? C.red : C.green }}>
+                {highRisk}
+              </Text>
+              <Text style={{ fontSize: 11, color: C.textSub, marginTop: 2 }}>alto risco</Text>
+            </View>
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Botão detetar */}
+      <Pressable
+        onPress={detetar}
+        disabled={detetando}
+        style={({ pressed }) => ({
+          backgroundColor: detetando ? C.surface : C.brand,
+          borderRadius: RADIUS.lg,
+          padding: 16,
+          alignItems: 'center',
+          marginBottom: 20,
+          opacity: pressed ? 0.85 : 1,
+          flexDirection: 'row',
+          justifyContent: 'center',
+          gap: 10,
+        })}
+      >
+        {detetando
+          ? <ActivityIndicator color="#fff" size="small" />
+          : <Text style={{ fontSize: 18 }}>🔍</Text>
+        }
+        <Text style={{ fontSize: FONT.md, fontWeight: '800', color: '#fff' }}>
+          {detetando ? 'A detetar...' : 'Detetar subscrições automáticas'}
+        </Text>
+      </Pressable>
+
+      {/* Lista */}
+      {subs.length === 0 ? (
+        <Animated.View entering={FadeInDown.delay(200).springify()}
+          style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
+          <Text style={{ fontSize: 48 }}>📭</Text>
+          <Text style={{ fontSize: FONT.lg, fontWeight: '700', color: C.text }}>
+            Sem subscrições
+          </Text>
+          <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
+            Toca em "Detetar" para a Verly analisar as tuas faturas e encontrar subscrições automáticas.
+          </Text>
+        </Animated.View>
+      ) : (
+        <>
+          <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 }}>
+            {subs.length} subscrição{subs.length !== 1 ? 'ões' : ''} encontrada{subs.length !== 1 ? 's' : ''}
+          </Text>
+          {subs.map((sub, i) => (
+            <SubCard key={sub.id} sub={sub} onDelete={eliminar} index={i} />
+          ))}
+        </>
+      )}
+    </ScrollView>
+  );
+}
 </file>
 
 <file path="verly-mobile/src/screens/OnboardingScreen.js">
@@ -18997,450 +19639,35 @@ const styles = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
-// src/screens/RetrospetivaMensalScreen.js
-// Retrospetiva Mensal — com navegação mês a mês
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, Dimensions,
-  Share, RefreshControl, Linking,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, {
-  FadeInDown, FadeIn, ZoomIn,
-} from 'react-native-reanimated';
-import { MotiView } from 'moti';
-import {
-  TrendingUp, TrendingDown, Award, Flame, Target,
-  BarChart2, Download, Share2, Calendar, Zap,
-  ChevronLeft, ChevronRight,
-} from 'lucide-react-native';
-import { apiFetch, getToken } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const fmtK = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : fmt(n);
-
-const MESES_PT    = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-                     'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun',
-                     'Jul','Ago','Set','Out','Nov','Dez'];
-
-const CAT_COLORS = [
-  '#7C6FE0','#E24B4A','#00D68F','#FFB300',
-  '#45B7D1','#FF7340','#B06FE0','#E07090',
-];
-
-const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-
-// ─── Mini bar chart horizontal ────────────────────────────────────────────────
-function MiniBarChart({ dados }) {
-  if (!dados || dados.length === 0) return null;
-  const maxVal = Math.max(...dados.map(d => d.total), 1);
-
-  return (
-    <View style={{ gap: 10 }}>
-      {dados.map((d, i) => {
-        const pct = d.total / maxVal;
-        const cor = CAT_COLORS[i % CAT_COLORS.length];
-        return (
-          <View key={i}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-              <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
-                {d.categoria}
-              </Text>
-              <Text style={{ fontSize: 12, color: cor, fontWeight: '800' }}>{fmt(d.total)} €</Text>
-            </View>
-            <View style={{ height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-              <Animated.View
-                entering={FadeIn.delay(i * 80)}
-                style={{
-                  height: '100%',
-                  width: `${pct * 100}%`,
-                  backgroundColor: cor,
-                  borderRadius: 3,
-                }}
-              />
-            </View>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Histograma de 6 meses ────────────────────────────────────────────────────
-function Histograma({ historico, mesAtivo }) {
-  if (!historico || historico.length === 0) return null;
-  const maxVal = Math.max(...historico.map(d => d.total), 1);
-
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 80 }}>
-      {historico.map((d, i) => {
-        const pct = d.total / maxVal;
-        const isAtivo = d.mes === mesAtivo;
-        return (
-          <View key={i} style={{ flex: 1, alignItems: 'center', gap: 4 }}>
-            <Animated.View
-              entering={FadeIn.delay(i * 60)}
-              style={{
-                width: '100%',
-                height: Math.max(pct * 64, 4),
-                backgroundColor: isAtivo ? C.brand : C.surface3,
-                borderRadius: 4,
-              }}
-            />
-            <Text style={{
-              fontSize: 9,
-              color: isAtivo ? C.brand : C.textSub,
-              fontWeight: isAtivo ? '800' : '500',
-            }}>
-              {d.mes}
-            </Text>
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Componente principal ─────────────────────────────────────────────────────
-export default function RetrospetivaMensalScreen({ navigation }) {
-  const [data, setData]         = useState(null);
-  const [loading, setLoading]   = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  // índice do mês selecionado dentro do historico (começa no penúltimo = mês anterior)
-  const [mesIdx, setMesIdx] = useState(null);
-
-  const carregar = useCallback(async (isRefresh = false) => {
-    try {
-      const res = await apiFetch('/exportar/resumo');
-      setData(res);
-      // ao carregar, posicionar no penúltimo mês (mês anterior ao atual)
-      const hist = res?.historico_mensal || [];
-      if (mesIdx === null && hist.length >= 2) {
-        setMesIdx(hist.length - 2);
-      }
-    } catch (e) {
-      console.error('RetrospetivaMensal:', e);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  }, []);
-
-  useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
-
-  const onRefresh = () => { setRefreshing(true); carregar(true); };
-
-  const partilhar = async () => {
-    if (!data) return;
-    const historico = data.historico_mensal || [];
-    const mesRef    = historico[mesIdx ?? historico.length - 2];
-    const total     = mesRef?.total || 0;
-    const topCat    = data.top_categorias?.[0];
-    try {
-      await Share.share({
-        message: `O meu resumo Verly de ${mesRef?.mes || 'este mês'}:\n💸 ${fmt(total)} € gastos\n🏆 Categoria top: ${topCat?.categoria || '—'}\n📱 Baixa a Verly em verly.app`,
-      });
-    } catch (e) {}
-  };
-
-  const exportarPDF = async () => {
-    try {
-      const token = await getToken();
-      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
-    } catch (e) {
-      console.error('Exportar PDF:', e);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const historico   = data?.historico_mensal || [];
-  const idx         = mesIdx ?? historico.length - 2;
-  const mesAtual_   = historico[idx];
-  const mesAnterior = historico[idx - 1];
-
-  const totalMes    = mesAtual_?.total || 0;
-  const totalAnt    = mesAnterior?.total || 0;
-  const variacao    = totalAnt > 0
-    ? ((totalMes - totalAnt) / totalAnt) * 100
-    : null;
-
-  const topCats     = (data?.top_categorias || []).slice(0, 5);
-  const streak      = data?.streak_dias || 0;
-  const rendimento  = data?.rendimento_mensal || 0;
-  const pctRend     = rendimento > 0 ? (totalMes / rendimento) * 100 : null;
-
-  const nomeMes = mesAtual_?.mes
-    ? MESES_PT[MESES_SHORT.indexOf(mesAtual_.mes)] ?? mesAtual_.mes
-    : 'Mês';
-
-  const mesProximo  = MESES_PT[(MESES_SHORT.indexOf(mesAtual_?.mes) + 1) % 12] || 'próximo mês';
-
-  const podePrev = idx > 0;
-  const podeNext = idx < historico.length - 1;
-
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
-      <ScrollView
-        style={styles.root}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
-      >
-        {/* Header */}
-        <Animated.View entering={FadeIn.duration(500)} style={styles.header}>
-          <View style={styles.headerTop}>
-
-            {/* Botão voltar */}
-            <Pressable
-              onPress={() => navigation.goBack()}
-              style={styles.backBtn}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <ChevronLeft size={24} color={C.text} />
-            </Pressable>
-
-            {/* Navegação mês */}
-            <View style={styles.mesNav}>
-              <Pressable
-                onPress={() => podePrev && setMesIdx(idx - 1)}
-                style={[styles.navBtn, !podePrev && styles.navBtnDisabled]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
-              </Pressable>
-
-              <View style={{ alignItems: 'center' }}>
-                <Text style={styles.headerLabel}>Retrospetiva de</Text>
-                <Text style={styles.headerMes}>{nomeMes}</Text>
-              </View>
-
-              <Pressable
-                onPress={() => podeNext && setMesIdx(idx + 1)}
-                style={[styles.navBtn, !podeNext && styles.navBtnDisabled]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
-              </Pressable>
-            </View>
-
-            {/* Partilhar */}
-            <Pressable onPress={partilhar} style={styles.shareBtn}>
-              <Share2 size={16} color={C.brand} />
-            </Pressable>
-          </View>
-        </Animated.View>
-
-        {/* Hero — total gasto */}
-        <Animated.View entering={ZoomIn.delay(100).duration(500)} style={styles.heroCard}>
-          <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
-          <Text style={styles.heroValor}>{fmt(totalMes)} €</Text>
-
-          {variacao !== null && (
-            <View style={styles.variacaoRow}>
-              {variacao > 0
-                ? <TrendingUp size={14} color={C.red} />
-                : <TrendingDown size={14} color={C.green} />
-              }
-              <Text style={[styles.variacaoText, { color: variacao > 0 ? C.red : C.green }]}>
-                {variacao > 0 ? '+' : ''}{variacao.toFixed(1)}% vs {mesAnterior?.mes || 'mês anterior'}
-              </Text>
-            </View>
-          )}
-
-          {pctRend !== null && (
-            <Text style={styles.heroSub}>
-              {pctRend.toFixed(0)}% do teu rendimento mensal
-            </Text>
-          )}
-        </Animated.View>
-
-        {/* Histograma 6 meses */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.card}>
-          <View style={styles.cardTitleRow}>
-            <BarChart2 size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
-          </View>
-          <Histograma historico={historico} mesAtivo={mesAtual_?.mes} />
-        </Animated.View>
-
-        {/* Top categorias */}
-        <Animated.View entering={FadeInDown.delay(300)} style={styles.card}>
-          <View style={styles.cardTitleRow}>
-            <Target size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-          </View>
-          {topCats.length > 0
-            ? <MiniBarChart dados={topCats} />
-            : <Text style={{ fontSize: FONT.sm, color: C.textSub }}>Sem dados para este mês ainda.</Text>
-          }
-        </Animated.View>
-
-        {/* Streak */}
-        {streak > 0 && (
-          <Animated.View entering={FadeInDown.delay(400)} style={[styles.card, styles.streakCard]}>
-            <View style={styles.cardTitleRow}>
-              <Flame size={18} color='#FF7340' />
-              <Text style={[styles.cardTitle, { color: '#FF7340' }]}>Streak de {streak} dia{streak !== 1 ? 's' : ''}!</Text>
-            </View>
-            <Text style={styles.streakSub}>
-              Mantiveste a disciplina financeira durante {streak} dia{streak !== 1 ? 's' : ''} consecutivos.
-              {streak >= 7 ? ' Impressionante! 🔥' : ' Continua assim!'}
-            </Text>
-          </Animated.View>
-        )}
-
-        {/* Dica da Verly */}
-        <Animated.View entering={FadeInDown.delay(450)} style={[styles.card, styles.dicaCard]}>
-          <View style={styles.cardTitleRow}>
-            <Zap size={16} color={C.brand} />
-            <Text style={styles.cardTitle}>O que melhorar em {mesProximo}</Text>
-          </View>
-          {variacao !== null && variacao > 15 ? (
-            <Text style={styles.dicaText}>
-              Gastaste {variacao.toFixed(0)}% mais do que em {mesAnterior?.mes || 'mês anterior'}.
-              Tenta identificar o que mudou — a Lei de Parkinson diz que os gastos expandem para o dinheiro disponível.
-              Define um limite concreto para o próximo mês.
-            </Text>
-          ) : variacao !== null && variacao < -10 ? (
-            <Text style={styles.dicaText}>
-              Excelente! Reduziste {Math.abs(variacao).toFixed(0)}% face ao mês anterior.
-              Mantém este ritmo e considera direcionar a poupança para um fundo de emergência
-              (objetivo: 3-6 meses de despesas, i.e., {fmt(totalMes * 4)}€).
-            </Text>
-          ) : (
-            <Text style={styles.dicaText}>
-              Os teus gastos mantêm-se estáveis. Bom sinal de consistência.
-              A regra 50/30/20 sugere: 50% necessidades, 30% desejos, 20% poupança.
-              {rendimento > 0 ? ` Objetivo de poupança: ${fmt(rendimento * 0.20)}€/mês.` : ''}
-            </Text>
-          )}
-        </Animated.View>
-
-        {/* Botão exportar PDF */}
-        <Animated.View entering={FadeInDown.delay(500)}>
-          <Pressable onPress={exportarPDF} style={styles.exportBtn}>
-            <Download size={18} color="#fff" />
-            <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
-          </Pressable>
-        </Animated.View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: C.bg },
-  content: { padding: SPACE.lg, paddingBottom: 40 },
-  center:  { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
-
-  header:    { marginBottom: SPACE.lg, paddingTop: 4 },
-  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-
-  backBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.surface2,
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  mesNav: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    marginHorizontal: 8,
-  },
-  navBtn:         { padding: 4 },
-  navBtnDisabled: { opacity: 0.3 },
-
-  headerLabel: { fontSize: FONT.xs, color: C.textSub, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase', textAlign: 'center' },
-  headerMes:   { fontSize: FONT.h2, fontWeight: '900', color: C.text, marginTop: 2, textAlign: 'center' },
-
-  shareBtn: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40',
-    justifyContent: 'center', alignItems: 'center',
-  },
-
-  heroCard: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 24,
-    marginBottom: SPACE.lg,
-    alignItems: 'center',
-  },
-  heroLabel:   { fontSize: FONT.sm, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
-  variacaoRow: { flexDirection: 'row', gap: 5, alignItems: 'center', marginTop: 10 },
-  variacaoText:{ fontSize: FONT.sm, fontWeight: '700' },
-  heroSub:     { fontSize: FONT.xs, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-
-  card: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: 16,
-    marginBottom: SPACE.md,
-  },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle:    { fontSize: FONT.sm, fontWeight: '700', color: C.text },
-
-  streakCard: { borderColor: '#FF7340' + '40', backgroundColor: '#FF7340' + '0F' },
-  streakSub:  { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  dicaCard: { borderColor: C.brand + '30' },
-  dicaText: { fontSize: FONT.sm, color: C.textMid, lineHeight: 20 },
-
-  exportBtn: {
-    backgroundColor: C.brand,
-    borderRadius: RADIUS.lg,
-    padding: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: FONT.md },
-});
-</file>
-
 <file path="verly-mobile/src/screens/ScoreScreen.js">
 /**
- * src/screens/ScoreScreen.js
- * "Valeu a Pena?" — Score de Compras
- * Versão mobile completa: score, análise IA, mapa de lojas com react-native-maps
- *
- * NOTA: Requer react-native-maps instalado:
- *   npx expo install react-native-maps
+ * src/screens/ScoreScreen.js — FASE 1: Animações
+ * Substituições:
+ *  - ScoreCircle (estático) → ScoreGauge SVG animado com fill suave de 0→score
+ *  - Botão "Analisar" → scale press + loading shimmer
+ *  - Fatores → barras animadas com AnimatedBar
+ *  - Resultado entra com FadeInDown stagger
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert, Platform,
   Dimensions, Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
+import Animated, {
+  useSharedValue, useAnimatedStyle, withSpring,
+  withTiming, FadeInDown, FadeIn, ZoomIn, SlideInDown,
+  Easing,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
 import { scoreAPI } from '../services/api';
 import { COLORS } from '../constants/theme';
+import {
+  ScoreGauge, AnimatedBar, useToast, PressCard,
+  AnimatedListItem, ShimmerCard,
+} from '../components/UI';
 
 const { width: W } = Dimensions.get('window');
 
@@ -19452,14 +19679,14 @@ const CATEGORIAS = [
 ];
 
 const USO_OPCOES = [
-  { key: 'daily',   label: 'Uso diário',     emoji: '🔥' },
-  { key: 'weekly',  label: 'Uso regular',     emoji: '✅' },
-  { key: 'monthly', label: 'Uso ocasional',   emoji: '📅' },
-  { key: 'rarely',  label: 'Raramente',       emoji: '😬' },
-  { key: 'never',   label: 'Nunca usei',      emoji: '💸' },
+  { key: 'daily',   label: 'Uso diário',   emoji: '🔥' },
+  { key: 'weekly',  label: 'Uso regular',  emoji: '✅' },
+  { key: 'monthly', label: 'Ocasional',    emoji: '📅' },
+  { key: 'rarely',  label: 'Raramente',    emoji: '😬' },
+  { key: 'never',   label: 'Nunca usei',   emoji: '💸' },
 ];
 
-// ── Helpers visuais ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getScoreColor(score) {
   if (score >= 75) return COLORS.green;
@@ -19477,37 +19704,46 @@ function getScoreLabel(score) {
 
 function getAvaliacaoLabel(av) {
   const map = {
-    barato:    { text: 'Preço abaixo do mercado 🟢', color: COLORS.green },
-    justo:     { text: 'Preço de mercado 🔵',         color: COLORS.brand },
-    caro:      { text: 'Acima do mercado 🟠',          color: COLORS.yellow },
-    muito_caro:{ text: 'Muito acima do mercado 🔴',    color: COLORS.red },
+    barato:     { text: 'Preço abaixo do mercado 🟢', color: COLORS.green },
+    justo:      { text: 'Preço de mercado 🔵',         color: COLORS.brand },
+    caro:       { text: 'Acima do mercado 🟠',          color: COLORS.yellow },
+    muito_caro: { text: 'Muito acima do mercado 🔴',    color: COLORS.red },
   };
   return map[av] || { text: av, color: COLORS.textSub };
 }
 
-// ── Componente de score circular ──────────────────────────────────────────────
+// ── Botão animado ─────────────────────────────────────────────────────────────
 
-function ScoreCircle({ score }) {
-  const color = getScoreColor(score);
+function AnimatedButton({ onPress, disabled, loading, label }) {
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const onIn  = () => { scale.value = withSpring(0.96, { damping: 20, stiffness: 400 }); };
+  const onOut = () => { scale.value = withSpring(1,    { damping: 18, stiffness: 300 }); };
+
   return (
-    <View style={[sc.circle, { borderColor: color }]}>
-      <Text style={[sc.circleScore, { color }]}>{score}</Text>
-      <Text style={sc.circleLabel}>/100</Text>
-    </View>
+    <Animated.View style={[animStyle, { marginTop: 20 }]}>
+      <TouchableOpacity
+        style={[s.analyzeBtn, disabled && { opacity: 0.6 }]}
+        onPress={onPress}
+        onPressIn={onIn}
+        onPressOut={onOut}
+        disabled={disabled}
+        activeOpacity={1}
+      >
+        {loading
+          ? <ActivityIndicator color="#fff" />
+          : <Text style={s.analyzeBtnText}>{label}</Text>
+        }
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
-const sc = StyleSheet.create({
-  circle: { width: 140, height: 140, borderRadius: 70, borderWidth: 8, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.surface },
-  circleScore: { fontSize: 48, fontWeight: '900' },
-  circleLabel: { fontSize: 14, color: COLORS.textSub, fontWeight: '600', marginTop: -4 },
-});
-
-// ── Mapa de lojas (usa react-native-maps se disponível) ───────────────────────
+// ── Mapa de lojas ─────────────────────────────────────────────────────────────
 
 function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
   const [MapView, setMapView] = useState(null);
-  const [Marker, setMarker] = useState(null);
+  const [Marker, setMarker]   = useState(null);
   const [mapReady, setMapReady] = useState(false);
 
   React.useEffect(() => {
@@ -19517,15 +19753,12 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
       setMapView(() => maps.default);
       setMarker(() => maps.Marker);
       setMapReady(true);
-    } catch {
-      setMapReady(false);
-    }
+    } catch { setMapReady(false); }
   }, [visible]);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
-        {/* Header */}
         <View style={m.header}>
           <TouchableOpacity onPress={onClose} style={m.closeBtn}>
             <Text style={m.closeBtnText}>‹ Fechar</Text>
@@ -19535,7 +19768,6 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
         </View>
 
         {!mapReady ? (
-          // Fallback: lista de lojas sem mapa
           <ScrollView contentContainerStyle={{ padding: 16 }}>
             <View style={m.noMapBanner}>
               <Text style={m.noMapText}>
@@ -19543,35 +19775,29 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
               </Text>
             </View>
             {lojas.map((loja, i) => (
-              <View key={i} style={m.lojaCard}>
-                <View style={m.lojaInfo}>
+              <AnimatedListItem key={i} index={i}>
+                <View style={m.lojaCard}>
                   <Text style={m.lojaNome}>{loja.nome}</Text>
                   <Text style={m.lojaMeta}>{loja.distancia} · {loja.endereco || ''}</Text>
                   {loja.avaliacao ? <Text style={m.lojaRating}>⭐ {loja.avaliacao}</Text> : null}
                 </View>
-              </View>
+              </AnimatedListItem>
             ))}
           </ScrollView>
         ) : (
           <View style={{ flex: 1 }}>
-            {/* Mapa */}
             {React.createElement(MapView, {
               style: { flex: 1 },
               initialRegion: {
-                latitude:      userLat || 38.7,
-                longitude:     userLng || -9.14,
-                latitudeDelta:  0.05,
-                longitudeDelta: 0.05,
+                latitude: userLat || 38.7, longitude: userLng || -9.14,
+                latitudeDelta: 0.05, longitudeDelta: 0.05,
               },
             },
-              // Marcador do utilizador
               userLat && React.createElement(Marker, {
                 key: 'user',
                 coordinate: { latitude: userLat, longitude: userLng },
-                title: 'A tua localização',
-                pinColor: COLORS.brand,
+                title: 'A tua localização', pinColor: COLORS.brand,
               }),
-              // Marcadores das lojas
               ...lojas.map((loja, i) =>
                 loja.lat && React.createElement(Marker, {
                   key: i,
@@ -19581,8 +19807,6 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
                 })
               )
             )}
-
-            {/* Lista overlay */}
             <View style={m.overlay}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ padding: 12, gap: 10 }}>
                 {lojas.map((loja, i) => (
@@ -19609,7 +19833,6 @@ const m = StyleSheet.create({
   noMapBanner: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, marginBottom: 16, alignItems: 'center' },
   noMapText: { color: COLORS.textSub, textAlign: 'center', lineHeight: 22 },
   lojaCard: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border },
-  lojaInfo: {},
   lojaNome: { fontSize: 15, fontWeight: '700', color: COLORS.text },
   lojaMeta: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
   lojaRating: { fontSize: 12, color: COLORS.yellow, marginTop: 4 },
@@ -19622,19 +19845,20 @@ const m = StyleSheet.create({
 // ── Ecrã principal ────────────────────────────────────────────────────────────
 
 export default function ScoreScreen() {
-  const [item, setItem]       = useState('');
-  const [preco, setPreco]     = useState('');
+  const [item, setItem]           = useState('');
+  const [preco, setPreco]         = useState('');
   const [categoria, setCategoria] = useState(CATEGORIAS[0]);
-  const [uso, setUso]         = useState('weekly');
-  const [loading, setLoading] = useState(false);
+  const [uso, setUso]             = useState('weekly');
+  const [loading, setLoading]     = useState(false);
   const [resultado, setResultado] = useState(null);
 
-  const [lojas, setLojas]     = useState([]);
+  const [lojas, setLojas]         = useState([]);
   const [lojasLoad, setLojasLoad] = useState(false);
-  const [showMapa, setShowMapa] = useState(false);
+  const [showMapa, setShowMapa]   = useState(false);
   const [userCoords, setUserCoords] = useState({ lat: null, lng: null });
 
   const scrollRef = useRef(null);
+  const { showToast, ToastComponent } = useToast();
 
   // ── Analisar ──────────────────────────────────────────────────────────────
 
@@ -19649,7 +19873,8 @@ export default function ScoreScreen() {
     try {
       const data = await scoreAPI.analisar({ item: item.trim(), preco: precoNum, categoria, uso });
       setResultado(data);
-      setTimeout(() => scrollRef.current?.scrollTo({ y: 400, animated: true }), 300);
+      showToast('Análise concluída!', 'success');
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 420, animated: true }), 400);
     } catch (e) {
       Alert.alert('Erro', e.message);
     } finally {
@@ -19670,7 +19895,6 @@ export default function ScoreScreen() {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude: lat, longitude: lng } = loc.coords;
       setUserCoords({ lat, lng });
-
       const data = await scoreAPI.lojasProximas({ item: item.trim(), categoria, lat, lng });
       setLojas(data.lojas || []);
       setShowMapa(true);
@@ -19681,133 +19905,162 @@ export default function ScoreScreen() {
     }
   };
 
+  const score = resultado?.score_final ?? resultado?.score ?? 0;
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <ScrollView ref={scrollRef} style={s.root} contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-      
-      {/* Título */}
-      <View style={s.hero}>
-        <Text style={s.heroTitle}>Valeu a Pena?</Text>
-        <Text style={s.heroSub}>Avalia qualquer compra com inteligência artificial.</Text>
-      </View>
+    <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
+      <ToastComponent />
+      <ScrollView
+        ref={scrollRef}
+        style={s.root}
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* Hero */}
+        <Animated.View entering={FadeInDown.duration(400).springify()}>
+          <View style={s.hero}>
+            <Text style={s.heroTitle}>Valeu a Pena?</Text>
+            <Text style={s.heroSub}>Avalia qualquer compra com inteligência artificial.</Text>
+          </View>
+        </Animated.View>
 
-      {/* Formulário */}
-      <View style={s.card}>
-        <Text style={s.label}>Produto / Serviço</Text>
-        <TextInput
-          style={s.input}
-          value={item}
-          onChangeText={setItem}
-          placeholder="Ex: Nike Air Max, iPhone 16, Café..."
-          placeholderTextColor={COLORS.textSub}
-        />
+        {/* Formulário */}
+        <Animated.View entering={FadeInDown.delay(80).duration(400).springify()} style={s.card}>
+          <Text style={s.label}>Produto / Serviço</Text>
+          <TextInput
+            style={s.input}
+            value={item}
+            onChangeText={setItem}
+            placeholder="Ex: Nike Air Max, iPhone 16, Café..."
+            placeholderTextColor={COLORS.textSub}
+          />
 
-        <Text style={s.label}>Preço Pago (€)</Text>
-        <TextInput
-          style={s.input}
-          value={preco}
-          onChangeText={setPreco}
-          placeholder="0.00"
-          placeholderTextColor={COLORS.textSub}
-          keyboardType="decimal-pad"
-        />
+          <Text style={s.label}>Preço Pago (€)</Text>
+          <TextInput
+            style={s.input}
+            value={preco}
+            onChangeText={setPreco}
+            placeholder="0.00"
+            placeholderTextColor={COLORS.textSub}
+            keyboardType="decimal-pad"
+          />
 
-        <Text style={s.label}>Categoria</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
-          <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
-            {CATEGORIAS.map(c => (
-              <TouchableOpacity key={c} style={[s.chip, categoria === c && s.chipActive]} onPress={() => setCategoria(c)}>
-                <Text style={[s.chipText, categoria === c && s.chipTextActive]}>{c}</Text>
+          <Text style={s.label}>Categoria</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+            <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+              {CATEGORIAS.map(c => (
+                <TouchableOpacity key={c} style={[s.chip, categoria === c && s.chipActive]} onPress={() => setCategoria(c)}>
+                  <Text style={[s.chipText, categoria === c && s.chipTextActive]}>{c}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
+          <Text style={s.label}>Frequência de Uso</Text>
+          <View style={s.usoGrid}>
+            {USO_OPCOES.map(u => (
+              <TouchableOpacity key={u.key} style={[s.usoBtn, uso === u.key && s.usoBtnActive]} onPress={() => setUso(u.key)}>
+                <Text style={s.usoEmoji}>{u.emoji}</Text>
+                <Text style={[s.usoLabel, uso === u.key && { color: COLORS.brand }]}>{u.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
-        </ScrollView>
 
-        <Text style={s.label}>Frequência de Uso</Text>
-        <View style={s.usoGrid}>
-          {USO_OPCOES.map(u => (
-            <TouchableOpacity key={u.key} style={[s.usoBtn, uso === u.key && s.usoBtnActive]} onPress={() => setUso(u.key)}>
-              <Text style={s.usoEmoji}>{u.emoji}</Text>
-              <Text style={[s.usoLabel, uso === u.key && { color: COLORS.brand }]}>{u.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+          <AnimatedButton onPress={handleAnalisar} disabled={loading} loading={loading} label="Analisar Compra" />
+        </Animated.View>
 
-        <TouchableOpacity style={[s.analyzeBtn, loading && { opacity: 0.6 }]} onPress={handleAnalisar} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.analyzeBtnText}>Analisar Compra</Text>}
-        </TouchableOpacity>
-      </View>
+        {/* Loading shimmer */}
+        {loading && (
+          <Animated.View entering={FadeIn.duration(300)}>
+            <ShimmerCard style={{ marginBottom: 16 }} />
+            <ShimmerCard style={{ marginBottom: 16 }} />
+          </Animated.View>
+        )}
 
-      {/* Resultado */}
-      {resultado && (
-        <View style={s.resultCard}>
-          {/* Score */}
-          <View style={s.scoreSection}>
-            <ScoreCircle score={resultado.score_final ?? resultado.score ?? 0} />
-            <Text style={[s.scoreLabel, { color: getScoreColor(resultado.score_final ?? resultado.score ?? 0) }]}>
-              {getScoreLabel(resultado.score_final ?? resultado.score ?? 0)}
-            </Text>
-          </View>
+        {/* Resultado — entra com stagger */}
+        {resultado && !loading && (
+          <>
+            {/* Score gauge animado */}
+            <Animated.View entering={FadeInDown.delay(0).duration(500).springify()} style={s.resultCard}>
+              <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 16 }}>
+                {/* ScoreGauge SVG — substitui ScoreCircle estático */}
+                <ScoreGauge score={score} size={220} strokeWidth={16} />
 
-          {/* Preço de mercado */}
-          {resultado.avaliacao_mercado && resultado.avaliacao_mercado.preco_medio && (
-            <View style={s.mercadoBox}>
-              <Text style={s.mercadoLabel}>Preço de mercado estimado</Text>
-              <Text style={s.mercadoPreco}>{resultado.avaliacao_mercado.preco_medio.toFixed(2)}€</Text>
-              <Text style={[s.mercadoAv, { color: getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).color }]}>
-                {getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).text}
-              </Text>
-              {resultado.avaliacao_mercado.comentario ? (
-                <Text style={s.mercadoCom}>{resultado.avaliacao_mercado.comentario}</Text>
-              ) : null}
-            </View>
-          )}
+                <MotiView
+                  from={{ opacity: 0, translateY: 12 }}
+                  animate={{ opacity: 1, translateY: 0 }}
+                  transition={{ type: 'timing', duration: 500, delay: 800 }}
+                >
+                  <Text style={[s.scoreLabel, { color: getScoreColor(score) }]}>
+                    {getScoreLabel(score)}
+                  </Text>
+                </MotiView>
+              </View>
+            </Animated.View>
 
-          {/* Fatores */}
-          {resultado.fatores && resultado.fatores.length > 0 && (
-            <View style={s.fatoresSection}>
-              <Text style={s.fatoresTitle}>Análise Detalhada</Text>
-              {resultado.fatores.map((f, i) => (
-                <View key={i} style={s.fatorRow}>
-                  <Text style={s.fatorNome}>{f.nome || f.label}</Text>
-                  <View style={s.fatorBarBg}>
-                    <View style={[s.fatorBar, { width: `${Math.min(f.score ?? f.valor ?? 0, 100)}%`, backgroundColor: getScoreColor(f.score ?? f.valor ?? 50) }]} />
-                  </View>
-                  <Text style={s.fatorVal}>{f.score ?? f.valor ?? 0}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Conselho da IA */}
-          {resultado.conselho && (
-            <View style={s.conselhoBox}>
-              <Text style={s.conselhoIcon}>✦</Text>
-              <Text style={s.conselhoText}>{resultado.conselho}</Text>
-            </View>
-          )}
-
-          {/* Lojas próximas */}
-          <TouchableOpacity style={[s.lojasBtn, lojasLoad && { opacity: 0.6 }]} onPress={handleLojas} disabled={lojasLoad}>
-            {lojasLoad ? (
-              <ActivityIndicator color={COLORS.brand} size="small" />
-            ) : (
-              <Text style={s.lojasBtnText}>📍 Ver Lojas Próximas</Text>
+            {/* Preço de mercado */}
+            {resultado.avaliacao_mercado?.preco_medio && (
+              <Animated.View entering={FadeInDown.delay(120).duration(400).springify()} style={s.mercadoBox}>
+                <Text style={s.mercadoLabel}>Preço de mercado estimado</Text>
+                <Text style={s.mercadoPreco}>{resultado.avaliacao_mercado.preco_medio.toFixed(2)}€</Text>
+                <Text style={[s.mercadoAv, { color: getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).color }]}>
+                  {getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).text}
+                </Text>
+                {resultado.avaliacao_mercado.comentario ? (
+                  <Text style={s.mercadoCom}>{resultado.avaliacao_mercado.comentario}</Text>
+                ) : null}
+              </Animated.View>
             )}
-          </TouchableOpacity>
-        </View>
-      )}
 
-      {/* Mapa */}
-      <MapaLojas
-        lojas={lojas}
-        userLat={userCoords.lat}
-        userLng={userCoords.lng}
-        visible={showMapa}
-        onClose={() => setShowMapa(false)}
-      />
-    </ScrollView>
+            {/* Fatores — barras animadas */}
+            {resultado.fatores?.length > 0 && (
+              <Animated.View entering={FadeInDown.delay(200).duration(400).springify()} style={s.resultCard}>
+                <Text style={s.fatoresTitle}>Análise Detalhada</Text>
+                {resultado.fatores.map((f, i) => (
+                  <View key={i} style={{ marginBottom: 14 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={s.fatorNome}>{f.nome || f.label}</Text>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: getScoreColor(f.score ?? f.valor ?? 50) }}>
+                        {f.score ?? f.valor ?? 0}
+                      </Text>
+                    </View>
+                    {/* AnimatedBar em vez da View estática */}
+                    <AnimatedBar
+                      pct={(f.score ?? f.valor ?? 0) / 100}
+                      color={getScoreColor(f.score ?? f.valor ?? 50)}
+                      height={7}
+                      delay={i * 100}
+                    />
+                  </View>
+                ))}
+              </Animated.View>
+            )}
+
+            {/* Conselho */}
+            {resultado.conselho && (
+              <Animated.View entering={FadeInDown.delay(300).duration(400).springify()} style={s.conselhoBox}>
+                <Text style={s.conselhoIcon}>✦</Text>
+                <Text style={s.conselhoText}>{resultado.conselho}</Text>
+              </Animated.View>
+            )}
+
+            {/* Lojas */}
+            <Animated.View entering={FadeInDown.delay(380).duration(400).springify()}>
+              <TouchableOpacity style={[s.lojasBtn, lojasLoad && { opacity: 0.6 }]} onPress={handleLojas} disabled={lojasLoad}>
+                {lojasLoad
+                  ? <ActivityIndicator color={COLORS.brand} size="small" />
+                  : <Text style={s.lojasBtnText}>📍 Ver Lojas Próximas</Text>
+                }
+              </TouchableOpacity>
+            </Animated.View>
+          </>
+        )}
+
+        <MapaLojas lojas={lojas} userLat={userCoords.lat} userLng={userCoords.lng} visible={showMapa} onClose={() => setShowMapa(false)} />
+      </ScrollView>
+    </View>
   );
 }
 
@@ -19820,7 +20073,8 @@ const s = StyleSheet.create({
   heroTitle: { fontSize: 28, fontWeight: '900', color: COLORS.text },
   heroSub: { fontSize: 14, color: COLORS.textSub, marginTop: 4 },
 
-  card: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
+  card: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
+  resultCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
 
   label: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 8, marginTop: 14 },
   input: { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
@@ -19836,34 +20090,25 @@ const s = StyleSheet.create({
   usoEmoji: { fontSize: 16 },
   usoLabel: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
 
-  analyzeBtn: { backgroundColor: COLORS.brand, borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 20 },
+  analyzeBtn: { backgroundColor: COLORS.brand, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
   analyzeBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
 
-  // Resultado
-  resultCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 20, borderWidth: 1, borderColor: COLORS.border },
+  scoreLabel: { fontSize: 18, fontWeight: '800', marginTop: 8 },
 
-  scoreSection: { alignItems: 'center', marginBottom: 20 },
-  scoreLabel: { fontSize: 18, fontWeight: '800', marginTop: 14 },
-
-  mercadoBox: { backgroundColor: COLORS.surface2, borderRadius: 12, padding: 16, marginBottom: 16, alignItems: 'center' },
+  mercadoBox: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
   mercadoLabel: { fontSize: 11, color: COLORS.textSub, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
   mercadoPreco: { fontSize: 26, fontWeight: '900', color: COLORS.text, marginBottom: 4 },
   mercadoAv: { fontSize: 14, fontWeight: '700' },
   mercadoCom: { fontSize: 12, color: COLORS.textSub, marginTop: 4, textAlign: 'center' },
 
-  fatoresSection: { marginBottom: 16 },
-  fatoresTitle: { fontSize: 13, fontWeight: '800', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 12 },
-  fatorRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
-  fatorNome: { fontSize: 12, color: COLORS.textSub, width: 100 },
-  fatorBarBg: { flex: 1, height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: 'hidden' },
-  fatorBar: { height: 6, borderRadius: 3 },
-  fatorVal: { fontSize: 12, fontWeight: '700', color: COLORS.text, width: 28, textAlign: 'right' },
+  fatoresTitle: { fontSize: 13, fontWeight: '800', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 16 },
+  fatorNome: { fontSize: 13, color: COLORS.textMid, fontWeight: '600' },
 
   conselhoBox: { flexDirection: 'row', gap: 10, backgroundColor: COLORS.brandDim, borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: COLORS.brand + '40' },
   conselhoIcon: { fontSize: 18, color: COLORS.brand },
   conselhoText: { flex: 1, fontSize: 14, color: COLORS.text, lineHeight: 20 },
 
-  lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface2, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border },
+  lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
   lojasBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
 });
 </file>
@@ -21987,6 +22232,433 @@ const pf = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
   logoutText: { fontSize: 15, fontWeight: '700', color: C.red },
+});
+</file>
+
+<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
+// src/screens/RetrospetivaMensalScreen.js — FASE 2
+// Usa o novo endpoint /api/v1/estatisticas/mensal com dados reais por mês
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, Dimensions,
+  Share, RefreshControl, Linking,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Animated, {
+  useSharedValue, useAnimatedStyle,
+  withTiming, withDelay,
+  FadeInDown, FadeIn, ZoomIn,
+  Easing,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import {
+  TrendingUp, TrendingDown, Award, Flame, Target,
+  BarChart2, Download, Share2, Calendar, Zap,
+  ChevronLeft, ChevronRight, ShoppingBag,
+} from 'lucide-react-native';
+import { apiFetch, getToken } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt  = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+const CAT_COLORS = [
+  '#7C6FE0','#00D68F','#FFB300','#FF5370',
+  '#45B7D1','#FF7340','#B06FE0','#E07090',
+];
+
+const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+
+// ─── Barra horizontal animada ─────────────────────────────────────────────────
+function AnimBar({ categoria, total, max, color, index }) {
+  const width = useSharedValue(0);
+
+  React.useEffect(() => {
+    const pct = max > 0 ? (total / max) * 100 : 0;
+    width.value = withDelay(
+      index * 80,
+      withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [total, max]);
+
+  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
+
+  return (
+    <Animated.View entering={FadeIn.delay(index * 60)}>
+      <View style={{ marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
+            {categoria}
+          </Text>
+          <Text style={{ fontSize: 12, color, fontWeight: '800' }}>{fmt(total)} €</Text>
+        </View>
+        <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+          <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Histograma de 6 meses ────────────────────────────────────────────────────
+function Histograma({ historico, mesAtivo }) {
+  if (!historico || historico.length === 0) return null;
+  const maxVal = Math.max(...historico.map(d => d.total), 1);
+  const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 90 }}>
+      {historico.map((d, i) => {
+        const pct    = d.total / maxVal;
+        const isAtivo = d.mes === mesAtivo;
+        const m = parseInt(d.mes.split('-')[1], 10) - 1;
+        const label = MESES_SHORT[m] || d.mes;
+
+        const height = useSharedValue(4);
+        React.useEffect(() => {
+          height.value = withDelay(i * 60, withTiming(Math.max(pct * 64, 4), {
+            duration: 650, easing: Easing.out(Easing.cubic),
+          }));
+        }, [d.total]);
+        const barStyle = useAnimatedStyle(() => ({ height: height.value }));
+
+        return (
+          <View key={i} style={{ flex: 1, alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+            <Animated.View style={[{
+              width: '100%',
+              backgroundColor: isAtivo ? C.brand : C.surface3,
+              borderRadius: 4,
+            }, barStyle]} />
+            <Text style={{
+              fontSize: 9, fontWeight: isAtivo ? '800' : '500',
+              color: isAtivo ? C.brand : C.textSub,
+            }}>
+              {label}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+// ─── Componente principal ─────────────────────────────────────────────────────
+export default function RetrospetivaMensalScreen({ navigation }) {
+  const now = new Date();
+  const [ano, setAno] = useState(now.getFullYear());
+  const [mes, setMes] = useState(now.getMonth() + 1); // 1-12
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [mesesDisponiveis, setMesesDisponiveis] = useState([]);
+
+  const carregar = useCallback(async (a = ano, m = mes) => {
+    try {
+      const res = await apiFetch(`/estatisticas/mensal?ano=${a}&mes=${m}`);
+      setData(res);
+      if (res.meses_disponiveis?.length) {
+        setMesesDisponiveis(res.meses_disponiveis);
+      }
+    } catch (e) {
+      console.error('RetrospetivaMensal:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [ano, mes]);
+
+  useFocusEffect(useCallback(() => { carregar(ano, mes); }, [ano, mes]));
+
+  const onRefresh = () => { setRefreshing(true); carregar(ano, mes); };
+
+  // Navegação mês a mês
+  const mesKey = `${ano}-${String(mes).padStart(2, '0')}`;
+  const idxAtual = mesesDisponiveis.indexOf(mesKey);
+  const podePrev = idxAtual > 0 || (idxAtual === -1 && mesesDisponiveis.length > 0);
+  const podeNext = idxAtual < mesesDisponiveis.length - 1;
+
+  const irParaMes = (chave) => {
+    const [a, m] = chave.split('-').map(Number);
+    setAno(a); setMes(m); setLoading(true); setData(null);
+  };
+
+  const navPrev = () => {
+    if (!podePrev) return;
+    const idx = idxAtual === -1 ? mesesDisponiveis.length - 1 : idxAtual - 1;
+    irParaMes(mesesDisponiveis[idx]);
+  };
+  const navNext = () => {
+    if (!podeNext) return;
+    irParaMes(mesesDisponiveis[idxAtual + 1]);
+  };
+
+  const partilhar = async () => {
+    if (!data) return;
+    try {
+      await Share.share({
+        message: `O meu resumo Verly de ${data.mes_nome} ${data.ano}:\n💸 ${fmt(data.total)} € gastos\n🏆 Categoria top: ${data.por_categoria?.[0]?.categoria || '—'}\n📱 verly.app`,
+      });
+    } catch {}
+  };
+
+  const exportarPDF = async () => {
+    try {
+      const token = await getToken();
+      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
+    } catch (e) { console.error('Exportar PDF:', e); }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const total       = data?.total || 0;
+  const comp        = data?.comparacao || {};
+  const variacao    = comp.variacao_pct;
+  const subiu       = comp.subiu;
+  const topCats     = (data?.por_categoria || []).slice(0, 6);
+  const maxCat      = topCats[0]?.total || 1;
+  const historico   = data?.historico || [];
+  const meta        = data?.meta_orcamento;
+  const topLoja     = data?.top_loja;
+  const maiscara    = data?.fatura_mais_cara;
+  const nomeMes     = data?.mes_nome || MESES_PT[mes - 1];
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
+      <ScrollView
+        style={styles.root}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.brand} />}
+      >
+        {/* Header com navegação */}
+        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+          <Pressable onPress={() => navigation?.goBack()} style={styles.backBtn} hitSlop={10}>
+            <ChevronLeft size={22} color={C.text} />
+          </Pressable>
+
+          <View style={styles.mesNav}>
+            <Pressable onPress={navPrev} style={[styles.navBtn, !podePrev && styles.navBtnDisabled]} hitSlop={10}>
+              <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
+            </Pressable>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={styles.headerLabel}>Retrospetiva</Text>
+              <Text style={styles.headerMes}>{nomeMes} {ano}</Text>
+            </View>
+            <Pressable onPress={navNext} style={[styles.navBtn, !podeNext && styles.navBtnDisabled]} hitSlop={10}>
+              <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
+            </Pressable>
+          </View>
+
+          <Pressable onPress={partilhar} style={styles.shareBtn}>
+            <Share2 size={16} color={C.brand} />
+          </Pressable>
+        </Animated.View>
+
+        {/* Hero — total gasto */}
+        <Animated.View entering={ZoomIn.delay(80).duration(500)} style={styles.heroCard}>
+          <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
+          <Text style={styles.heroValor}>{fmt(total)} €</Text>
+
+          {variacao != null && (
+            <View style={styles.variacaoRow}>
+              {subiu
+                ? <TrendingUp size={14} color={C.red} />
+                : <TrendingDown size={14} color={C.green} />
+              }
+              <Text style={[styles.variacaoText, { color: subiu ? C.red : C.green }]}>
+                {subiu ? '+' : '-'}{variacao}% vs mês anterior ({fmt(comp.total_anterior)} €)
+              </Text>
+            </View>
+          )}
+
+          {data?.num_faturas > 0 && (
+            <Text style={styles.heroSub}>
+              {data.num_faturas} fatura{data.num_faturas !== 1 ? 's' : ''} · média {fmt(data.media_fatura)} €
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Orçamento */}
+        {meta && (
+          <Animated.View entering={FadeInDown.delay(140).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Target size={15} color={meta.excedeu ? C.red : C.green} />
+              <Text style={styles.cardTitle}>Orçamento mensal</Text>
+              <Text style={[styles.pill, { backgroundColor: (meta.excedeu ? C.red : C.green) + '20', color: meta.excedeu ? C.red : C.green }]}>
+                {meta.excedeu ? 'Excedido' : 'Dentro do limite'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontSize: 13, color: C.textSub }}>{fmt(meta.gasto)} € de {fmt(meta.orcamento)} €</Text>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: meta.excedeu ? C.red : C.green }}>{meta.pct}%</Text>
+            </View>
+            <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+              <MotiView
+                from={{ width: '0%' }}
+                animate={{ width: `${Math.min(meta.pct, 100)}%` }}
+                transition={{ type: 'timing', duration: 800, delay: 300 }}
+                style={{ height: '100%', backgroundColor: meta.excedeu ? C.red : C.green, borderRadius: 4 }}
+              />
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Histograma */}
+        {historico.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(200).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <BarChart2 size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Evolução dos últimos 6 meses</Text>
+            </View>
+            <Histograma historico={historico} mesAtivo={mesKey} />
+          </Animated.View>
+        )}
+
+        {/* Categorias */}
+        {topCats.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(260).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Target size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+            </View>
+            {topCats.map((d, i) => (
+              <AnimBar
+                key={d.categoria}
+                categoria={d.categoria}
+                total={d.total}
+                max={maxCat}
+                color={CAT_COLORS[i % CAT_COLORS.length]}
+                index={i}
+              />
+            ))}
+          </Animated.View>
+        )}
+
+        {/* Destaques */}
+        {(topLoja || maiscara) && (
+          <Animated.View entering={FadeInDown.delay(320).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Award size={15} color={C.yellow} />
+              <Text style={styles.cardTitle}>Destaques do mês</Text>
+            </View>
+            {topLoja && (
+              <View style={styles.destaqueRow}>
+                <ShoppingBag size={14} color={C.brand} />
+                <Text style={styles.destaqueLabel}>Loja favorita</Text>
+                <Text style={styles.destaqueVal}>{topLoja.nome} · {fmt(topLoja.total)} €</Text>
+              </View>
+            )}
+            {maiscare && (
+              <View style={styles.destaqueRow}>
+                <Zap size={14} color={C.yellow} />
+                <Text style={styles.destaqueLabel}>Compra mais cara</Text>
+                <Text style={styles.destaqueVal}>{maiscare.loja} · {fmt(maiscare.total)} €</Text>
+              </View>
+            )}
+          </Animated.View>
+        )}
+
+        {/* Dica */}
+        <Animated.View entering={FadeInDown.delay(380).duration(380).springify()} style={[styles.card, styles.dicaCard]}>
+          <View style={styles.cardTitleRow}>
+            <Zap size={15} color={C.brand} />
+            <Text style={styles.cardTitle}>Dica para o próximo mês</Text>
+          </View>
+          {variacao != null && subiu && variacao > 15 ? (
+            <Text style={styles.dicaText}>
+              Gastaste {variacao}% mais do que no mês anterior. Tenta identificar o que mudou e define um teto concreto para o mês que vem.
+            </Text>
+          ) : variacao != null && !subiu && variacao > 10 ? (
+            <Text style={styles.dicaText}>
+              Excelente! Poupaste {variacao}% face ao mês anterior. Considera direcionar essa diferença ({fmt(Math.abs(comp.delta))} €) para poupança ou investimento.
+            </Text>
+          ) : (
+            <Text style={styles.dicaText}>
+              Gastos estáveis — sinal de consistência. A regra 50/30/20 sugere 20% do rendimento em poupança. Estás no caminho certo?
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Sem dados */}
+        {data?.num_faturas === 0 && (
+          <MotiView
+            from={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', damping: 18 }}
+            style={styles.emptyState}
+          >
+            <Text style={{ fontSize: 40 }}>📭</Text>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: C.text, marginTop: 12 }}>
+              Sem faturas em {nomeMes}
+            </Text>
+            <Text style={{ fontSize: 13, color: C.textSub, marginTop: 6, textAlign: 'center' }}>
+              Navega para outro mês ou adiciona faturas.
+            </Text>
+          </MotiView>
+        )}
+
+        {/* Exportar PDF */}
+        <Animated.View entering={FadeInDown.delay(440).duration(380).springify()}>
+          <Pressable onPress={exportarPDF} style={styles.exportBtn}>
+            <Download size={18} color="#fff" />
+            <Text style={styles.exportBtnText}>Exportar Relatório PDF</Text>
+          </Pressable>
+        </Animated.View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: C.bg },
+  content: { padding: 20, paddingBottom: 48 },
+  center:  { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+
+  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  backBtn:   { width: 36, height: 36, borderRadius: 10, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center' },
+  mesNav:    { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginHorizontal: 8 },
+  navBtn:    { padding: 4 },
+  navBtnDisabled: { opacity: 0.3 },
+  headerLabel: { fontSize: 10, color: C.textSub, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  headerMes:   { fontSize: 20, fontWeight: '900', color: C.text },
+  shareBtn:  { width: 36, height: 36, borderRadius: 10, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40', justifyContent: 'center', alignItems: 'center' },
+
+  heroCard:    { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 24, marginBottom: 16, alignItems: 'center' },
+  heroLabel:   { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  variacaoRow: { flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 10 },
+  variacaoText:{ fontSize: 13, fontWeight: '700' },
+  heroSub:     { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+
+  card:         { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 14 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  cardTitle:    { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
+  pill:         { fontSize: 10, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+
+  destaqueRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  destaqueLabel:{ fontSize: 12, color: C.textSub, fontWeight: '600', width: 100 },
+  destaqueVal:  { fontSize: 13, color: C.text, fontWeight: '700', flex: 1 },
+
+  dicaCard: { borderColor: C.brand + '30' },
+  dicaText: { fontSize: 13, color: C.textMid, lineHeight: 21 },
+
+  emptyState: { alignItems: 'center', paddingVertical: 40 },
+
+  exportBtn:     { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 6 },
+  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
 });
 </file>
 
@@ -28070,6 +28742,7 @@ import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import {
   Reveal, Card, Skeleton, SectionHeader,
   useScalePress, AnimatedListItem, PulseDot,
+  AnimatedCounter, GlowPulse,
 } from '../components/UI';
 
 const C   = COLORS;
@@ -28399,14 +29072,13 @@ function HeroCard({ data, onSearchPress }) {
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View>
             <Text style={s.label}>Gasto este mês</Text>
-            <MotiView
-              key={spent}
-              from={{ opacity: 0, translateY: 6 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: 'spring', damping: 18, delay: 80 }}
-            >
-              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(spent)} €</Text>
-            </MotiView>
+            <AnimatedCounter
+              value={spent}
+              suffix=" €"
+              decimals={2}
+              duration={1100}
+              style={[s.bigNum, { marginTop: 4 }]}
+            />
             {budget > 0 && <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>}
           </View>
           <Animated.View entering={FadeIn.delay(200)}>
@@ -28446,25 +29118,31 @@ function MetricsRow({ data }) {
 
   return (
     <View style={{ flexDirection: 'row', gap: 10, marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      {metrics.map((m, i) => (
-        <Animated.View
-          key={i}
-          entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
-          style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
-        >
-          {m.icon}
-          <MotiText
-            key={m.value}
-            from={{ opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: 'spring', damping: 16 }}
-            style={[s.metricVal, { color: m.color }]}
+      {metrics.map((m, i) => {
+        const hasAlert = i === 1 && (data?.alertas?.length ?? 0) > 0;
+        const inner = (
+          <Animated.View
+            key={i}
+            entering={FadeInDown.delay(80 + i * 60).duration(380).springify()}
+            style={[s.card, { flex: 1, padding: 14, alignItems: 'center', gap: 6 }]}
           >
-            {m.value}
-          </MotiText>
-          <Text style={s.label}>{m.label}</Text>
-        </Animated.View>
-      ))}
+            {m.icon}
+            <MotiText
+              key={m.value}
+              from={{ opacity: 0, scale: 0.7 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ type: 'spring', damping: 16 }}
+              style={[s.metricVal, { color: m.color }]}
+            >
+              {m.value}
+            </MotiText>
+            <Text style={s.label}>{m.label}</Text>
+          </Animated.View>
+        );
+        return hasAlert
+          ? <GlowPulse key={i} color={C.red} intensity={0.4} period={1800}>{inner}</GlowPulse>
+          : inner;
+      })}
     </View>
   );
 }
