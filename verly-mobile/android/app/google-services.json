@@ -14,14 +14,6 @@
       },
       "oauth_client": [
         {
-          "client_id": "667118060597-jtuepc1ti5suakbcn7ec9av4mc22piu7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.verly.app",
-            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
-          }
-        },
-        {
           "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
           "client_type": 3
         }
@@ -37,13 +29,6 @@
             {
               "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
               "client_type": 3
-            },
-            {
-              "client_id": "667118060597-n41e0frtf4slno15tofa3t83trhfjrdv.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.verly.app"
-              }
             }
           ]
         }
