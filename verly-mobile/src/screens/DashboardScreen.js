@@ -32,7 +32,7 @@ import {
   Receipt, Camera, Upload, FileText, Zap,
   ChevronRight, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Target, BarChart2,
-  Shield, Flame, Calendar, Download,
+  Shield, Flame, Calendar, Download, GripVertical,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -43,6 +43,9 @@ import {
   useScalePress, AnimatedListItem, PulseDot,
   AnimatedCounter, GlowPulse,
 } from '../components/UI';
+import { haptic } from '../utils/haptics';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -51,6 +54,8 @@ const initials = (name = '') =>
   name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PREFS_KEY = '@verly_dashboard_prefs';
+const CARDS_KEY = '@verly_card_order';
+const CARDS_DEFAULT = ['hero', 'metricas', 'poupanca', 'previsao', 'quicklinks', 'graficos', 'insights', 'subscricoes', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
   mostrarPoupanca: true,
@@ -976,7 +981,7 @@ function PrevisaoCard({ previsao, orcamento, navigation }) {
   return (
     <Animated.View entering={FadeInDown.delay(350).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <Pressable
-        onPress={() => navigation?.navigate('Retrospetiva')}
+        onPress={() => { haptic.light(); navigation?.navigate('Retrospetiva'); }}
         style={{
           backgroundColor: C.surface,
           borderRadius: RADIUS.lg,
@@ -1025,7 +1030,7 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
     <Animated.View entering={FadeInDown.delay(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Pressable
-          onPress={() => navigation?.navigate('Garantias')}
+          onPress={() => { haptic.light(); navigation?.navigate('Garantias'); }}
           style={{
             flex: 1,
             backgroundColor: C.surface,
@@ -1045,7 +1050,7 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
         </Pressable>
 
         <Pressable
-          onPress={() => navigation?.navigate('Retrospetiva')}
+          onPress={() => { haptic.light(); navigation?.navigate('Retrospetiva'); }}
           style={{
             flex: 1,
             backgroundColor: C.surface,
@@ -1068,6 +1073,9 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
 
 
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
+
+
+
 export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
   const insets    = useSafeAreaInsets();
@@ -1088,6 +1096,8 @@ export default function DashboardScreen({ navigation, route }) {
   const [previsao,     setPrevisao]     = useState(null);
   const [orcamento,    setOrcamento]    = useState(0);
   const [prefs,        setPrefs]        = useState(DEFAULT_PREFS);
+  const [cardOrder,    setCardOrder]    = useState(CARDS_DEFAULT);
+  const [editMode,     setEditMode]     = useState(false);
 
   const fetchNotifs = useCallback(async () => {
     setNotifLoad(true);
@@ -1139,6 +1149,25 @@ export default function DashboardScreen({ navigation, route }) {
     });
   }, []);
 
+  // Carrega ordem dos cards
+  useEffect(() => {
+    AsyncStorage.getItem(CARDS_KEY).then(saved => {
+      if (saved) { try { setCardOrder(JSON.parse(saved)); } catch {} }
+    });
+  }, []);
+
+  const saveCardOrder = (newOrder) => {
+    setCardOrder(newOrder);
+    AsyncStorage.setItem(CARDS_KEY, JSON.stringify(newOrder));
+  };
+
+  const moveCard = (fromIndex, toIndex) => {
+    const newOrder = [...cardOrder];
+    const [moved] = newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, moved);
+    saveCardOrder(newOrder);
+  };
+
   // Abre upload quando o + do header é pressionado
   useEffect(() => {
     if (route?.params?.openUpload) {
@@ -1159,6 +1188,49 @@ export default function DashboardScreen({ navigation, route }) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const { porCategoria, porMes } = normalizeDashboardData(data);
+
+
+  // Renderiza cada card pelo seu id
+  const renderCard = (id) => {
+    switch (id) {
+      case 'hero':
+        return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
+      case 'metricas':
+        return <MetricsRow key="metricas" data={data} />;
+      case 'poupanca':
+        return prefs.mostrarPoupanca ? <PoupancaCard key="poupanca" data={data} /> : null;
+      case 'previsao':
+        return prefs.mostrarPrevisao ? <PrevisaoCard key="previsao" previsao={previsao} orcamento={orcamento} navigation={navigation} /> : null;
+      case 'quicklinks':
+        return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
+      case 'graficos':
+        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} /> : null;
+      case 'insights':
+        return prefs.mostrarInsights ? <InsightsSection key="insights" mood={data?.mood} feed={data?.feed} /> : null;
+      case 'subscricoes':
+        return (prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0) ? (
+          <Animated.View key="subscricoes" entering={FadeInDown.delay(200).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+            <Pressable
+              onPress={() => { haptic.light(); navigation.navigate('Subscricoes'); }}
+              style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
+            >
+              <View style={[s.iconBox, { backgroundColor: C.red + '18' }]}>
+                <TrendingUp size={16} color={C.red} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.bodyText}>{data.subscricoes.count_danger} subscricao(oes) a desperdicar</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mes</Text>
+              </View>
+              <ChevronRight size={14} color={C.red} />
+            </Pressable>
+          </Animated.View>
+        ) : null;
+      case 'faturas':
+        return prefs.mostrarFaturas ? <RecentFaturas key="faturas" faturas={data?.ultimas_faturas} navigation={navigation} /> : null;
+      default:
+        return null;
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -1206,10 +1278,21 @@ export default function DashboardScreen({ navigation, route }) {
             <StreakBadge streak={streakDias} />
           </View>
 
-          {/* Direita — + e menu */}
+          {/* Direita — editar ordem, + e menu */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <TouchableOpacity
-              onPress={() => setUpload(true)}
+              onPress={() => { haptic.medium(); setEditMode(e => !e); }}
+              style={{
+                width: 34, height: 34, borderRadius: 10,
+                backgroundColor: editMode ? C.brand : C.surface2,
+                justifyContent: 'center', alignItems: 'center',
+                borderWidth: 1, borderColor: editMode ? C.brand : C.border,
+              }}
+            >
+              <GripVertical size={16} color={editMode ? '#fff' : C.textMid} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { haptic.medium(); setUpload(true); }}
               style={{
                 width: 34, height: 34, borderRadius: 10,
                 backgroundColor: C.brand,
@@ -1283,62 +1366,58 @@ export default function DashboardScreen({ navigation, route }) {
       )}
       <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} onUploadResult={setUploadResult} />
 
-      <ScrollView
-        style={{ flex: 1 }}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 130 }}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} colors={[C.brand]} />
-        }
-      >
-        <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-
-        {loading ? <LoadingSkeleton /> : (
-          <>
-            <HeroCard data={data} onSearchPress={() => setSearch(true)} />
-            <MetricsRow data={data} />
-            {prefs.mostrarPoupanca && (
-              <PoupancaCard data={data} />
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        {!editMode ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 130 }}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={() => { haptic.light(); load(true); }} tintColor={C.brand} colors={[C.brand]} />
+            }
+          >
+            <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+            {loading ? <LoadingSkeleton /> : (
+              cardOrder.map((id) => renderCard(id))
             )}
-            {prefs.mostrarPrevisao && (
-              <PrevisaoCard previsao={previsao} orcamento={orcamento} navigation={navigation} />
+          </ScrollView>
+        ) : (
+          <DraggableFlatList
+            data={cardOrder.filter(id => !!renderCard(id))}
+            keyExtractor={(id) => id}
+            onDragBegin={() => haptic.medium()}
+            onDragEnd={({ data }) => { haptic.success(); saveCardOrder(data); }}
+            contentContainerStyle={{ paddingBottom: 130 }}
+            ListHeaderComponent={() => (
+              <>
+                <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+                {loading && <LoadingSkeleton />}
+                <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
+                  <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
+                    Segura e arrasta os cards para reordenar. Toca em ⊞ para sair.
+                  </Text>
+                </Animated.View>
+              </>
             )}
-            <QuickLinks navigation={navigation} numGarantias={numGarantias} />
-            {prefs.mostrarGraficos && (
-              <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
-            )}
-            {prefs.mostrarInsights && (
-              <InsightsSection mood={data?.mood} feed={data?.feed} />
-            )}
-
-            {prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0 && (
-              <Animated.View
-                entering={FadeInDown.delay(200).duration(400).springify()}
-                style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}
-              >
-                <Pressable
-                  onPress={() => navigation.navigate('Subscricoes')}
-                  style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
-                >
-                  <View style={[s.iconBox, { backgroundColor: C.red + '18' }]}>
-                    <TrendingUp size={16} color={C.red} />
+            renderItem={({ item: id, drag, isActive }) => (
+              <ScaleDecorator activeScale={1.03}>
+                <Pressable onLongPress={drag} delayLongPress={150}>
+                  <View style={[
+                    { opacity: isActive ? 0.92 : 1 },
+                    isActive && { shadowColor: C.brand, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8 },
+                  ]}>
+                    <View style={s.dragIndicator}>
+                      <GripVertical size={14} color={C.brand} />
+                    </View>
+                    {renderCard(id)}
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.bodyText}>{data.subscricoes.count_danger} subscrição(ões) a desperdiçar</Text>
-                    <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mês</Text>
-                  </View>
-                  <ChevronRight size={14} color={C.red} />
                 </Pressable>
-              </Animated.View>
+              </ScaleDecorator>
             )}
-
-            {prefs.mostrarFaturas && (
-              <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
-            )}
-          </>
+          />
         )}
-      </ScrollView>
+      </GestureHandlerRootView>
 
         {/* ── Modal resultado do upload ── */}
         {uploadResult && (
@@ -1465,4 +1544,9 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
   tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
   tabTextActive: { color: C.brand },
+  dragIndicator: {
+    position: 'absolute', right: 20, top: '50%',
+    transform: [{ translateY: -10 }],
+    zIndex: 10, opacity: 0.6,
+  },
 });
