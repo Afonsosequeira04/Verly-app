@@ -169,14 +169,21 @@ verly-mobile/android/app/src/main/res/drawable-xxhdpi/splashscreen_logo.png
 verly-mobile/android/app/src/main/res/drawable-xxxhdpi/splashscreen_logo.png
 verly-mobile/android/app/src/main/res/drawable/ic_launcher_background.xml
 verly-mobile/android/app/src/main/res/drawable/rn_edit_text_material.xml
+verly-mobile/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+verly-mobile/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+verly-mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.webp
 verly-mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.webp
 verly-mobile/android/app/src/main/res/mipmap-hdpi/ic_launcher.webp
+verly-mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.webp
 verly-mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher_round.webp
 verly-mobile/android/app/src/main/res/mipmap-mdpi/ic_launcher.webp
+verly-mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.webp
 verly-mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp
 verly-mobile/android/app/src/main/res/mipmap-xhdpi/ic_launcher.webp
+verly-mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.webp
 verly-mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp
 verly-mobile/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.webp
+verly-mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.webp
 verly-mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp
 verly-mobile/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp
 verly-mobile/android/app/src/main/res/values-night/colors.xml
@@ -192,6 +199,9 @@ verly-mobile/android/gradlew.bat
 verly-mobile/android/settings.gradle
 verly-mobile/App.js
 verly-mobile/app.json
+verly-mobile/assets/adaptive-icon.png
+verly-mobile/assets/icon.png
+verly-mobile/assets/splash.png
 verly-mobile/babel.config.js
 verly-mobile/google-services.json
 verly-mobile/GoogleService-Info.plist
@@ -238,265 +248,6 @@ verly-mobile/src/utils/haptics.js
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="verly-mobile/src/components/DraggableDashboard.js">
-// src/components/DraggableDashboard.js
-// Drag & drop de cards no Dashboard usando react-native-reanimated
-// Sem dependencias novas — usa apenas Reanimated + Gesture Handler (ja instalados)
-//
-// Uso no DashboardScreen:
-//   import DraggableDashboard from '../components/DraggableDashboard';
-//
-//   const CARDS_DEFAULT = ['metricas', 'faturas', 'insights', 'metas'];
-//
-//   <DraggableDashboard
-//     cardOrder={cardOrder}
-//     onOrderChange={setCardOrder}
-//     renderCard={(id) => { ... }}
-//     cardHeight={120}
-//   />
-
-import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, LayoutAnimation, UIManager, Platform } from 'react-native';
-import Animated, {
-  useSharedValue, useAnimatedStyle,
-  withSpring, withTiming,
-  runOnJS,
-} from 'react-native-reanimated';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
-import { haptic } from '../utils/haptics';
-import { COLORS, RADIUS } from '../constants/theme';
-
-const C = COLORS;
-
-// Ativa LayoutAnimation no Android
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
-// Card individual draggavel
-function DraggableCard({ id, index, total, cardHeight, gap, onDragStart, onDragEnd, onDragMove, renderCard, isDragging, dragIndex }) {
-  const translateY = useSharedValue(0);
-  const scale      = useSharedValue(1);
-  const zIndex     = useSharedValue(0);
-  const opacity    = useSharedValue(1);
-  const startY     = useSharedValue(0);
-
-  const isBeingDragged = isDragging && dragIndex === index;
-
-  const gesture = Gesture.LongPress()
-    .minDuration(350)
-    .onStart(() => {
-      runOnJS(haptic.heavy)();
-      runOnJS(onDragStart)(index);
-      scale.value    = withSpring(1.04, { damping: 15, stiffness: 300 });
-      zIndex.value   = 999;
-      opacity.value  = withTiming(0.92, { duration: 150 });
-    });
-
-  const panGesture = Gesture.Pan()
-    .onUpdate((e) => {
-      if (!isBeingDragged) return;
-      translateY.value = e.translationY;
-      const newIndex = Math.round(index + e.translationY / (cardHeight + gap));
-      const clamped  = Math.max(0, Math.min(total - 1, newIndex));
-      runOnJS(onDragMove)(index, clamped);
-    })
-    .onEnd(() => {
-      translateY.value = withSpring(0, { damping: 20, stiffness: 300 });
-      scale.value      = withSpring(1, { damping: 18, stiffness: 280 });
-      zIndex.value     = 0;
-      opacity.value    = withTiming(1, { duration: 150 });
-      runOnJS(onDragEnd)();
-    });
-
-  const composed = Gesture.Simultaneous(gesture, panGesture);
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateY: translateY.value },
-      { scale: scale.value },
-    ],
-    zIndex: zIndex.value,
-    opacity: opacity.value,
-  }));
-
-  return (
-    <GestureDetector gesture={composed}>
-      <Animated.View style={[{ marginBottom: gap }, animStyle]}>
-        {renderCard(id, isBeingDragged)}
-      </Animated.View>
-    </GestureDetector>
-  );
-}
-
-// Lista draggavel
-export default function DraggableDashboard({
-  cardOrder,
-  onOrderChange,
-  renderCard,
-  cardHeight = 120,
-  gap = 12,
-}) {
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragIndex, setDragIndex]   = useState(null);
-  const orderRef = useRef(cardOrder);
-
-  const handleDragStart = useCallback((index) => {
-    setIsDragging(true);
-    setDragIndex(index);
-    orderRef.current = [...cardOrder];
-  }, [cardOrder]);
-
-  const handleDragMove = useCallback((fromIndex, toIndex) => {
-    if (fromIndex === toIndex) return;
-    const newOrder = [...orderRef.current];
-    const [moved]  = newOrder.splice(fromIndex, 1);
-    newOrder.splice(toIndex, 0, moved);
-
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    onOrderChange(newOrder);
-    orderRef.current = newOrder;
-    haptic.select();
-  }, [onOrderChange]);
-
-  const handleDragEnd = useCallback(() => {
-    setIsDragging(false);
-    setDragIndex(null);
-    haptic.medium();
-  }, []);
-
-  return (
-    <View>
-      {cardOrder.map((id, index) => (
-        <DraggableCard
-          key={id}
-          id={id}
-          index={index}
-          total={cardOrder.length}
-          cardHeight={cardHeight}
-          gap={gap}
-          onDragStart={handleDragStart}
-          onDragEnd={handleDragEnd}
-          onDragMove={handleDragMove}
-          renderCard={renderCard}
-          isDragging={isDragging}
-          dragIndex={dragIndex}
-        />
-      ))}
-      {isDragging && (
-        <View style={styles.hint}>
-          <Text style={styles.hintText}>Solta para confirmar</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  hint: {
-    position: 'absolute',
-    bottom: -36,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  hintText: {
-    fontSize: 11,
-    color: C.textSub,
-    fontWeight: '600',
-  },
-});
-</file>
-
-<file path="verly-mobile/src/hooks/useRetrospetiva.js">
-// src/hooks/useRetrospetiva.js
-// Cache local por periodo — evita fetch repetido ao navegar entre meses
-// Uso:
-//   const { data, loading, carregar, invalidar } = useRetrospetiva();
-//   carregar(2025, 5); // so faz fetch se nao tiver em cache
-
-import { useState, useCallback, useRef } from 'react';
-import { apiFetch } from '../services/api';
-
-export function useRetrospetiva() {
-  const cache = useRef({});  // { '2025-05': { ...dados } }
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [mesesDisponiveis, setMesesDisponiveis] = useState([]);
-
-  const carregar = useCallback(async (ano, mes, forceRefresh = false) => {
-    const chave = `${ano}-${String(mes).padStart(2, '0')}`;
-
-    // Se tiver em cache e nao for refresh forcado, usa o cache
-    if (!forceRefresh && cache.current[chave]) {
-      setData(cache.current[chave]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    try {
-      const res = await apiFetch(`/estatisticas/mensal?ano=${ano}&mes=${mes}`);
-      cache.current[chave] = res;
-      setData(res);
-      if (res.meses_disponiveis && res.meses_disponiveis.length) {
-        setMesesDisponiveis(res.meses_disponiveis);
-      }
-    } catch (e) {
-      console.error('useRetrospetiva:', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  const onRefresh = useCallback((ano, mes) => {
-    setRefreshing(true);
-    carregar(ano, mes, true); // forca novo fetch
-  }, [carregar]);
-
-  // Limpa o cache (ex: apos upload de nova fatura)
-  const invalidar = useCallback((ano, mes) => {
-    if (ano && mes) {
-      const chave = `${ano}-${String(mes).padStart(2, '0')}`;
-      delete cache.current[chave];
-    } else {
-      cache.current = {};
-    }
-  }, []);
-
-  return { data, loading, refreshing, mesesDisponiveis, carregar, onRefresh, invalidar, setLoading };
-}
-</file>
-
-<file path="verly-mobile/src/utils/haptics.js">
-// src/utils/haptics.js
-// Haptic feedback centralizado — usa expo-haptics
-// Uso: import { haptic } from '../utils/haptics';
-//      haptic.light()   — toque leve (botoes normais)
-//      haptic.medium()  — toque medio (acoes importantes)
-//      haptic.heavy()   — toque forte (erros, alertas)
-//      haptic.success() — padrao de sucesso
-//      haptic.error()   — padrao de erro
-
-import * as Haptics from 'expo-haptics';
-
-const safe = (fn) => async () => {
-  try { await fn(); } catch {}
-};
-
-export const haptic = {
-  light:   safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)),
-  medium:  safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)),
-  heavy:   safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)),
-  success: safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)),
-  error:   safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)),
-  warning: safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)),
-  select:  safe(() => Haptics.selectionAsync()),
-};
-</file>
 
 <file path="app/api/amizades.py">
 """
@@ -5405,36 +5156,24 @@ class MainApplication : Application(), ReactApplication {
 </inset>
 </file>
 
+<file path="verly-mobile/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/iconBackground"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+</file>
+
+<file path="verly-mobile/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml">
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/iconBackground"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+</file>
+
 <file path="verly-mobile/android/app/src/main/res/values-night/colors.xml">
 <resources/>
-</file>
-
-<file path="verly-mobile/android/app/src/main/res/values/colors.xml">
-<resources>
-  <color name="splashscreen_background">#FFFFFF</color>
-  <color name="colorPrimary">#023c69</color>
-  <color name="colorPrimaryDark">#ffffff</color>
-</resources>
-</file>
-
-<file path="verly-mobile/android/app/src/main/res/values/strings.xml">
-<resources>
-  <string name="app_name">Verly</string>
-</resources>
-</file>
-
-<file path="verly-mobile/android/app/src/main/res/values/styles.xml">
-<resources xmlns:tools="http://schemas.android.com/tools">
-  <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-    <item name="android:enforceNavigationBarContrast" tools:targetApi="29">true</item>
-    <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
-    <item name="colorPrimary">@color/colorPrimary</item>
-    <item name="android:statusBarColor">#ffffff</item>
-  </style>
-  <style name="Theme.App.SplashScreen" parent="AppTheme">
-    <item name="android:windowBackground">@drawable/ic_launcher_background</item>
-  </style>
-</resources>
 </file>
 
 <file path="verly-mobile/android/build.gradle">
@@ -6516,6 +6255,176 @@ const styles = StyleSheet.create({
 });
 </file>
 
+<file path="verly-mobile/src/components/DraggableDashboard.js">
+// src/components/DraggableDashboard.js
+// Drag & drop de cards no Dashboard usando react-native-reanimated
+// Sem dependencias novas — usa apenas Reanimated + Gesture Handler (ja instalados)
+//
+// Uso no DashboardScreen:
+//   import DraggableDashboard from '../components/DraggableDashboard';
+//
+//   const CARDS_DEFAULT = ['metricas', 'faturas', 'insights', 'metas'];
+//
+//   <DraggableDashboard
+//     cardOrder={cardOrder}
+//     onOrderChange={setCardOrder}
+//     renderCard={(id) => { ... }}
+//     cardHeight={120}
+//   />
+
+import React, { useCallback, useRef, useState } from 'react';
+import { View, Text, Pressable, StyleSheet, LayoutAnimation, UIManager, Platform } from 'react-native';
+import Animated, {
+  useSharedValue, useAnimatedStyle,
+  withSpring, withTiming,
+  runOnJS,
+} from 'react-native-reanimated';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { haptic } from '../utils/haptics';
+import { COLORS, RADIUS } from '../constants/theme';
+
+const C = COLORS;
+
+// Ativa LayoutAnimation no Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// Card individual draggavel
+function DraggableCard({ id, index, total, cardHeight, gap, onDragStart, onDragEnd, onDragMove, renderCard, isDragging, dragIndex }) {
+  const translateY = useSharedValue(0);
+  const scale      = useSharedValue(1);
+  const zIndex     = useSharedValue(0);
+  const opacity    = useSharedValue(1);
+  const startY     = useSharedValue(0);
+
+  const isBeingDragged = isDragging && dragIndex === index;
+
+  const gesture = Gesture.LongPress()
+    .minDuration(350)
+    .onStart(() => {
+      runOnJS(haptic.heavy)();
+      runOnJS(onDragStart)(index);
+      scale.value    = withSpring(1.04, { damping: 15, stiffness: 300 });
+      zIndex.value   = 999;
+      opacity.value  = withTiming(0.92, { duration: 150 });
+    });
+
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (!isBeingDragged) return;
+      translateY.value = e.translationY;
+      const newIndex = Math.round(index + e.translationY / (cardHeight + gap));
+      const clamped  = Math.max(0, Math.min(total - 1, newIndex));
+      runOnJS(onDragMove)(index, clamped);
+    })
+    .onEnd(() => {
+      translateY.value = withSpring(0, { damping: 20, stiffness: 300 });
+      scale.value      = withSpring(1, { damping: 18, stiffness: 280 });
+      zIndex.value     = 0;
+      opacity.value    = withTiming(1, { duration: 150 });
+      runOnJS(onDragEnd)();
+    });
+
+  const composed = Gesture.Simultaneous(gesture, panGesture);
+
+  const animStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+    zIndex: zIndex.value,
+    opacity: opacity.value,
+  }));
+
+  return (
+    <GestureDetector gesture={composed}>
+      <Animated.View style={[{ marginBottom: gap }, animStyle]}>
+        {renderCard(id, isBeingDragged)}
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+// Lista draggavel
+export default function DraggableDashboard({
+  cardOrder,
+  onOrderChange,
+  renderCard,
+  cardHeight = 120,
+  gap = 12,
+}) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragIndex, setDragIndex]   = useState(null);
+  const orderRef = useRef(cardOrder);
+
+  const handleDragStart = useCallback((index) => {
+    setIsDragging(true);
+    setDragIndex(index);
+    orderRef.current = [...cardOrder];
+  }, [cardOrder]);
+
+  const handleDragMove = useCallback((fromIndex, toIndex) => {
+    if (fromIndex === toIndex) return;
+    const newOrder = [...orderRef.current];
+    const [moved]  = newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, moved);
+
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    onOrderChange(newOrder);
+    orderRef.current = newOrder;
+    haptic.select();
+  }, [onOrderChange]);
+
+  const handleDragEnd = useCallback(() => {
+    setIsDragging(false);
+    setDragIndex(null);
+    haptic.medium();
+  }, []);
+
+  return (
+    <View>
+      {cardOrder.map((id, index) => (
+        <DraggableCard
+          key={id}
+          id={id}
+          index={index}
+          total={cardOrder.length}
+          cardHeight={cardHeight}
+          gap={gap}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragMove={handleDragMove}
+          renderCard={renderCard}
+          isDragging={isDragging}
+          dragIndex={dragIndex}
+        />
+      ))}
+      {isDragging && (
+        <View style={styles.hint}>
+          <Text style={styles.hintText}>Solta para confirmar</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  hint: {
+    position: 'absolute',
+    bottom: -36,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  hintText: {
+    fontSize: 11,
+    color: C.textSub,
+    fontWeight: '600',
+  },
+});
+</file>
+
 <file path="verly-mobile/src/context/RevenueCatContext.js">
 /**
  * src/context/RevenueCatContext.js
@@ -6633,6 +6542,68 @@ export function RevenueCatProvider({ children, userId }) {
 }
 
 export const useRevenueCat = () => useContext(RevenueCatContext);
+</file>
+
+<file path="verly-mobile/src/hooks/useRetrospetiva.js">
+// src/hooks/useRetrospetiva.js
+// Cache local por periodo — evita fetch repetido ao navegar entre meses
+// Uso:
+//   const { data, loading, carregar, invalidar } = useRetrospetiva();
+//   carregar(2025, 5); // so faz fetch se nao tiver em cache
+
+import { useState, useCallback, useRef } from 'react';
+import { apiFetch } from '../services/api';
+
+export function useRetrospetiva() {
+  const cache = useRef({});  // { '2025-05': { ...dados } }
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [mesesDisponiveis, setMesesDisponiveis] = useState([]);
+
+  const carregar = useCallback(async (ano, mes, forceRefresh = false) => {
+    const chave = `${ano}-${String(mes).padStart(2, '0')}`;
+
+    // Se tiver em cache e nao for refresh forcado, usa o cache
+    if (!forceRefresh && cache.current[chave]) {
+      setData(cache.current[chave]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    try {
+      const res = await apiFetch(`/estatisticas/mensal?ano=${ano}&mes=${mes}`);
+      cache.current[chave] = res;
+      setData(res);
+      if (res.meses_disponiveis && res.meses_disponiveis.length) {
+        setMesesDisponiveis(res.meses_disponiveis);
+      }
+    } catch (e) {
+      console.error('useRetrospetiva:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const onRefresh = useCallback((ano, mes) => {
+    setRefreshing(true);
+    carregar(ano, mes, true); // forca novo fetch
+  }, [carregar]);
+
+  // Limpa o cache (ex: apos upload de nova fatura)
+  const invalidar = useCallback((ano, mes) => {
+    if (ano && mes) {
+      const chave = `${ano}-${String(mes).padStart(2, '0')}`;
+      delete cache.current[chave];
+    } else {
+      cache.current = {};
+    }
+  }, []);
+
+  return { data, loading, refreshing, mesesDisponiveis, carregar, onRefresh, invalidar, setLoading };
+}
 </file>
 
 <file path="verly-mobile/src/screens/AmigosScreen.js">
@@ -8430,6 +8401,33 @@ const styles = StyleSheet.create({
   detalheCount: { fontSize: 12, color: C.textSub, minWidth: 24 },
   detalheTotal: { fontSize: 14, fontWeight: '800', color: C.brand, minWidth: 70, textAlign: 'right' },
 });
+</file>
+
+<file path="verly-mobile/src/utils/haptics.js">
+// src/utils/haptics.js
+// Haptic feedback centralizado — usa expo-haptics
+// Uso: import { haptic } from '../utils/haptics';
+//      haptic.light()   — toque leve (botoes normais)
+//      haptic.medium()  — toque medio (acoes importantes)
+//      haptic.heavy()   — toque forte (erros, alertas)
+//      haptic.success() — padrao de sucesso
+//      haptic.error()   — padrao de erro
+
+import * as Haptics from 'expo-haptics';
+
+const safe = (fn) => async () => {
+  try { await fn(); } catch {}
+};
+
+export const haptic = {
+  light:   safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)),
+  medium:  safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)),
+  heavy:   safe(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)),
+  success: safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)),
+  error:   safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)),
+  warning: safe(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning)),
+  select:  safe(() => Haptics.selectionAsync()),
+};
 </file>
 
 <file path="app/api/chat.py">
@@ -12369,128 +12367,35 @@ function renderizarMapa(lojas, item) {
 {% endblock %}
 </file>
 
-<file path="verly-mobile/android/app/google-services.json">
-{
-  "project_info": {
-    "project_number": "667118060597",
-    "project_id": "verly-app",
-    "storage_bucket": "verly-app.firebasestorage.app"
-  },
-  "client": [
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:667118060597:android:cbf48c9b0406f6fdb99d7c",
-        "android_client_info": {
-          "package_name": "com.verly.app"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "667118060597-jtuepc1ti5suakbcn7ec9av4mc22piu7.apps.googleusercontent.com",
-          "client_type": 1,
-          "android_info": {
-            "package_name": "com.verly.app",
-            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
-          }
-        },
-        {
-          "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyByQHExT4ClAipZPuNu2zeoE7WEAPPG2go"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": [
-            {
-              "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
-              "client_type": 3
-            },
-            {
-              "client_id": "667118060597-n41e0frtf4slno15tofa3t83trhfjrdv.apps.googleusercontent.com",
-              "client_type": 2,
-              "ios_info": {
-                "bundle_id": "com.verly.app"
-              }
-            }
-          ]
-        }
-      }
-    }
-  ],
-  "configuration_version": "1"
-}
+<file path="verly-mobile/android/app/src/main/res/values/colors.xml">
+<resources>
+  <color name="splashscreen_background">#0C081E</color>
+  <color name="iconBackground">#0C081E</color>
+  <color name="colorPrimary">#023c69</color>
+  <color name="colorPrimaryDark">#0C081E</color>
+</resources>
 </file>
 
-<file path="verly-mobile/android/app/src/main/AndroidManifest.xml">
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
-  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-  <uses-permission android:name="android.permission.INTERNET"/>
-  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-  <uses-permission android:name="android.permission.VIBRATE"/>
-  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-  <queries>
-    <intent>
-      <action android:name="android.intent.action.VIEW"/>
-      <category android:name="android.intent.category.BROWSABLE"/>
-      <data android:scheme="https"/>
-    </intent>
-  </queries>
-  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
-    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
-    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
-    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
-    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true">
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="exp+verly-mobile"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="verly"/>
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>
+<file path="verly-mobile/android/app/src/main/res/values/strings.xml">
+<resources>
+  <string name="app_name">Verly</string>
+  <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
+  <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
+</resources>
 </file>
 
-<file path="verly-mobile/app.json">
-{
-  "expo": {
-    "name": "Verly",
-    "slug": "verly-mobile",
-    "version": "1.0.0",
-    "platforms": ["ios", "android", "web"],
-    "android": {
-      "package": "com.verly.app",
-      "googleServicesFile": "./google-services.json"
-    },
-    "ios": {
-      "bundleIdentifier": "com.verly.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
-    },
-    "plugins": [
-      "@react-native-firebase/app",
-      "@react-native-firebase/auth",
-      "@react-native-google-signin/google-signin"
-    ]
-  }
-}
+<file path="verly-mobile/android/app/src/main/res/values/styles.xml">
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <item name="android:enforceNavigationBarContrast" tools:targetApi="29">true</item>
+    <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
+    <item name="colorPrimary">@color/colorPrimary</item>
+    <item name="android:statusBarColor">#0C081E</item>
+  </style>
+  <style name="Theme.App.SplashScreen" parent="AppTheme">
+    <item name="android:windowBackground">@drawable/ic_launcher_background</item>
+  </style>
+</resources>
 </file>
 
 <file path="verly-mobile/src/components/TabIcon.js">
@@ -16684,6 +16589,85 @@ with app.app_context():
         print(f'❌ FCM migration falhou: {e}')
 </file>
 
+<file path="verly-mobile/android/app/google-services.json">
+{
+  "project_info": {
+    "project_number": "667118060597",
+    "project_id": "verly-app",
+    "storage_bucket": "verly-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:667118060597:android:cbf48c9b0406f6fdb99d7c",
+        "android_client_info": {
+          "package_name": "com.verly.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyByQHExT4ClAipZPuNu2zeoE7WEAPPG2go"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "667118060597-ki0jv2und99igqr97ar9md33nvin6e1l.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
+</file>
+
+<file path="verly-mobile/android/app/src/main/AndroidManifest.xml">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <uses-permission android:name="android.permission.VIBRATE"/>
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.VIEW"/>
+      <category android:name="android.intent.category.BROWSABLE"/>
+      <data android:scheme="https"/>
+    </intent>
+  </queries>
+  <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+    <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
+    <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="exp+verly-mobile"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
+</file>
+
 <file path="verly-mobile/App.js">
 import 'react-native-gesture-handler';
 import React from 'react';
@@ -16709,6 +16693,40 @@ export default function App() {
       <AppWithRevenueCat />
     </AuthProvider>
   );
+}
+</file>
+
+<file path="verly-mobile/app.json">
+{
+  "expo": {
+    "name": "Verly",
+    "slug": "verly-mobile",
+    "version": "1.0.0",
+    "platforms": ["ios", "android", "web"],
+    "icon": "./assets/icon.png",
+    "splash": {
+      "image": "./assets/splash.png",
+      "backgroundColor": "#0C081E",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "com.verly.app",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0C081E"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.verly.app",
+      "googleServicesFile": "./GoogleService-Info.plist"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "@react-native-google-signin/google-signin"
+    ]
+  }
 }
 </file>
 
@@ -25517,459 +25535,6 @@ const s = StyleSheet.create({
 });
 </file>
 
-<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
-// src/screens/RetrospetivaMensalScreen.js — FASE 2 + cache + haptics
-
-import React, { useState, useCallback } from 'react';
-import {
-  View, Text, ScrollView, Pressable,
-  StyleSheet, ActivityIndicator, Dimensions,
-  Share, RefreshControl, Linking,
-} from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, {
-  useSharedValue, useAnimatedStyle,
-  withTiming, withDelay,
-  FadeInDown, FadeIn, ZoomIn,
-  Easing,
-} from 'react-native-reanimated';
-import { MotiView } from 'moti';
-import {
-  TrendingUp, TrendingDown, Award,
-  Target, BarChart2, Download, Share2, Zap,
-  ChevronLeft, ChevronRight, ShoppingBag,
-} from 'lucide-react-native';
-import { getToken } from '../services/api';
-import { useRetrospetiva } from '../hooks/useRetrospetiva';
-import { haptic } from '../utils/haptics';
-import { COLORS, RADIUS } from '../constants/theme';
-
-const C = COLORS;
-const W = Dimensions.get('window').width;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-
-const MESES_PT = ['Janeiro','Fevereiro','Marco','Abril','Maio','Junho',
-                  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-
-const CAT_COLORS = [
-  '#7C6FE0','#00D68F','#FFB300','#FF5370',
-  '#45B7D1','#FF7340','#B06FE0','#E07090',
-];
-
-const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-
-// Barra horizontal animada
-function AnimBar({ categoria, total, max, color, index }) {
-  const width = useSharedValue(0);
-
-  React.useEffect(() => {
-    const pct = max > 0 ? (total / max) * 100 : 0;
-    width.value = withDelay(
-      index * 80,
-      withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }),
-    );
-  }, [total, max]);
-
-  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
-
-  return (
-    <Animated.View entering={FadeIn.delay(index * 60)}>
-      <View style={{ marginBottom: 12 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-          <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
-            {categoria}
-          </Text>
-          <Text style={{ fontSize: 12, color, fontWeight: '800' }}>{fmt(total)} €</Text>
-        </View>
-        <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
-          <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
-        </View>
-      </View>
-    </Animated.View>
-  );
-}
-
-// Barra do histograma (componente proprio para evitar hooks em loops)
-function HistogramaBar({ d, i, maxVal, mesAtivo }) {
-  const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const pct = d.total / maxVal;
-  const isAtivo = d.mes === mesAtivo;
-  const m = parseInt(d.mes.split('-')[1], 10) - 1;
-  const label = MESES_SHORT[m] || d.mes;
-  const height = useSharedValue(4);
-
-  React.useEffect(() => {
-    height.value = withDelay(i * 60, withTiming(Math.max(pct * 64, 4), {
-      duration: 650, easing: Easing.out(Easing.cubic),
-    }));
-  }, [d.total]);
-
-  const barStyle = useAnimatedStyle(() => ({ height: height.value }));
-
-  return (
-    <View style={{ flex: 1, alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-      <Animated.View style={[{
-        width: '100%',
-        backgroundColor: isAtivo ? C.brand : C.surface3,
-        borderRadius: 4,
-      }, barStyle]} />
-      <Text style={{
-        fontSize: 9,
-        fontWeight: isAtivo ? '800' : '500',
-        color: isAtivo ? C.brand : C.textSub,
-      }}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-function Histograma({ historico, mesAtivo }) {
-  if (!historico || historico.length === 0) return null;
-  const maxVal = Math.max(...historico.map(d => d.total), 1);
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 90 }}>
-      {historico.map((d, i) => (
-        <HistogramaBar key={i} d={d} i={i} maxVal={maxVal} mesAtivo={mesAtivo} />
-      ))}
-    </View>
-  );
-}
-
-// Componente principal
-export default function RetrospetivaMensalScreen({ navigation }) {
-  const now = new Date();
-  const [ano, setAno] = useState(now.getFullYear());
-  const [mes, setMes] = useState(now.getMonth() + 1);
-
-  const {
-    data, loading, refreshing, mesesDisponiveis,
-    carregar, onRefresh, setLoading,
-  } = useRetrospetiva();
-
-  useFocusEffect(useCallback(() => {
-    setLoading(true);
-    carregar(ano, mes);
-  }, [ano, mes]));
-
-  const mesKey = `${ano}-${String(mes).padStart(2, '0')}`;
-  const idxAtual = mesesDisponiveis.indexOf(mesKey);
-  const podePrev = idxAtual > 0 || (idxAtual === -1 && mesesDisponiveis.length > 0);
-  const podeNext = idxAtual < mesesDisponiveis.length - 1;
-
-  const irParaMes = (chave) => {
-    const parts = chave.split('-');
-    const a = Number(parts[0]);
-    const m = Number(parts[1]);
-    setAno(a);
-    setMes(m);
-    setLoading(true);
-  };
-
-  const navPrev = () => {
-    if (!podePrev) return;
-    haptic.select();
-    const idx = idxAtual === -1 ? mesesDisponiveis.length - 1 : idxAtual - 1;
-    irParaMes(mesesDisponiveis[idx]);
-  };
-
-  const navNext = () => {
-    if (!podeNext) return;
-    haptic.select();
-    irParaMes(mesesDisponiveis[idxAtual + 1]);
-  };
-
-  const partilhar = async () => {
-    if (!data) return;
-    haptic.medium();
-    try {
-      await Share.share({
-        message: `O meu resumo Verly de ${data.mes_nome} ${data.ano}:\n💸 ${fmt(data.total)} euros gastos\n🏆 Categoria top: ${data.por_categoria && data.por_categoria[0] ? data.por_categoria[0].categoria : '-'}\n📱 verly.app`,
-      });
-    } catch (e) {}
-  };
-
-  const exportarPDF = async () => {
-    haptic.medium();
-    try {
-      const token = await getToken();
-      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
-    } catch (e) {
-      haptic.error();
-      console.error('Exportar PDF:', e);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={C.brand} />
-      </View>
-    );
-  }
-
-  const total    = data ? data.total || 0 : 0;
-  const comp     = data ? data.comparacao || {} : {};
-  const variacao = comp.variacao_pct;
-  const subiu    = comp.subiu;
-  const topCats  = data ? (data.por_categoria || []).slice(0, 6) : [];
-  const maxCat   = topCats.length > 0 ? topCats[0].total || 1 : 1;
-  const historico = data ? data.historico || [] : [];
-  const meta     = data ? data.meta_orcamento : null;
-  const topLoja  = data ? data.top_loja : null;
-  const maiscara = data ? data.fatura_mais_cara : null;
-  const nomeMes  = data ? data.mes_nome || MESES_PT[mes - 1] : MESES_PT[mes - 1];
-
-  return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
-      <ScrollView
-        style={styles.root}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => onRefresh(ano, mes)}
-            tintColor={C.brand}
-          />
-        }
-      >
-        {/* Header */}
-        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
-          <Pressable
-            onPress={() => { haptic.light(); navigation && navigation.goBack(); }}
-            style={styles.backBtn}
-            hitSlop={10}
-          >
-            <ChevronLeft size={22} color={C.text} />
-          </Pressable>
-
-          <View style={styles.mesNav}>
-            <Pressable
-              onPress={navPrev}
-              style={[styles.navBtn, !podePrev && styles.navBtnDisabled]}
-              hitSlop={10}
-            >
-              <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
-            </Pressable>
-            <View style={{ alignItems: 'center' }}>
-              <Text style={styles.headerLabel}>RETROSPETIVA</Text>
-              <Text style={styles.headerMes}>{nomeMes} {ano}</Text>
-            </View>
-            <Pressable
-              onPress={navNext}
-              style={[styles.navBtn, !podeNext && styles.navBtnDisabled]}
-              hitSlop={10}
-            >
-              <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
-            </Pressable>
-          </View>
-
-          <Pressable onPress={partilhar} style={styles.shareBtn}>
-            <Share2 size={16} color={C.brand} />
-          </Pressable>
-        </Animated.View>
-
-        {/* Hero total gasto */}
-        <Animated.View entering={ZoomIn.delay(80).duration(500)} style={styles.heroCard}>
-          <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
-          <Text style={styles.heroValor}>{fmt(total)} €</Text>
-
-          {variacao != null && (
-            <View style={styles.variacaoRow}>
-              {subiu
-                ? <TrendingUp size={14} color={C.red} />
-                : <TrendingDown size={14} color={C.green} />
-              }
-              <Text style={[styles.variacaoText, { color: subiu ? C.red : C.green }]}>
-                {subiu ? '+' : '-'}{variacao}% vs mes anterior ({fmt(comp.total_anterior)} €)
-              </Text>
-            </View>
-          )}
-
-          {data && data.num_faturas > 0 && (
-            <Text style={styles.heroSub}>
-              {data.num_faturas} fatura{data.num_faturas !== 1 ? 's' : ''} · media {fmt(data.media_fatura)} €
-            </Text>
-          )}
-        </Animated.View>
-
-        {/* Orcamento */}
-        {meta && (
-          <Animated.View entering={FadeInDown.delay(140).duration(380).springify()} style={styles.card}>
-            <View style={styles.cardTitleRow}>
-              <Target size={15} color={meta.excedeu ? C.red : C.green} />
-              <Text style={styles.cardTitle}>Orcamento mensal</Text>
-              <Text style={[styles.pill, {
-                backgroundColor: (meta.excedeu ? C.red : C.green) + '20',
-                color: meta.excedeu ? C.red : C.green,
-              }]}>
-                {meta.excedeu ? 'Excedido' : 'Dentro do limite'}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
-              <Text style={{ fontSize: 13, color: C.textSub }}>{fmt(meta.gasto)} € de {fmt(meta.orcamento)} €</Text>
-              <Text style={{ fontSize: 13, fontWeight: '800', color: meta.excedeu ? C.red : C.green }}>{meta.pct}%</Text>
-            </View>
-            <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-              <MotiView
-                from={{ width: '0%' }}
-                animate={{ width: `${Math.min(meta.pct, 100)}%` }}
-                transition={{ type: 'timing', duration: 800, delay: 300 }}
-                style={{ height: '100%', backgroundColor: meta.excedeu ? C.red : C.green, borderRadius: 4 }}
-              />
-            </View>
-          </Animated.View>
-        )}
-
-        {/* Histograma */}
-        {historico.length > 0 && (
-          <Animated.View entering={FadeInDown.delay(200).duration(380).springify()} style={styles.card}>
-            <View style={styles.cardTitleRow}>
-              <BarChart2 size={15} color={C.brand} />
-              <Text style={styles.cardTitle}>Evolucao dos ultimos 6 meses</Text>
-            </View>
-            <Histograma historico={historico} mesAtivo={mesKey} />
-          </Animated.View>
-        )}
-
-        {/* Categorias */}
-        {topCats.length > 0 && (
-          <Animated.View entering={FadeInDown.delay(260).duration(380).springify()} style={styles.card}>
-            <View style={styles.cardTitleRow}>
-              <Target size={15} color={C.brand} />
-              <Text style={styles.cardTitle}>Onde gastaste mais</Text>
-            </View>
-            {topCats.map((d, i) => (
-              <AnimBar
-                key={d.categoria}
-                categoria={d.categoria}
-                total={d.total}
-                max={maxCat}
-                color={CAT_COLORS[i % CAT_COLORS.length]}
-                index={i}
-              />
-            ))}
-          </Animated.View>
-        )}
-
-        {/* Destaques */}
-        {(topLoja || maiscara) && (
-          <Animated.View entering={FadeInDown.delay(320).duration(380).springify()} style={styles.card}>
-            <View style={styles.cardTitleRow}>
-              <Award size={15} color={C.yellow} />
-              <Text style={styles.cardTitle}>Destaques do mes</Text>
-            </View>
-            {topLoja && (
-              <View style={styles.destaqueRow}>
-                <ShoppingBag size={14} color={C.brand} />
-                <Text style={styles.destaqueLabel}>Loja favorita</Text>
-                <Text style={styles.destaqueVal}>{topLoja.nome} · {fmt(topLoja.total)} €</Text>
-              </View>
-            )}
-            {maiscara && (
-              <View style={styles.destaqueRow}>
-                <Zap size={14} color={C.yellow} />
-                <Text style={styles.destaqueLabel}>Compra mais cara</Text>
-                <Text style={styles.destaqueVal}>{maiscara.loja} · {fmt(maiscara.total)} €</Text>
-              </View>
-            )}
-          </Animated.View>
-        )}
-
-        {/* Dica */}
-        <Animated.View entering={FadeInDown.delay(380).duration(380).springify()} style={[styles.card, styles.dicaCard]}>
-          <View style={styles.cardTitleRow}>
-            <Zap size={15} color={C.brand} />
-            <Text style={styles.cardTitle}>Dica para o proximo mes</Text>
-          </View>
-          {variacao != null && subiu && variacao > 15 ? (
-            <Text style={styles.dicaText}>
-              Gastaste {variacao}% mais do que no mes anterior. Tenta identificar o que mudou e define um teto concreto para o mes que vem.
-            </Text>
-          ) : variacao != null && !subiu && variacao > 10 ? (
-            <Text style={styles.dicaText}>
-              Excelente! Poupaste {variacao}% face ao mes anterior. Considera direcionar essa diferenca para poupanca ou investimento.
-            </Text>
-          ) : (
-            <Text style={styles.dicaText}>
-              Gastos estaveis - sinal de consistencia. A regra 50/30/20 sugere 20% do rendimento em poupanca. Estas no caminho certo?
-            </Text>
-          )}
-        </Animated.View>
-
-        {/* Sem dados */}
-        {data && data.num_faturas === 0 && (
-          <MotiView
-            from={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ type: 'spring', damping: 18 }}
-            style={styles.emptyState}
-          >
-            <Text style={{ fontSize: 40 }}>📭</Text>
-            <Text style={{ fontSize: 16, fontWeight: '800', color: C.text, marginTop: 12 }}>
-              Sem faturas em {nomeMes}
-            </Text>
-            <Text style={{ fontSize: 13, color: C.textSub, marginTop: 6, textAlign: 'center' }}>
-              Navega para outro mes ou adiciona faturas.
-            </Text>
-          </MotiView>
-        )}
-
-        {/* Exportar PDF */}
-        <Animated.View entering={FadeInDown.delay(440).duration(380).springify()}>
-          <Pressable onPress={exportarPDF} style={styles.exportBtn}>
-            <Download size={18} color="#fff" />
-            <Text style={styles.exportBtnText}>Exportar Relatorio PDF</Text>
-          </Pressable>
-        </Animated.View>
-
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-const styles = StyleSheet.create({
-  root:    { flex: 1, backgroundColor: C.bg },
-  content: { padding: 20, paddingBottom: 48 },
-  center:  { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-
-  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
-  backBtn:   { width: 36, height: 36, borderRadius: 10, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center' },
-  mesNav:    { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginHorizontal: 8 },
-  navBtn:    { padding: 4 },
-  navBtnDisabled: { opacity: 0.3 },
-  headerLabel: { fontSize: 10, color: C.textSub, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
-  headerMes:   { fontSize: 20, fontWeight: '900', color: C.text },
-  shareBtn:  { width: 36, height: 36, borderRadius: 10, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40', justifyContent: 'center', alignItems: 'center' },
-
-  heroCard:    { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 24, marginBottom: 16, alignItems: 'center' },
-  heroLabel:   { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
-  variacaoRow: { flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 10 },
-  variacaoText: { fontSize: 13, fontWeight: '700' },
-  heroSub:     { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-
-  card:         { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 14 },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  cardTitle:    { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
-  pill:         { fontSize: 10, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
-
-  destaqueRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
-  destaqueLabel: { fontSize: 12, color: C.textSub, fontWeight: '600', width: 100 },
-  destaqueVal:   { fontSize: 13, color: C.text, fontWeight: '700', flex: 1 },
-
-  dicaCard: { borderColor: C.brand + '30' },
-  dicaText: { fontSize: 13, color: C.textMid, lineHeight: 21 },
-
-  emptyState: { alignItems: 'center', paddingVertical: 40 },
-
-  exportBtn:     { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 6 },
-  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
-});
-</file>
-
 <file path="app/faturas.py">
 """
 faturas.py — Gestão de faturas com validação segura de uploads
@@ -27810,6 +27375,459 @@ async function deleteFatura(id) {
 {% endblock %}
 </file>
 
+<file path="verly-mobile/src/screens/RetrospetivaMensalScreen.js">
+// src/screens/RetrospetivaMensalScreen.js — FASE 2 + cache + haptics
+
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  StyleSheet, ActivityIndicator, Dimensions,
+  Share, RefreshControl, Linking,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import Animated, {
+  useSharedValue, useAnimatedStyle,
+  withTiming, withDelay,
+  FadeInDown, FadeIn, ZoomIn,
+  Easing,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import {
+  TrendingUp, TrendingDown, Award,
+  Target, BarChart2, Download, Share2, Zap,
+  ChevronLeft, ChevronRight, ShoppingBag,
+} from 'lucide-react-native';
+import { getToken } from '../services/api';
+import { useRetrospetiva } from '../hooks/useRetrospetiva';
+import { haptic } from '../utils/haptics';
+import { COLORS, RADIUS } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const MESES_PT = ['Janeiro','Fevereiro','Marco','Abril','Maio','Junho',
+                  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+const CAT_COLORS = [
+  '#7C6FE0','#00D68F','#FFB300','#FF5370',
+  '#45B7D1','#FF7340','#B06FE0','#E07090',
+];
+
+const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+
+// Barra horizontal animada
+function AnimBar({ categoria, total, max, color, index }) {
+  const width = useSharedValue(0);
+
+  React.useEffect(() => {
+    const pct = max > 0 ? (total / max) * 100 : 0;
+    width.value = withDelay(
+      index * 80,
+      withTiming(pct, { duration: 700, easing: Easing.out(Easing.cubic) }),
+    );
+  }, [total, max]);
+
+  const barStyle = useAnimatedStyle(() => ({ width: `${width.value}%` }));
+
+  return (
+    <Animated.View entering={FadeIn.delay(index * 60)}>
+      <View style={{ marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Text style={{ fontSize: 12, color: C.textMid, fontWeight: '600' }} numberOfLines={1}>
+            {categoria}
+          </Text>
+          <Text style={{ fontSize: 12, color, fontWeight: '800' }}>{fmt(total)} €</Text>
+        </View>
+        <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' }}>
+          <Animated.View style={[{ height: '100%', backgroundColor: color, borderRadius: 3 }, barStyle]} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// Barra do histograma (componente proprio para evitar hooks em loops)
+function HistogramaBar({ d, i, maxVal, mesAtivo }) {
+  const MESES_SHORT = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const pct = d.total / maxVal;
+  const isAtivo = d.mes === mesAtivo;
+  const m = parseInt(d.mes.split('-')[1], 10) - 1;
+  const label = MESES_SHORT[m] || d.mes;
+  const height = useSharedValue(4);
+
+  React.useEffect(() => {
+    height.value = withDelay(i * 60, withTiming(Math.max(pct * 64, 4), {
+      duration: 650, easing: Easing.out(Easing.cubic),
+    }));
+  }, [d.total]);
+
+  const barStyle = useAnimatedStyle(() => ({ height: height.value }));
+
+  return (
+    <View style={{ flex: 1, alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+      <Animated.View style={[{
+        width: '100%',
+        backgroundColor: isAtivo ? C.brand : C.surface3,
+        borderRadius: 4,
+      }, barStyle]} />
+      <Text style={{
+        fontSize: 9,
+        fontWeight: isAtivo ? '800' : '500',
+        color: isAtivo ? C.brand : C.textSub,
+      }}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function Histograma({ historico, mesAtivo }) {
+  if (!historico || historico.length === 0) return null;
+  const maxVal = Math.max(...historico.map(d => d.total), 1);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, height: 90 }}>
+      {historico.map((d, i) => (
+        <HistogramaBar key={i} d={d} i={i} maxVal={maxVal} mesAtivo={mesAtivo} />
+      ))}
+    </View>
+  );
+}
+
+// Componente principal
+export default function RetrospetivaMensalScreen({ navigation }) {
+  const now = new Date();
+  const [ano, setAno] = useState(now.getFullYear());
+  const [mes, setMes] = useState(now.getMonth() + 1);
+
+  const {
+    data, loading, refreshing, mesesDisponiveis,
+    carregar, onRefresh, setLoading,
+  } = useRetrospetiva();
+
+  useFocusEffect(useCallback(() => {
+    setLoading(true);
+    carregar(ano, mes);
+  }, [ano, mes]));
+
+  const mesKey = `${ano}-${String(mes).padStart(2, '0')}`;
+  const idxAtual = mesesDisponiveis.indexOf(mesKey);
+  const podePrev = idxAtual > 0 || (idxAtual === -1 && mesesDisponiveis.length > 0);
+  const podeNext = idxAtual < mesesDisponiveis.length - 1;
+
+  const irParaMes = (chave) => {
+    const parts = chave.split('-');
+    const a = Number(parts[0]);
+    const m = Number(parts[1]);
+    setAno(a);
+    setMes(m);
+    setLoading(true);
+  };
+
+  const navPrev = () => {
+    if (!podePrev) return;
+    haptic.select();
+    const idx = idxAtual === -1 ? mesesDisponiveis.length - 1 : idxAtual - 1;
+    irParaMes(mesesDisponiveis[idx]);
+  };
+
+  const navNext = () => {
+    if (!podeNext) return;
+    haptic.select();
+    irParaMes(mesesDisponiveis[idxAtual + 1]);
+  };
+
+  const partilhar = async () => {
+    if (!data) return;
+    haptic.medium();
+    try {
+      await Share.share({
+        message: `O meu resumo Verly de ${data.mes_nome} ${data.ano}:\n💸 ${fmt(data.total)} euros gastos\n🏆 Categoria top: ${data.por_categoria && data.por_categoria[0] ? data.por_categoria[0].categoria : '-'}\n📱 verly.app`,
+      });
+    } catch (e) {}
+  };
+
+  const exportarPDF = async () => {
+    haptic.medium();
+    try {
+      const token = await getToken();
+      Linking.openURL(`${BASE_URL}/exportar/pdf?_token=${token}`);
+    } catch (e) {
+      haptic.error();
+      console.error('Exportar PDF:', e);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
+  }
+
+  const total    = data ? data.total || 0 : 0;
+  const comp     = data ? data.comparacao || {} : {};
+  const variacao = comp.variacao_pct;
+  const subiu    = comp.subiu;
+  const topCats  = data ? (data.por_categoria || []).slice(0, 6) : [];
+  const maxCat   = topCats.length > 0 ? topCats[0].total || 1 : 1;
+  const historico = data ? data.historico || [] : [];
+  const meta     = data ? data.meta_orcamento : null;
+  const topLoja  = data ? data.top_loja : null;
+  const maiscara = data ? data.fatura_mais_cara : null;
+  const nomeMes  = data ? data.mes_nome || MESES_PT[mes - 1] : MESES_PT[mes - 1];
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
+      <ScrollView
+        style={styles.root}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => onRefresh(ano, mes)}
+            tintColor={C.brand}
+          />
+        }
+      >
+        {/* Header */}
+        <Animated.View entering={FadeIn.duration(400)} style={styles.header}>
+          <Pressable
+            onPress={() => { haptic.light(); navigation && navigation.goBack(); }}
+            style={styles.backBtn}
+            hitSlop={10}
+          >
+            <ChevronLeft size={22} color={C.text} />
+          </Pressable>
+
+          <View style={styles.mesNav}>
+            <Pressable
+              onPress={navPrev}
+              style={[styles.navBtn, !podePrev && styles.navBtnDisabled]}
+              hitSlop={10}
+            >
+              <ChevronLeft size={18} color={podePrev ? C.text : C.textSub} />
+            </Pressable>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={styles.headerLabel}>RETROSPETIVA</Text>
+              <Text style={styles.headerMes}>{nomeMes} {ano}</Text>
+            </View>
+            <Pressable
+              onPress={navNext}
+              style={[styles.navBtn, !podeNext && styles.navBtnDisabled]}
+              hitSlop={10}
+            >
+              <ChevronRight size={18} color={podeNext ? C.text : C.textSub} />
+            </Pressable>
+          </View>
+
+          <Pressable onPress={partilhar} style={styles.shareBtn}>
+            <Share2 size={16} color={C.brand} />
+          </Pressable>
+        </Animated.View>
+
+        {/* Hero total gasto */}
+        <Animated.View entering={ZoomIn.delay(80).duration(500)} style={styles.heroCard}>
+          <Text style={styles.heroLabel}>Total gasto em {nomeMes}</Text>
+          <Text style={styles.heroValor}>{fmt(total)} €</Text>
+
+          {variacao != null && (
+            <View style={styles.variacaoRow}>
+              {subiu
+                ? <TrendingUp size={14} color={C.red} />
+                : <TrendingDown size={14} color={C.green} />
+              }
+              <Text style={[styles.variacaoText, { color: subiu ? C.red : C.green }]}>
+                {subiu ? '+' : '-'}{variacao}% vs mes anterior ({fmt(comp.total_anterior)} €)
+              </Text>
+            </View>
+          )}
+
+          {data && data.num_faturas > 0 && (
+            <Text style={styles.heroSub}>
+              {data.num_faturas} fatura{data.num_faturas !== 1 ? 's' : ''} · media {fmt(data.media_fatura)} €
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Orcamento */}
+        {meta && (
+          <Animated.View entering={FadeInDown.delay(140).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Target size={15} color={meta.excedeu ? C.red : C.green} />
+              <Text style={styles.cardTitle}>Orcamento mensal</Text>
+              <Text style={[styles.pill, {
+                backgroundColor: (meta.excedeu ? C.red : C.green) + '20',
+                color: meta.excedeu ? C.red : C.green,
+              }]}>
+                {meta.excedeu ? 'Excedido' : 'Dentro do limite'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <Text style={{ fontSize: 13, color: C.textSub }}>{fmt(meta.gasto)} € de {fmt(meta.orcamento)} €</Text>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: meta.excedeu ? C.red : C.green }}>{meta.pct}%</Text>
+            </View>
+            <View style={{ height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
+              <MotiView
+                from={{ width: '0%' }}
+                animate={{ width: `${Math.min(meta.pct, 100)}%` }}
+                transition={{ type: 'timing', duration: 800, delay: 300 }}
+                style={{ height: '100%', backgroundColor: meta.excedeu ? C.red : C.green, borderRadius: 4 }}
+              />
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Histograma */}
+        {historico.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(200).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <BarChart2 size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Evolucao dos ultimos 6 meses</Text>
+            </View>
+            <Histograma historico={historico} mesAtivo={mesKey} />
+          </Animated.View>
+        )}
+
+        {/* Categorias */}
+        {topCats.length > 0 && (
+          <Animated.View entering={FadeInDown.delay(260).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Target size={15} color={C.brand} />
+              <Text style={styles.cardTitle}>Onde gastaste mais</Text>
+            </View>
+            {topCats.map((d, i) => (
+              <AnimBar
+                key={d.categoria}
+                categoria={d.categoria}
+                total={d.total}
+                max={maxCat}
+                color={CAT_COLORS[i % CAT_COLORS.length]}
+                index={i}
+              />
+            ))}
+          </Animated.View>
+        )}
+
+        {/* Destaques */}
+        {(topLoja || maiscara) && (
+          <Animated.View entering={FadeInDown.delay(320).duration(380).springify()} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Award size={15} color={C.yellow} />
+              <Text style={styles.cardTitle}>Destaques do mes</Text>
+            </View>
+            {topLoja && (
+              <View style={styles.destaqueRow}>
+                <ShoppingBag size={14} color={C.brand} />
+                <Text style={styles.destaqueLabel}>Loja favorita</Text>
+                <Text style={styles.destaqueVal}>{topLoja.nome} · {fmt(topLoja.total)} €</Text>
+              </View>
+            )}
+            {maiscara && (
+              <View style={styles.destaqueRow}>
+                <Zap size={14} color={C.yellow} />
+                <Text style={styles.destaqueLabel}>Compra mais cara</Text>
+                <Text style={styles.destaqueVal}>{maiscara.loja} · {fmt(maiscara.total)} €</Text>
+              </View>
+            )}
+          </Animated.View>
+        )}
+
+        {/* Dica */}
+        <Animated.View entering={FadeInDown.delay(380).duration(380).springify()} style={[styles.card, styles.dicaCard]}>
+          <View style={styles.cardTitleRow}>
+            <Zap size={15} color={C.brand} />
+            <Text style={styles.cardTitle}>Dica para o proximo mes</Text>
+          </View>
+          {variacao != null && subiu && variacao > 15 ? (
+            <Text style={styles.dicaText}>
+              Gastaste {variacao}% mais do que no mes anterior. Tenta identificar o que mudou e define um teto concreto para o mes que vem.
+            </Text>
+          ) : variacao != null && !subiu && variacao > 10 ? (
+            <Text style={styles.dicaText}>
+              Excelente! Poupaste {variacao}% face ao mes anterior. Considera direcionar essa diferenca para poupanca ou investimento.
+            </Text>
+          ) : (
+            <Text style={styles.dicaText}>
+              Gastos estaveis - sinal de consistencia. A regra 50/30/20 sugere 20% do rendimento em poupanca. Estas no caminho certo?
+            </Text>
+          )}
+        </Animated.View>
+
+        {/* Sem dados */}
+        {data && data.num_faturas === 0 && (
+          <MotiView
+            from={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ type: 'spring', damping: 18 }}
+            style={styles.emptyState}
+          >
+            <Text style={{ fontSize: 40 }}>📭</Text>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: C.text, marginTop: 12 }}>
+              Sem faturas em {nomeMes}
+            </Text>
+            <Text style={{ fontSize: 13, color: C.textSub, marginTop: 6, textAlign: 'center' }}>
+              Navega para outro mes ou adiciona faturas.
+            </Text>
+          </MotiView>
+        )}
+
+        {/* Exportar PDF */}
+        <Animated.View entering={FadeInDown.delay(440).duration(380).springify()}>
+          <Pressable onPress={exportarPDF} style={styles.exportBtn}>
+            <Download size={18} color="#fff" />
+            <Text style={styles.exportBtnText}>Exportar Relatorio PDF</Text>
+          </Pressable>
+        </Animated.View>
+
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:    { flex: 1, backgroundColor: C.bg },
+  content: { padding: 20, paddingBottom: 48 },
+  center:  { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+
+  header:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
+  backBtn:   { width: 36, height: 36, borderRadius: 10, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center' },
+  mesNav:    { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, marginHorizontal: 8 },
+  navBtn:    { padding: 4 },
+  navBtnDisabled: { opacity: 0.3 },
+  headerLabel: { fontSize: 10, color: C.textSub, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  headerMes:   { fontSize: 20, fontWeight: '900', color: C.text },
+  shareBtn:  { width: 36, height: 36, borderRadius: 10, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '40', justifyContent: 'center', alignItems: 'center' },
+
+  heroCard:    { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 24, marginBottom: 16, alignItems: 'center' },
+  heroLabel:   { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
+  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  variacaoRow: { flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 10 },
+  variacaoText: { fontSize: 13, fontWeight: '700' },
+  heroSub:     { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+
+  card:         { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 14 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  cardTitle:    { fontSize: 13, fontWeight: '700', color: C.text, flex: 1 },
+  pill:         { fontSize: 10, fontWeight: '800', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20 },
+
+  destaqueRow:   { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  destaqueLabel: { fontSize: 12, color: C.textSub, fontWeight: '600', width: 100 },
+  destaqueVal:   { fontSize: 13, color: C.text, fontWeight: '700', flex: 1 },
+
+  dicaCard: { borderColor: C.brand + '30' },
+  dicaText: { fontSize: 13, color: C.textMid, lineHeight: 21 },
+
+  emptyState: { alignItems: 'center', paddingVertical: 40 },
+
+  exportBtn:     { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 6 },
+  exportBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+});
+</file>
+
 <file path="app/ai.py">
 import os
 import re
@@ -29215,7 +29233,7 @@ import {
   Receipt, Camera, Upload, FileText, Zap,
   ChevronRight, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Target, BarChart2,
-  Shield, Flame, Calendar, Download,
+  Shield, Flame, Calendar, Download, GripVertical,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -29226,6 +29244,9 @@ import {
   useScalePress, AnimatedListItem, PulseDot,
   AnimatedCounter, GlowPulse,
 } from '../components/UI';
+import { haptic } from '../utils/haptics';
+import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -29234,6 +29255,8 @@ const initials = (name = '') =>
   name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PREFS_KEY = '@verly_dashboard_prefs';
+const CARDS_KEY = '@verly_card_order';
+const CARDS_DEFAULT = ['hero', 'metricas', 'poupanca', 'previsao', 'quicklinks', 'graficos', 'insights', 'subscricoes', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
   mostrarPoupanca: true,
@@ -30159,7 +30182,7 @@ function PrevisaoCard({ previsao, orcamento, navigation }) {
   return (
     <Animated.View entering={FadeInDown.delay(350).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <Pressable
-        onPress={() => navigation?.navigate('Retrospetiva')}
+        onPress={() => { haptic.light(); navigation?.navigate('Retrospetiva'); }}
         style={{
           backgroundColor: C.surface,
           borderRadius: RADIUS.lg,
@@ -30208,7 +30231,7 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
     <Animated.View entering={FadeInDown.delay(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <Pressable
-          onPress={() => navigation?.navigate('Garantias')}
+          onPress={() => { haptic.light(); navigation?.navigate('Garantias'); }}
           style={{
             flex: 1,
             backgroundColor: C.surface,
@@ -30228,7 +30251,7 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
         </Pressable>
 
         <Pressable
-          onPress={() => navigation?.navigate('Retrospetiva')}
+          onPress={() => { haptic.light(); navigation?.navigate('Retrospetiva'); }}
           style={{
             flex: 1,
             backgroundColor: C.surface,
@@ -30251,6 +30274,9 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
 
 
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
+
+
+
 export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
   const insets    = useSafeAreaInsets();
@@ -30271,6 +30297,8 @@ export default function DashboardScreen({ navigation, route }) {
   const [previsao,     setPrevisao]     = useState(null);
   const [orcamento,    setOrcamento]    = useState(0);
   const [prefs,        setPrefs]        = useState(DEFAULT_PREFS);
+  const [cardOrder,    setCardOrder]    = useState(CARDS_DEFAULT);
+  const [editMode,     setEditMode]     = useState(false);
 
   const fetchNotifs = useCallback(async () => {
     setNotifLoad(true);
@@ -30322,6 +30350,25 @@ export default function DashboardScreen({ navigation, route }) {
     });
   }, []);
 
+  // Carrega ordem dos cards
+  useEffect(() => {
+    AsyncStorage.getItem(CARDS_KEY).then(saved => {
+      if (saved) { try { setCardOrder(JSON.parse(saved)); } catch {} }
+    });
+  }, []);
+
+  const saveCardOrder = (newOrder) => {
+    setCardOrder(newOrder);
+    AsyncStorage.setItem(CARDS_KEY, JSON.stringify(newOrder));
+  };
+
+  const moveCard = (fromIndex, toIndex) => {
+    const newOrder = [...cardOrder];
+    const [moved] = newOrder.splice(fromIndex, 1);
+    newOrder.splice(toIndex, 0, moved);
+    saveCardOrder(newOrder);
+  };
+
   // Abre upload quando o + do header é pressionado
   useEffect(() => {
     if (route?.params?.openUpload) {
@@ -30342,6 +30389,49 @@ export default function DashboardScreen({ navigation, route }) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const { porCategoria, porMes } = normalizeDashboardData(data);
+
+
+  // Renderiza cada card pelo seu id
+  const renderCard = (id) => {
+    switch (id) {
+      case 'hero':
+        return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
+      case 'metricas':
+        return <MetricsRow key="metricas" data={data} />;
+      case 'poupanca':
+        return prefs.mostrarPoupanca ? <PoupancaCard key="poupanca" data={data} /> : null;
+      case 'previsao':
+        return prefs.mostrarPrevisao ? <PrevisaoCard key="previsao" previsao={previsao} orcamento={orcamento} navigation={navigation} /> : null;
+      case 'quicklinks':
+        return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
+      case 'graficos':
+        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} /> : null;
+      case 'insights':
+        return prefs.mostrarInsights ? <InsightsSection key="insights" mood={data?.mood} feed={data?.feed} /> : null;
+      case 'subscricoes':
+        return (prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0) ? (
+          <Animated.View key="subscricoes" entering={FadeInDown.delay(200).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+            <Pressable
+              onPress={() => { haptic.light(); navigation.navigate('Subscricoes'); }}
+              style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
+            >
+              <View style={[s.iconBox, { backgroundColor: C.red + '18' }]}>
+                <TrendingUp size={16} color={C.red} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.bodyText}>{data.subscricoes.count_danger} subscricao(oes) a desperdicar</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mes</Text>
+              </View>
+              <ChevronRight size={14} color={C.red} />
+            </Pressable>
+          </Animated.View>
+        ) : null;
+      case 'faturas':
+        return prefs.mostrarFaturas ? <RecentFaturas key="faturas" faturas={data?.ultimas_faturas} navigation={navigation} /> : null;
+      default:
+        return null;
+    }
+  };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -30389,10 +30479,21 @@ export default function DashboardScreen({ navigation, route }) {
             <StreakBadge streak={streakDias} />
           </View>
 
-          {/* Direita — + e menu */}
+          {/* Direita — editar ordem, + e menu */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <TouchableOpacity
-              onPress={() => setUpload(true)}
+              onPress={() => { haptic.medium(); setEditMode(e => !e); }}
+              style={{
+                width: 34, height: 34, borderRadius: 10,
+                backgroundColor: editMode ? C.brand : C.surface2,
+                justifyContent: 'center', alignItems: 'center',
+                borderWidth: 1, borderColor: editMode ? C.brand : C.border,
+              }}
+            >
+              <GripVertical size={16} color={editMode ? '#fff' : C.textMid} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { haptic.medium(); setUpload(true); }}
               style={{
                 width: 34, height: 34, borderRadius: 10,
                 backgroundColor: C.brand,
@@ -30466,62 +30567,58 @@ export default function DashboardScreen({ navigation, route }) {
       )}
       <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} onUploadResult={setUploadResult} />
 
-      <ScrollView
-        style={{ flex: 1 }}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 130 }}
-        keyboardShouldPersistTaps="handled"
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} colors={[C.brand]} />
-        }
-      >
-        <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-
-        {loading ? <LoadingSkeleton /> : (
-          <>
-            <HeroCard data={data} onSearchPress={() => setSearch(true)} />
-            <MetricsRow data={data} />
-            {prefs.mostrarPoupanca && (
-              <PoupancaCard data={data} />
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        {!editMode ? (
+          <ScrollView
+            style={{ flex: 1 }}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 130 }}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={() => { haptic.light(); load(true); }} tintColor={C.brand} colors={[C.brand]} />
+            }
+          >
+            <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+            {loading ? <LoadingSkeleton /> : (
+              cardOrder.map((id) => renderCard(id))
             )}
-            {prefs.mostrarPrevisao && (
-              <PrevisaoCard previsao={previsao} orcamento={orcamento} navigation={navigation} />
+          </ScrollView>
+        ) : (
+          <DraggableFlatList
+            data={cardOrder.filter(id => !!renderCard(id))}
+            keyExtractor={(id) => id}
+            onDragBegin={() => haptic.medium()}
+            onDragEnd={({ data }) => { haptic.success(); saveCardOrder(data); }}
+            contentContainerStyle={{ paddingBottom: 130 }}
+            ListHeaderComponent={() => (
+              <>
+                <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+                {loading && <LoadingSkeleton />}
+                <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
+                  <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
+                    Segura e arrasta os cards para reordenar. Toca em ⊞ para sair.
+                  </Text>
+                </Animated.View>
+              </>
             )}
-            <QuickLinks navigation={navigation} numGarantias={numGarantias} />
-            {prefs.mostrarGraficos && (
-              <ChartsSection porCategoria={porCategoria} porMes={porMes} navigation={navigation} />
-            )}
-            {prefs.mostrarInsights && (
-              <InsightsSection mood={data?.mood} feed={data?.feed} />
-            )}
-
-            {prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0 && (
-              <Animated.View
-                entering={FadeInDown.delay(200).duration(400).springify()}
-                style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}
-              >
-                <Pressable
-                  onPress={() => navigation.navigate('Subscricoes')}
-                  style={[s.card, { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderColor: C.red + '30' }]}
-                >
-                  <View style={[s.iconBox, { backgroundColor: C.red + '18' }]}>
-                    <TrendingUp size={16} color={C.red} />
+            renderItem={({ item: id, drag, isActive }) => (
+              <ScaleDecorator activeScale={1.03}>
+                <Pressable onLongPress={drag} delayLongPress={150}>
+                  <View style={[
+                    { opacity: isActive ? 0.92 : 1 },
+                    isActive && { shadowColor: C.brand, shadowOpacity: 0.3, shadowRadius: 12, elevation: 8 },
+                  ]}>
+                    <View style={s.dragIndicator}>
+                      <GripVertical size={14} color={C.brand} />
+                    </View>
+                    {renderCard(id)}
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.bodyText}>{data.subscricoes.count_danger} subscrição(ões) a desperdiçar</Text>
-                    <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mês</Text>
-                  </View>
-                  <ChevronRight size={14} color={C.red} />
                 </Pressable>
-              </Animated.View>
+              </ScaleDecorator>
             )}
-
-            {prefs.mostrarFaturas && (
-              <RecentFaturas faturas={data?.ultimas_faturas} navigation={navigation} />
-            )}
-          </>
+          />
         )}
-      </ScrollView>
+      </GestureHandlerRootView>
 
         {/* ── Modal resultado do upload ── */}
         {uploadResult && (
@@ -30648,60 +30745,12 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
   tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
   tabTextActive: { color: C.brand },
+  dragIndicator: {
+    position: 'absolute', right: 20, top: '50%',
+    transform: [{ translateY: -10 }],
+    zIndex: 10, opacity: 0.6,
+  },
 });
-</file>
-
-<file path="verly-mobile/package.json">
-{
-  "name": "verly-mobile",
-  "version": "1.0.0",
-  "main": "node_modules/expo/AppEntry.js",
-  "scripts": {
-    "start": "expo start",
-    "android": "expo run:android",
-    "ios": "expo run:ios",
-    "web": "expo start --web"
-  },
-  "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
-    "@react-native-firebase/app": "^24.0.0",
-    "@react-native-firebase/auth": "^24.0.0",
-    "@react-native-google-signin/google-signin": "^16.1.2",
-    "@react-navigation/bottom-tabs": "^6.5.11",
-    "@react-navigation/drawer": "^6.7.2",
-    "@react-navigation/native": "^6.1.9",
-    "@react-navigation/native-stack": "^7.14.14",
-    "@react-navigation/stack": "^6.3.20",
-    "axios": "^1.6.7",
-    "expo": "^54.0.34",
-    "expo-dev-client": "~6.0.21",
-    "expo-document-picker": "~14.0.8",
-    "expo-image-picker": "~17.0.11",
-    "expo-linear-gradient": "~15.0.8",
-    "expo-location": "~19.0.8",
-    "expo-status-bar": "~3.0.9",
-    "lucide-react-native": "^0.322.0",
-    "moti": "^0.30.0",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-native": "0.81.5",
-    "react-native-gesture-handler": "~2.28.0",
-    "react-native-maps": "1.20.1",
-    "react-native-purchases": "^10.1.1",
-    "react-native-purchases-ui": "^10.1.1",
-    "react-native-reanimated": "~4.1.1",
-    "react-native-safe-area-context": "~5.6.0",
-    "react-native-screens": "~4.16.0",
-    "react-native-svg": "15.12.1",
-    "react-native-web": "^0.21.0",
-    "react-native-webview": "13.15.0",
-    "react-native-worklets": "^0.8.3"
-  },
-  "devDependencies": {
-    "@babel/core": "^7.20.0"
-  },
-  "private": true
-}
 </file>
 
 <file path="templates/base.html">
@@ -31558,6 +31607,61 @@ const s = StyleSheet.create({
 </script>
 </body>
 </html>
+</file>
+
+<file path="verly-mobile/package.json">
+{
+  "name": "verly-mobile",
+  "version": "1.0.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-firebase/app": "^24.0.0",
+    "@react-native-firebase/auth": "^24.0.0",
+    "@react-native-google-signin/google-signin": "^16.1.2",
+    "@react-navigation/bottom-tabs": "^6.5.11",
+    "@react-navigation/drawer": "^6.7.2",
+    "@react-navigation/native": "^6.1.9",
+    "@react-navigation/native-stack": "^7.14.14",
+    "@react-navigation/stack": "^6.3.20",
+    "axios": "^1.6.7",
+    "expo": "^54.0.34",
+    "expo-dev-client": "~6.0.21",
+    "expo-document-picker": "~14.0.8",
+    "expo-haptics": "~15.0.8",
+    "expo-image-picker": "~17.0.11",
+    "expo-linear-gradient": "~15.0.8",
+    "expo-location": "~19.0.8",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^0.322.0",
+    "moti": "^0.30.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-draggable-flatlist": "^4.0.3",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-maps": "1.20.1",
+    "react-native-purchases": "^10.1.1",
+    "react-native-purchases-ui": "^10.1.1",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-web": "^0.21.0",
+    "react-native-webview": "13.15.0",
+    "react-native-worklets": "^0.8.3"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  },
+  "private": true
+}
 </file>
 
 <file path="verly-mobile/src/navigation/AppNavigator.js">
