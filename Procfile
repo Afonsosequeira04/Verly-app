@@ -1,1 +1,1 @@
-python migrate_prod.py && gunicorn run:flask_app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+web: python migrate_prod.py && gunicorn run:flask_app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
