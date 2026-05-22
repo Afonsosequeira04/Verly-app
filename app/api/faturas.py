@@ -1,19 +1,20 @@
 """
 app/api/faturas.py — CRUD de faturas para o mobile
 
-GET    /api/v1/faturas           → lista
-POST   /api/v1/faturas/upload    → upload de ficheiro
-GET    /api/v1/faturas/<id>      → detalhe
-DELETE /api/v1/faturas/<id>      → apagar
+GET    /api/v1/faturas              → lista
+POST   /api/v1/faturas/upload       → upload (R2 + OCR em background)
+GET    /api/v1/faturas/<id>         → detalhe
+GET    /api/v1/faturas/<id>/url     → signed URL para download
+DELETE /api/v1/faturas/<id>         → apagar (R2 + DB + Qdrant)
 """
 
-import os
 import json
 import logging
-from flask import request, jsonify, current_app
+from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Fatura, CATEGORIAS
+from app.extensions import limiter
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -35,8 +36,11 @@ def _fatura_to_dict(f):
         'categoria':      f.categoria or 'Outros',
         'data_garantia':  f.data_garantia,
         'data_devolucao': f.data_devolucao,
+        'has_file':       bool(f.file_key),   # indica se tem ficheiro no R2
     }
 
+
+# ── Listar ────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/faturas', methods=['GET'])
 @jwt_required()
@@ -77,6 +81,8 @@ def listar_faturas():
     })
 
 
+# ── Detalhe ───────────────────────────────────────────────────────────────────
+
 @api_bp.route('/faturas/<int:fatura_id>', methods=['GET'])
 @jwt_required()
 def detalhe_fatura(fatura_id):
@@ -85,32 +91,42 @@ def detalhe_fatura(fatura_id):
     return jsonify(_fatura_to_dict(f))
 
 
-@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+# ── Signed URL para download ──────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>/url', methods=['GET'])
 @jwt_required()
-def apagar_fatura(fatura_id):
+def fatura_signed_url(fatura_id):
+    """Devolve URL assinada temporária (15 min) para download seguro do ficheiro."""
     user_id = int(get_jwt_identity())
     f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-    db.session.delete(f)
-    db.session.commit()
-    return jsonify({'success': True})
 
+    if not f.file_key:
+        return jsonify({'erro': 'Ficheiro não disponível no R2.'}), 404
+
+    from app.r2_service import get_signed_url
+    url = get_signed_url(f.file_key, expires_in=900)   # 15 min
+    return jsonify({'url': url, 'expires_in': 900})
+
+
+# ── Upload ────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/faturas/upload', methods=['POST'])
 @jwt_required()
+@limiter.limit("20 per hour", key_func=lambda: get_jwt_identity())
 def upload_fatura():
     """
     Upload de fatura via multipart/form-data.
-    O processamento é igual ao da web app.
+    1. Valida o ficheiro (extensão + magic bytes)
+    2. Faz upload para o Cloudflare R2
+    3. Cria registo na DB com status 'processing'
+    4. Dispara task Celery para OCR em background
+    5. Retorna 202 imediatamente (o cliente deve fazer polling ou usar push)
     """
-    from app.ai import get_user_paths, rebuild_index, extract_invoice_info
-    from security import validate_upload, sanitize_filename, check_rate_limit
+    from security import validate_upload, sanitize_filename
+    from app.r2_service import upload_file
+    from app.tasks.ocr import processar_ocr_task
 
     user_id = int(get_jwt_identity())
-
-    rate_key = f'upload:{user_id}'
-    allowed, _ = check_rate_limit(rate_key, max_requests=20, window_seconds=3600)
-    if not allowed:
-        return jsonify({'error': 'Demasiados uploads. Tenta em 1 hora.'}), 429
 
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum ficheiro enviado.'}), 400
@@ -119,8 +135,8 @@ def upload_fatura():
     if not file or file.filename == '':
         return jsonify({'error': 'Ficheiro inválido.'}), 400
 
-    allowed_ext = current_app.config.get('ALLOWED_EXTENSIONS', {'.pdf', '.png', '.jpg', '.jpeg', '.txt'})
-    is_valid, error_msg = validate_upload(file, allowed_ext)
+    # Validar (extensão + magic bytes) — usa o security.py existente
+    is_valid, error_msg, mime = validate_upload(file)
     if not is_valid:
         return jsonify({'error': error_msg}), 400
 
@@ -128,49 +144,55 @@ def upload_fatura():
     if not safe_name:
         return jsonify({'error': 'Nome de ficheiro inválido.'}), 400
 
-    data_dir, storage_dir = get_user_paths(
-        current_app.config['UPLOAD_FOLDER'],
-        current_app.config['STORAGE_FOLDER'],
-        user_id
-    )
-    os.makedirs(data_dir, exist_ok=True)
+    # Ler bytes (após validate_upload que faz seek(0))
+    file_bytes = file.read()
 
-    file_path  = os.path.join(data_dir, safe_name)
-    final_name = os.path.basename(file_path)
-
+    # Upload para R2
     try:
-        file.save(file_path)
-    except OSError as e:
-        logger.error(f'Erro ao guardar ficheiro: {e}')
-        return jsonify({'error': 'Erro ao guardar o ficheiro.'}), 500
-
-    try:
-        # Despacha por extensão: imagens → Vision, PDF → pdfplumber+LLM, txt → LLM/regex
-        # NÃO usa LlamaIndex para evitar confundir faturas diferentes.
-        info = extract_invoice_info(file_path, final_name)
-
-        # Actualiza índice do chat em background (falha silenciosa)
-        try:
-            rebuild_index(data_dir, storage_dir)
-        except Exception:
-            pass
-
-        fatura = Fatura(
-            user_id=user_id,
-            nome_ficheiro=final_name,
-            loja=info['loja'],
-            data_compra=info['data_compra'],
-            total=info['total'],
-            items=info['items'],
-            categoria=info['categoria'],
-            data_garantia=info['data_garantia'],
-            data_devolucao=info['data_devolucao'],
-        )
-        db.session.add(fatura)
-        db.session.commit()
-
-        return jsonify({'success': True, 'fatura': _fatura_to_dict(fatura)}), 201
-
+        key = upload_file(file_bytes, safe_name, user_id, mime)
     except Exception as e:
-        logger.error(f'Erro ao processar fatura: {e}')
-        return jsonify({'error': 'Erro ao processar a fatura.'}), 500
+        logger.error(f'Erro no upload R2 para user {user_id}: {e}')
+        return jsonify({'error': 'Erro ao guardar o ficheiro. Tenta novamente.'}), 500
+
+    # Criar registo na DB
+    fatura = Fatura(
+        user_id=user_id,
+        nome_ficheiro=safe_name,
+        file_key=key,
+    )
+    db.session.add(fatura)
+    db.session.commit()
+
+    # Disparar OCR em background (Celery)
+    processar_ocr_task.delay(fatura.id)
+
+    return jsonify({
+        'id':     fatura.id,
+        'status': 'processing',
+        'message': 'Fatura recebida. O processamento OCR está em curso.',
+    }), 202
+
+
+# ── Apagar ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+
+    # Apagar do R2 se existir
+    if f.file_key:
+        from app.r2_service import delete_file
+        delete_file(f.file_key)
+
+    # Apagar do Qdrant
+    try:
+        from app.qdrant_service import delete_fatura
+        delete_fatura(fatura_id)
+    except Exception as e:
+        logger.warning(f'Qdrant delete falhou para fatura {fatura_id}: {e}')
+
+    db.session.delete(f)
+    db.session.commit()
+    return jsonify({'success': True})

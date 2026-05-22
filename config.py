@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Carrega o .env ANTES de qualquer coisa
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -39,41 +38,56 @@ class Config:
         'text/plain',
     }
 
-    RATELIMIT_DEFAULT = '200 per day;50 per hour'
-    RATELIMIT_UPLOAD = '20 per hour'
-    RATELIMIT_AUTH = '10 per minute'
-
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     PERMANENT_SESSION_LIFETIME = 86400 * 7
 
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Flask-Caching ─────────────────────────────────────────────────────────
+    CACHE_TYPE = 'RedisCache'
+    CACHE_REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CACHE_DEFAULT_TIMEOUT = 300
+
+    # ── Celery ────────────────────────────────────────────────────────────────
+    CELERY_BROKER_URL     = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Cloudflare R2 ─────────────────────────────────────────────────────────
+    R2_ENDPOINT_URL      = os.getenv('R2_ENDPOINT_URL')
+    R2_ACCESS_KEY_ID     = os.getenv('R2_ACCESS_KEY_ID')
+    R2_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
+    R2_BUCKET_NAME       = os.getenv('R2_BUCKET_NAME', 'verly-docs')
+    R2_PUBLIC_URL        = os.getenv('R2_PUBLIC_URL', '')
+
+    # ── Qdrant ────────────────────────────────────────────────────────────────
+    QDRANT_URL        = os.getenv('QDRANT_URL', 'http://localhost:6333')
+    QDRANT_API_KEY    = os.getenv('QDRANT_API_KEY', '')
+    QDRANT_COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
+
+    # ── JWT ───────────────────────────────────────────────────────────────────
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('SECRET_KEY', 'dev-secret')
+
 
 class DevelopmentConfig(Config):
-    """Configuração para desenvolvimento local."""
-
     DEBUG = True
     TESTING = False
-
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL',
         f'sqlite:///{BASE_DIR / "shopping_police.db"}'
     )
-
     SESSION_COOKIE_SECURE = False
     SQLALCHEMY_ECHO = False
 
 
 class ProductionConfig(Config):
-    """Configuração para produção."""
-
     DEBUG = False
     TESTING = False
-
     SESSION_COOKIE_SECURE = True
     SQLALCHEMY_ECHO = False
-
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
         'pool_size': 10,
@@ -108,13 +122,10 @@ config_map = {
 
 
 def get_config():
-    """Retorna a configuração correta baseada em FLASK_ENV."""
     env = os.getenv('FLASK_ENV', 'development').lower()
     cfg = config_map.get(env, DevelopmentConfig)
-
     if env == 'production':
         cfg.validate()
     elif env == 'development' and not os.getenv('SECRET_KEY'):
         print('[AVISO] SECRET_KEY não definida. A usar chave temporária.')
-
     return cfg

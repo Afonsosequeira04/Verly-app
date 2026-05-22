@@ -2,18 +2,21 @@
 app/api/insights.py — Insights da Verly com IA real + princípios financeiros
 
 GET /api/v1/insights
-    Gera insights personalizados com base nos dados reais do utilizador.
-    Inclui: score, tendência, categorias, metas, previsão, subscrições detetadas.
-    Os insights citam estudos e princípios financeiros reais.
+GET /api/v1/poupanca
 """
 
 import json
+import re
+import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Fatura, User, Meta
+from app.extensions import cache
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -56,7 +59,6 @@ def _build_context(user_id: int) -> dict:
     total_mes = 0.0
     total_mes_anterior = 0.0
     faturas_mes = []
-
     historico_mensal = defaultdict(float)
 
     for f in faturas:
@@ -133,6 +135,7 @@ def _build_context(user_id: int) -> dict:
     subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
     total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
 
+    meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
     historico_lista = []
     for i in range(5, -1, -1):
         mes = mes_atual - i
@@ -141,8 +144,6 @@ def _build_context(user_id: int) -> dict:
             mes += 12
             ano -= 1
         chave = f"{ano}-{mes:02d}"
-        meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
         historico_lista.append({
             'mes': meses_pt[mes - 1],
             'valor': round(historico_mensal.get(chave, 0), 2),
@@ -154,7 +155,6 @@ def _build_context(user_id: int) -> dict:
     objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
     personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
 
-    # Calcular regra 50/30/20 se tiver rendimento
     regra_5030_20 = None
     if rendimento > 0:
         necessidades_ideal = rendimento * 0.50
@@ -168,7 +168,6 @@ def _build_context(user_id: int) -> dict:
             'pct_rendimento': round((total_mes / rendimento) * 100, 1),
         }
 
-    # Análise de risco: concentração de gasto numa categoria
     risco_concentracao = None
     if top_cats and total_mes > 0:
         top_cat_nome, top_cat_val = top_cats[0]
@@ -180,7 +179,6 @@ def _build_context(user_id: int) -> dict:
                 'valor': round(top_cat_val, 2),
             }
 
-    # Agrupar faturas do mês por categoria para drill-down
     itens_por_categoria = {}
     for fatura in faturas_mes:
         cat = fatura['categoria']
@@ -191,7 +189,6 @@ def _build_context(user_id: int) -> dict:
             'valor': fatura['valor'],
             'data': fatura['data'],
         })
-    # Ordenar por valor desc dentro de cada categoria
     for cat in itens_por_categoria:
         itens_por_categoria[cat].sort(key=lambda x: x['valor'], reverse=True)
 
@@ -219,8 +216,10 @@ def _build_context(user_id: int) -> dict:
     }
 
 
-def _gerar_insights_llm(ctx: dict, personalidade: str) -> list:
+def _gerar_insights_llm(ctx: dict, personalidade: str = None) -> list:
     """Chama o LLM para gerar insights personalizados com princípios financeiros reais."""
+    if personalidade is None:
+        personalidade = ctx.get('personalidade', 'calm')
 
     SYSTEM_PROMPTS = {
         'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
@@ -345,16 +344,13 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
             temperature=0.72,
         )
         raw = response.choices[0].message.content.strip()
-        import re
         raw = re.sub(r'```json|```', '', raw).strip()
         insights = json.loads(raw)
         if isinstance(insights, list):
             return insights[:6]
         return []
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f'Erro ao gerar insights LLM: {e}')
-        # Fallback com insights básicos mas mais informativos
+        logger.error(f'Erro ao gerar insights LLM: {e}')
         insights = []
         if ctx['total_gasto_mes'] > 0:
             insights.append({
@@ -385,7 +381,7 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
                          f"O Latte Factor de David Bach mostra como pequenos gastos recorrentes têm grande impacto a longo prazo.",
                 'valor': ctx['total_subscricoes'],
             })
-        if ctx['variacao_pct'] is not None and not (ctx['variacao_pct'] > 0):
+        if ctx['variacao_pct'] is not None and ctx['variacao_pct'] < 0:
             insights.append({
                 'tipo': 'positivo',
                 'texto': f"Gastaste {abs(ctx['variacao_pct'])}% menos que o mês anterior. Excelente progresso!",
@@ -394,13 +390,20 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
         return insights[:5]
 
 
-# ── Endpoint ──────────────────────────────────────────────────────────────────
+# Alias para as tasks Celery
+_gerar_insights_com_llm = _gerar_insights_llm
+
+
+# ── GET /api/v1/insights ──────────────────────────────────────────────────────
 
 @api_bp.route('/insights', methods=['GET'])
 @jwt_required()
 def get_insights():
     """
-    Gera insights personalizados com IA para o utilizador autenticado.
+    Gera insights personalizados com IA.
+    - Se existir cache Redis: serve imediatamente (200)
+    - Se não existir: dispara task Celery em background e retorna 202
+    - O cliente deve fazer retry em 10s
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -409,47 +412,64 @@ def get_insights():
 
     personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
 
+    cache_key = f'insights:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    # Cache miss — disparar task Celery em background
+    try:
+        from app.tasks.ai_insights import gerar_insights_task
+        gerar_insights_task.delay(user_id)
+        return jsonify({
+            'success': False,
+            'status': 'a_calcular',
+            'message': 'Os insights estão a ser calculados. Tenta novamente em 10 segundos.',
+            'retry_in': 10,
+        }), 202
+    except Exception:
+        pass
+
+    # Fallback síncrono se Celery não estiver disponível
     ctx = _build_context(user_id)
     insights = _gerar_insights_llm(ctx, personalidade)
 
-    return jsonify({
+    result = {
         'success': True,
         'insights': insights,
         'resumo': {
-            'total_gasto':        ctx['total_gasto_mes'],
-            'num_faturas':        ctx['num_faturas_mes'],
-            'variacao_pct':       ctx['variacao_pct'],
-            'variacao_subiu':     (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal':   ctx['orcamento_mensal'],
-            'rendimento_mensal':  ctx['rendimento_mensal'],
-            'pct_orcamento':      round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
-                                  if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento':     round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
-                                  if ctx['rendimento_mensal'] > 0 else None,
-            'top_categorias':     ctx['top_categorias'],
-            'metas':              ctx['metas'],
-            'previsao_mensal':    ctx['previsao_mensal'],
-            'subscricoes':        ctx['subscricoes_detetadas'],
-            'total_subscricoes':  ctx['total_subscricoes'],
-            'historico_mensal':   ctx['historico_mensal'],
-            'regra_5030_20':      ctx['regra_5030_20'],
+            'total_gasto':         ctx['total_gasto_mes'],
+            'num_faturas':         ctx['num_faturas_mes'],
+            'variacao_pct':        ctx['variacao_pct'],
+            'variacao_subiu':      (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':    ctx['orcamento_mensal'],
+            'rendimento_mensal':   ctx['rendimento_mensal'],
+            'pct_orcamento':       round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
+                                   if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':      round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
+                                   if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':      ctx['top_categorias'],
+            'metas':               ctx['metas'],
+            'previsao_mensal':     ctx['previsao_mensal'],
+            'subscricoes':         ctx['subscricoes_detetadas'],
+            'total_subscricoes':   ctx['total_subscricoes'],
+            'historico_mensal':    ctx['historico_mensal'],
+            'regra_5030_20':       ctx['regra_5030_20'],
             'itens_por_categoria': ctx['itens_por_categoria'],
         },
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
-    })
+    }
+    return jsonify(result)
 
 
-# ── Endpoint Poupança Inteligente ─────────────────────────────────────────────
+# ── GET /api/v1/poupanca ──────────────────────────────────────────────────────
 
 @api_bp.route('/poupanca', methods=['GET'])
 @jwt_required()
 def get_poupanca():
     """
-    GET /api/v1/poupanca
-    Gera um plano de poupança personalizado e concreto com base nos dados
-    reais dos últimos meses: histórico, padrões, metas, subscrições, regra 50/30/20.
-    Muito mais rico do que o chat genérico — usa contexto longitudinal real.
+    Gera um plano de poupança personalizado e concreto com base nos dados reais.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -468,7 +488,6 @@ def get_poupanca():
             'breakdown': [],
         })
 
-    # Calcular poupança possível com base em dados reais
     orcamento    = ctx['orcamento_mensal']
     rendimento   = ctx['rendimento_mensal']
     gasto_atual  = ctx['total_gasto_mes']
@@ -476,22 +495,19 @@ def get_poupanca():
     previsao     = ctx['previsao_mensal'] or gasto_atual
     top_cats     = ctx['top_categorias']
 
-    # Poupança possível: diferença entre orçamento/rendimento e gasto previsto
     if orcamento > 0:
         poupanca_possivel = max(0, orcamento - previsao)
     elif rendimento > 0:
-        poupanca_possivel = max(0, rendimento * 0.20)  # regra 50/30/20
+        poupanca_possivel = max(0, rendimento * 0.20)
     else:
         poupanca_possivel = None
 
-    # Breakdown por categoria: onde pode cortar
+    categorias_cortaveis = {'lazer', 'restaurantes', 'vestuário', 'takeaway',
+                             'entretenimento', 'outros', 'compras'}
     breakdown = []
     for cat_item in top_cats[:4]:
         cat   = cat_item['categoria']
         valor = cat_item['valor']
-        # Sugere corte de 15-30% nas categorias de lazer/vestuário/restaurantes
-        categorias_cortaveis = ['lazer', 'restaurantes', 'vestuário', 'takeaway',
-                                 'entretenimento', 'outros', 'compras']
         pct_corte = 0.20 if cat.lower() in categorias_cortaveis else 0.10
         economia = round(valor * pct_corte, 2)
         if economia > 0:
@@ -503,12 +519,8 @@ def get_poupanca():
                 'economia_anual': round(economia * 12, 2),
             })
 
-    # Prompt muito específico para poupança — usa TODOS os dados reais
-    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
-
-    historico_txt = ', '.join([
-        f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']
-    ])
+    top_cats_txt  = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
+    historico_txt = ', '.join([f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']])
 
     subscricoes_txt = ''
     if ctx['subscricoes_detetadas']:
@@ -576,7 +588,7 @@ Responde APENAS com JSON válido:
 }}"""
 
     try:
-        import os, json, re
+        import os
         from groq import Groq
         client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
         response = client.chat.completions.create(
@@ -589,15 +601,13 @@ Responde APENAS com JSON válido:
         raw = re.sub(r'```json|```', '', raw).strip()
         resultado = json.loads(raw)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f'Erro poupanca LLM: {e}')
-        # Fallback inteligente com dados reais
+        logger.error(f'Erro poupanca LLM: {e}')
         foco = top_cats[0]['categoria'] if top_cats else 'geral'
         economia_mensal = round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0
         resultado = {
             'sugestao': (
                 f"Com base nos teus padrões, podes poupar cortando 20% em {foco} "
-                f"({round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0}€/mês). "
+                f"({economia_mensal}€/mês). "
                 f"{'As tuas subscrições custam ' + str(subscricoes) + '€/mês = ' + str(round(subscricoes*12)) + '€/ano — vale a pena rever.' if subscricoes > 0 else ''}"
             ).strip(),
             'poupanca_estimada_mensal': economia_mensal,

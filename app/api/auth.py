@@ -1,15 +1,19 @@
 """
 app/api/auth.py — Endpoints de autenticação para o mobile
 
-POST  /api/v1/auth/login              → {access_token, user}
-POST  /api/v1/auth/register           → {message} (envia email de confirmação)
-POST  /api/v1/auth/confirm/<token>    → {access_token, user}
+POST  /api/v1/auth/login              → {access_token, refresh_token, user}
+POST  /api/v1/auth/register           → {message}
+POST  /api/v1/auth/refresh            → {access_token}  (usa refresh token)
+POST  /api/v1/auth/logout             → revoga tokens no Redis
+POST  /api/v1/auth/confirm/<token>    → {access_token, refresh_token, user}
+GET   /api/v1/auth/confirm-web/<tok>  → redirect deep link
 POST  /api/v1/auth/resend-confirm     → reenvia email de confirmação
 GET   /api/v1/auth/me                 → {user}
 PATCH /api/v1/auth/me                 → atualiza perfil
 POST  /api/v1/auth/avatar             → upload de foto de perfil
 POST  /api/v1/auth/onboarding         → marca onboarding como completo
 POST  /api/v1/auth/firebase           → login com Google/Apple via Firebase
+DELETE /api/v1/auth/account           → apagar conta
 """
 
 import logging
@@ -20,10 +24,15 @@ import secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify, current_app
 from flask_jwt_extended import (
-    create_access_token, jwt_required, get_jwt_identity,
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
 )
 from app.api import api_bp
 from app.models import User
+from app.extensions import limiter, get_redis_client
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -53,8 +62,8 @@ def _enviar_email_confirmacao(user):
             logger.warning('RESEND_API_KEY não definida — email de confirmação não enviado.')
             return False
 
-        app_url    = os.getenv('APP_URL', 'https://verly.app')
-        from_email = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
+        app_url     = os.getenv('APP_URL', 'https://verly.app')
+        from_email  = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
         confirm_url = f"{app_url}/api/v1/auth/confirm-web/{user.email_confirm_token}"
 
         html = f"""
@@ -86,7 +95,10 @@ def _enviar_email_confirmacao(user):
         return False
 
 
+# ── Login ─────────────────────────────────────────────────────────────────────
+
 @api_bp.route('/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     data     = request.get_json(silent=True) or {}
     email    = (data.get('email') or '').strip().lower()
@@ -105,11 +117,54 @@ def login():
             'code':  'EMAIL_NOT_CONFIRMED',
         }), 403
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
+
+# ── Refresh ───────────────────────────────────────────────────────────────────
+
+@api_bp.route('/auth/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    """Emite novo access token usando o refresh token (15 min de validade)."""
+    user_id      = get_jwt_identity()
+    access_token = create_access_token(identity=user_id)
+    return jsonify({'access_token': access_token})
+
+
+# ── Logout ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/auth/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """
+    Revoga o access token actual no Redis (TTL = 15 min).
+    Se o cliente enviar o refresh token no body, revoga-o também.
+    """
+    jti   = get_jwt()['jti']
+    redis = get_redis_client()
+
+    # Revogar access token (15 min TTL)
+    redis.setex(f'blacklist:{jti}', int(timedelta(minutes=15).total_seconds()), 'revoked')
+
+    # Revogar refresh token se enviado
+    data = request.get_json(silent=True) or {}
+    refresh_jti = data.get('refresh_jti')
+    if refresh_jti:
+        redis.setex(f'blacklist:{refresh_jti}', int(timedelta(days=30).total_seconds()), 'revoked')
+
+    return jsonify({'message': 'Sessão terminada com sucesso.'})
+
+
+# ── Register ──────────────────────────────────────────────────────────────────
 
 @api_bp.route('/auth/register', methods=['POST'])
+@limiter.limit("5 per minute")
 def register():
     data     = request.get_json(silent=True) or {}
     nome     = (data.get('nome') or '').strip()
@@ -152,14 +207,14 @@ def register():
     }), 201
 
 
+# ── Confirm email ─────────────────────────────────────────────────────────────
+
 @api_bp.route('/auth/confirm/<token>', methods=['POST'])
 def confirm_email(token):
     """Confirma o email via token (chamado pela app após deep link)."""
     user = User.query.filter_by(email_confirm_token=token).first()
-
     if not user:
         return jsonify({'error': 'Token inválido.'}), 400
-
     if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
         return jsonify({'error': 'Link expirado.', 'code': 'TOKEN_EXPIRED'}), 400
 
@@ -168,18 +223,21 @@ def confirm_email(token):
     user.email_confirm_expiry = None
     db.session.commit()
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
 
 @api_bp.route('/auth/confirm-web/<token>', methods=['GET'])
 def confirm_email_web(token):
     """Confirma o email via link no browser — redireciona para a app."""
     user = User.query.filter_by(email_confirm_token=token).first()
-
     if not user:
         return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link inválido ou já utilizado.</h2>', 400
-
     if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
         return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link expirado. Abre a app e pede um novo email.</h2>', 400
 
@@ -207,11 +265,10 @@ def resend_confirm():
     """Reenvia email de confirmação."""
     data  = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip().lower()
+    user  = User.query.filter_by(email=email).first()
 
-    user = User.query.filter_by(email=email).first()
     if not user:
         return jsonify({'message': 'Se o email existir, receberás um novo link.'}), 200
-
     if getattr(user, 'email_confirmado', True):
         return jsonify({'message': 'Este email já está confirmado.'}), 200
 
@@ -222,6 +279,8 @@ def resend_confirm():
     _enviar_email_confirmacao(user)
     return jsonify({'message': 'Email de confirmação reenviado!'}), 200
 
+
+# ── Me ────────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/auth/me', methods=['GET'])
 @jwt_required()
@@ -266,26 +325,21 @@ def upload_avatar():
     image_b64 = data.get('image_base64', '')
     if not image_b64:
         return jsonify({'error': 'Imagem não fornecida.'}), 400
-
     if not image_b64.startswith('data:image/'):
         return jsonify({'error': 'Formato de imagem inválido. Usa data URI.'}), 400
-
     if len(image_b64) > 2_800_000:
         return jsonify({'error': 'Imagem demasiado grande. Máximo ~2MB.'}), 400
 
     try:
         avatars_dir = os.path.join(current_app.static_folder, 'avatars')
         os.makedirs(avatars_dir, exist_ok=True)
-
         header, b64data = image_b64.split(',', 1)
         ext = 'jpg' if 'jpeg' in header else ('png' if 'png' in header else 'jpg')
         img_bytes = base64.b64decode(b64data)
-
-        filename = f'avatar_{user_id}.{ext}'
-        filepath = os.path.join(avatars_dir, filename)
+        filename  = f'avatar_{user_id}.{ext}'
+        filepath  = os.path.join(avatars_dir, filename)
         with open(filepath, 'wb') as f:
             f.write(img_bytes)
-
         user.avatar_url = f'/static/avatars/{filename}'
     except Exception as e:
         logger.warning(f'Avatar disk save failed: {e}')
@@ -311,7 +365,6 @@ def complete_onboarding():
     user.onboarding_completo = True
     user.personalidade = personalidade
     db.session.commit()
-
     return jsonify({'success': True})
 
 
@@ -320,7 +373,6 @@ def firebase_login():
     """Login com Google/Apple via Firebase — email confirmado pelo Google."""
     data     = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '').strip()
-
     if not id_token:
         return jsonify({'error': 'idToken é obrigatório.'}), 400
 
@@ -363,20 +415,22 @@ def firebase_login():
 
     db.session.commit()
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
-# ── Adicionar no final de app/api/auth.py ─────────────────────────────────────
 
 @api_bp.route('/auth/account', methods=['DELETE'])
 @jwt_required()
 def delete_account():
     user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-
+    user    = User.query.get(user_id)
     if not user:
         return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
-
     try:
         db.session.delete(user)
         db.session.commit()

@@ -1,7 +1,8 @@
 """
 app/api/dashboard.py — Endpoint do dashboard para o mobile
 
-GET /api/v1/dashboard → resumo completo
+GET /api/v1/dashboard    → resumo completo (cache 5 min por user)
+GET /api/v1/estatisticas → estatísticas detalhadas (cache 5 min por user)
 """
 
 import json
@@ -20,6 +21,7 @@ from app.dashboard import (
 )
 from app.notificacoes import gerar_notificacoes
 from app.reports import _regret_factor
+from app.extensions import cache
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -30,14 +32,21 @@ logger = logging.getLogger(__name__)
 def dashboard():
     from app.models import User
     user_id = int(get_jwt_identity())
+
+    # Cache por utilizador (5 min) — invalida no upload de faturas
+    cache_key = f'dashboard:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
     user = User.query.get_or_404(user_id)
 
     faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
     conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
 
-    total_gasto = sum(f.total or 0 for f in faturas)
-    num_faturas = len(faturas)
-    orcamento   = getattr(user, 'orcamento_mensal', 0) or 0
+    total_gasto   = sum(f.total or 0 for f in faturas)
+    num_faturas   = len(faturas)
+    orcamento     = getattr(user, 'orcamento_mensal', 0) or 0
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
     categorias = defaultdict(float)
@@ -97,32 +106,35 @@ def dashboard():
             'data_upload': f.data_upload.isoformat() if f.data_upload else None,
         }
 
-    return jsonify({
-        'total_gasto':    round(total_gasto, 2),
-        'num_faturas':    num_faturas,
-        'top_loja':       top_loja,
-        'orcamento':      orcamento,
-        'streak':         streak,
-        'mood':           mood,
-        'feed':           feed_verly,
-        'alertas':        alertas,
-        'comparacao':     comparacao,
-        'score_ultima':   score_ultima,
-        'desperdicado_mes': round(desperdicado_mes, 2),
-        'categorias':     [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
-        'lojas':          [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
-        'evolucao':       {'labels': trend_labels, 'values': trend_values},
+    result = {
+        'total_gasto':       round(total_gasto, 2),
+        'num_faturas':       num_faturas,
+        'top_loja':          top_loja,
+        'orcamento':         orcamento,
+        'streak':            streak,
+        'mood':              mood,
+        'feed':              feed_verly,
+        'alertas':           alertas,
+        'comparacao':        comparacao,
+        'score_ultima':      score_ultima,
+        'desperdicado_mes':  round(desperdicado_mes, 2),
+        'categorias':        [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        'lojas':             [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
+        'evolucao':          {'labels': trend_labels, 'values': trend_values},
         'subscricoes': {
-            'total_mensal': round(subs_data['total_mensal_desperdicado'], 2),
-            'count_danger': subs_data['count_danger'],
-            'count_warning': subs_data['count_warning'],
-            'top3': subs_data['subscriptions'][:3],
+            'total_mensal':   round(subs_data['total_mensal_desperdicado'], 2),
+            'count_danger':   subs_data['count_danger'],
+            'count_warning':  subs_data['count_warning'],
+            'top3':           subs_data['subscriptions'][:3],
         },
         'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
-    })
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)
 
 
-# ── Estatísticas ──────────────────────────────────────────────────────────────
+# ── Estatísticas ───────────────────────────────────────────────────────────────
 
 def _parse_date_str(s):
     if not s:
@@ -139,16 +151,22 @@ def _parse_date_str(s):
 @jwt_required()
 def estatisticas():
     user_id = int(get_jwt_identity())
+
+    cache_key = f'estatisticas:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
     faturas = Fatura.query.filter_by(user_id=user_id).all()
 
     if not faturas:
         return jsonify({
             'por_categoria': [],
-            'por_mes': [],
-            'total_geral': 0,
-            'media_mensal': 0,
+            'por_mes':       [],
+            'total_geral':   0,
+            'media_mensal':  0,
             'categoria_top': None,
-            'num_faturas': 0,
+            'num_faturas':   0,
         })
 
     cat_totais = defaultdict(float)
@@ -156,7 +174,7 @@ def estatisticas():
     mes_totais = defaultdict(float)
 
     for f in faturas:
-        cat = f.categoria or 'Outros'
+        cat   = f.categoria or 'Outros'
         total = f.total or 0
         cat_totais[cat] += total
         cat_counts[cat] += 1
@@ -180,11 +198,14 @@ def estatisticas():
     total_geral  = sum(f.total or 0 for f in faturas)
     media_mensal = total_geral / len(mes_totais) if mes_totais else 0
 
-    return jsonify({
+    result = {
         'por_categoria': por_categoria,
         'por_mes':       por_mes,
         'total_geral':   round(total_geral, 2),
         'media_mensal':  round(media_mensal, 2),
         'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
         'num_faturas':   len(faturas),
-    })
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)

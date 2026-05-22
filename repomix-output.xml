@@ -62,6 +62,7 @@ app/api/playlists.py
 app/api/push_notifications.py
 app/api/subscricoes.py
 app/auth.py
+app/celery_app.py
 app/chat.py
 app/configuracoes.py
 app/dashboard.py
@@ -69,6 +70,7 @@ app/email_routes.py
 app/email_service.py
 app/estatisticas.py
 app/exportar.py
+app/extensions.py
 app/fatura_detalhe.py
 app/faturas.py
 app/historico.py
@@ -80,9 +82,16 @@ app/notificacoes.py
 app/onboarding.py
 app/perfil.py
 app/personality.py
+app/qdrant_service.py
+app/r2_service.py
 app/reports.py
 app/scoring.py
 app/subscriptions.py
+app/tasks/__init__.py
+app/tasks/ai_insights.py
+app/tasks/emails.py
+app/tasks/ocr.py
+app/tasks/qdrant_task.py
 config.py
 dados_utilizadores/1/exemplo_fatura.pdf
 dados_utilizadores/1/extrato_abril_2025.txt
@@ -95,6 +104,7 @@ dados_utilizadores/1/zara_fatura.pdf
 dados_utilizadores/2/ps5_game.txt
 dados_utilizadores/3/pullbear_tshirts.txt
 dados_utilizadores/5/sephora_skincare.txt
+docker-compose.yml
 enviar_alertas_push.py
 enviar_alertas.py
 firebase-service-account.json
@@ -248,6 +258,271 @@ verly-mobile/src/utils/haptics.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/celery_app.py">
+"""
+app/celery_app.py — Fábrica Celery com contexto Flask injetado
+"""
+
+from celery import Celery
+from flask import Flask
+
+
+def make_celery(app: Flask) -> Celery:
+    celery = Celery(app.import_name)
+    celery.conf.update(
+        broker_url=app.config['CELERY_BROKER_URL'],
+        result_backend=app.config['CELERY_RESULT_BACKEND'],
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        timezone='Europe/Lisbon',
+        task_track_started=True,
+        task_acks_late=True,
+        worker_prefetch_multiplier=1,
+    )
+
+    class ContextTask(celery.Task):
+        """Garante que cada task corre dentro do contexto da app Flask."""
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
+</file>
+
+<file path="app/extensions.py">
+"""
+app/extensions.py — Instâncias únicas de todas as extensões Flask/Celery.
+Importar daqui em vez de criar instâncias espalhadas pelo código.
+"""
+
+import os
+import boto3
+import redis as redis_py
+from flask_caching import Cache
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# ── Cache Redis ───────────────────────────────────────────────────────────────
+cache = Cache()
+
+# ── Rate Limiter (Redis, multi-worker safe) ───────────────────────────────────
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+)
+
+
+def get_redis_client() -> redis_py.Redis:
+    """Retorna cliente Redis com decode_responses=True."""
+    return redis_py.from_url(
+        os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+        decode_responses=True,
+    )
+
+
+def get_r2_client():
+    """Retorna cliente boto3 apontado ao Cloudflare R2."""
+    return boto3.client(
+        's3',
+        endpoint_url=os.getenv('R2_ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('R2_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
+        region_name='auto',
+    )
+</file>
+
+<file path="app/qdrant_service.py">
+"""
+app/qdrant_service.py — Integração LlamaIndex + Qdrant para RAG por utilizador.
+"""
+
+import os
+import json
+import logging
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+from llama_index.core import Settings, VectorStoreIndex, Document
+from llama_index.core.storage import StorageContext
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+
+logger = logging.getLogger(__name__)
+
+COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
+VECTOR_DIM = 384
+
+_client: QdrantClient | None = None
+
+
+def get_qdrant_client() -> QdrantClient:
+    global _client
+    if _client is None:
+        _client = QdrantClient(
+            url=os.getenv('QDRANT_URL', 'http://localhost:6333'),
+            api_key=os.getenv('QDRANT_API_KEY') or None,
+        )
+        _ensure_collection(_client)
+    return _client
+
+
+def _ensure_collection(client: QdrantClient) -> None:
+    existing = [c.name for c in client.get_collections().collections]
+    if COLLECTION not in existing:
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+        )
+        logger.info(f'Qdrant: collection "{COLLECTION}" criada.')
+
+
+def upsert_fatura(fatura) -> None:
+    """Indexa / actualiza o documento de uma fatura no Qdrant."""
+    client = get_qdrant_client()
+    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
+    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
+
+    texto = _fatura_to_text(fatura)
+    doc = Document(
+        text=texto,
+        doc_id=f"fatura_{fatura.id}",
+        metadata={
+            'user_id':   fatura.user_id,
+            'fatura_id': fatura.id,
+            'loja':      fatura.loja      or '',
+            'categoria': fatura.categoria or '',
+            'total':     fatura.total     or 0,
+        },
+    )
+    VectorStoreIndex.from_documents([doc], storage_context=storage_ctx, show_progress=False)
+    logger.info(f'Qdrant: fatura {fatura.id} indexada.')
+
+
+def query_user(user_id: int, query_text: str, top_k: int = 5) -> list[dict]:
+    """RAG: devolve os k chunks mais relevantes para o utilizador."""
+    from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
+
+    client = get_qdrant_client()
+    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
+    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_ctx)
+
+    filters = MetadataFilters(filters=[MetadataFilter(key='user_id', value=user_id)])
+    retriever = index.as_retriever(similarity_top_k=top_k, filters=filters)
+    nodes = retriever.retrieve(query_text)
+
+    return [{'text': n.text, 'score': n.score, **n.metadata} for n in nodes]
+
+
+def delete_fatura(fatura_id: int) -> None:
+    """Remove os vectores de uma fatura apagada."""
+    client = get_qdrant_client()
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    client.delete(
+        collection_name=COLLECTION,
+        points_selector=Filter(
+            must=[FieldCondition(key='fatura_id', match=MatchValue(value=fatura_id))]
+        ),
+    )
+    logger.info(f'Qdrant: fatura {fatura_id} removida.')
+
+
+def _fatura_to_text(f) -> str:
+    try:
+        items = json.loads(f.items) if f.items else []
+    except Exception:
+        items = []
+    items_txt = '; '.join(f"{i.get('nome', '?')} {i.get('preco', 0)}€" for i in items)
+    return (
+        f"Loja: {f.loja or 'desconhecida'}. "
+        f"Data: {f.data_compra or 'N/A'}. "
+        f"Total: {f.total or 0}€. "
+        f"Categoria: {f.categoria or 'Outros'}. "
+        f"Items: {items_txt}."
+    )
+</file>
+
+<file path="app/r2_service.py">
+"""
+app/r2_service.py — Upload, download e signed URLs para o Cloudflare R2.
+"""
+
+import os
+import uuid
+import logging
+from app.extensions import get_r2_client
+
+logger = logging.getLogger(__name__)
+
+BUCKET = os.getenv('R2_BUCKET_NAME', 'verly-docs')
+
+
+def upload_file(file_bytes: bytes, original_name: str, user_id: int, content_type: str) -> str:
+    """
+    Faz upload de um ficheiro para o R2.
+    Returns: key (str) — guardar em Fatura.file_key
+    """
+    ext = os.path.splitext(original_name)[1].lower()
+    key = f"users/{user_id}/{uuid.uuid4().hex}{ext}"
+
+    client = get_r2_client()
+    client.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=file_bytes,
+        ContentType=content_type,
+        ServerSideEncryption='AES256',
+    )
+    logger.info(f'R2 upload OK: {key}')
+    return key
+
+
+def get_signed_url(key: str, expires_in: int = 3600) -> str:
+    """Gera URL assinada privada para acesso temporário ao ficheiro."""
+    client = get_r2_client()
+    return client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': BUCKET, 'Key': key},
+        ExpiresIn=expires_in,
+    )
+
+
+def delete_file(key: str) -> bool:
+    """Apaga um ficheiro do R2. Retorna True se bem sucedido."""
+    try:
+        get_r2_client().delete_object(Bucket=BUCKET, Key=key)
+        logger.info(f'R2 delete OK: {key}')
+        return True
+    except Exception as e:
+        logger.error(f'R2 delete erro ({key}): {e}')
+        return False
+</file>
+
+<file path="app/tasks/__init__.py">
+# app/tasks/__init__.py
+</file>
+
+<file path="app/tasks/ai_insights.py">
+
+</file>
+
+<file path="app/tasks/emails.py">
+
+</file>
+
+<file path="app/tasks/ocr.py">
+
+</file>
+
+<file path="app/tasks/qdrant_task.py">
+
+</file>
+
+<file path="docker-compose.yml">
+
+</file>
 
 <file path="app/api/amizades.py">
 """
@@ -2852,7 +3127,6 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Carrega o .env ANTES de qualquer coisa
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -2883,41 +3157,56 @@ class Config:
         'text/plain',
     }
 
-    RATELIMIT_DEFAULT = '200 per day;50 per hour'
-    RATELIMIT_UPLOAD = '20 per hour'
-    RATELIMIT_AUTH = '10 per minute'
-
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     PERMANENT_SESSION_LIFETIME = 86400 * 7
 
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Flask-Caching ─────────────────────────────────────────────────────────
+    CACHE_TYPE = 'RedisCache'
+    CACHE_REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CACHE_DEFAULT_TIMEOUT = 300
+
+    # ── Celery ────────────────────────────────────────────────────────────────
+    CELERY_BROKER_URL     = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Cloudflare R2 ─────────────────────────────────────────────────────────
+    R2_ENDPOINT_URL      = os.getenv('R2_ENDPOINT_URL')
+    R2_ACCESS_KEY_ID     = os.getenv('R2_ACCESS_KEY_ID')
+    R2_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
+    R2_BUCKET_NAME       = os.getenv('R2_BUCKET_NAME', 'verly-docs')
+    R2_PUBLIC_URL        = os.getenv('R2_PUBLIC_URL', '')
+
+    # ── Qdrant ────────────────────────────────────────────────────────────────
+    QDRANT_URL        = os.getenv('QDRANT_URL', 'http://localhost:6333')
+    QDRANT_API_KEY    = os.getenv('QDRANT_API_KEY', '')
+    QDRANT_COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
+
+    # ── JWT ───────────────────────────────────────────────────────────────────
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('SECRET_KEY', 'dev-secret')
+
 
 class DevelopmentConfig(Config):
-    """Configuração para desenvolvimento local."""
-
     DEBUG = True
     TESTING = False
-
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL',
         f'sqlite:///{BASE_DIR / "shopping_police.db"}'
     )
-
     SESSION_COOKIE_SECURE = False
     SQLALCHEMY_ECHO = False
 
 
 class ProductionConfig(Config):
-    """Configuração para produção."""
-
     DEBUG = False
     TESTING = False
-
     SESSION_COOKIE_SECURE = True
     SQLALCHEMY_ECHO = False
-
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
         'pool_size': 10,
@@ -2952,15 +3241,12 @@ config_map = {
 
 
 def get_config():
-    """Retorna a configuração correta baseada em FLASK_ENV."""
     env = os.getenv('FLASK_ENV', 'development').lower()
     cfg = config_map.get(env, DevelopmentConfig)
-
     if env == 'production':
         cfg.validate()
     elif env == 'development' and not os.getenv('SECRET_KEY'):
         print('[AVISO] SECRET_KEY não definida. A usar chave temporária.')
-
     return cfg
 </file>
 
@@ -8666,7 +8952,8 @@ def chat_limpar():
 """
 app/api/dashboard.py — Endpoint do dashboard para o mobile
 
-GET /api/v1/dashboard → resumo completo
+GET /api/v1/dashboard    → resumo completo (cache 5 min por user)
+GET /api/v1/estatisticas → estatísticas detalhadas (cache 5 min por user)
 """
 
 import json
@@ -8685,6 +8972,7 @@ from app.dashboard import (
 )
 from app.notificacoes import gerar_notificacoes
 from app.reports import _regret_factor
+from app.extensions import cache
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -8695,14 +8983,21 @@ logger = logging.getLogger(__name__)
 def dashboard():
     from app.models import User
     user_id = int(get_jwt_identity())
+
+    # Cache por utilizador (5 min) — invalida no upload de faturas
+    cache_key = f'dashboard:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
     user = User.query.get_or_404(user_id)
 
     faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
     conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
 
-    total_gasto = sum(f.total or 0 for f in faturas)
-    num_faturas = len(faturas)
-    orcamento   = getattr(user, 'orcamento_mensal', 0) or 0
+    total_gasto   = sum(f.total or 0 for f in faturas)
+    num_faturas   = len(faturas)
+    orcamento     = getattr(user, 'orcamento_mensal', 0) or 0
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
     categorias = defaultdict(float)
@@ -8762,32 +9057,35 @@ def dashboard():
             'data_upload': f.data_upload.isoformat() if f.data_upload else None,
         }
 
-    return jsonify({
-        'total_gasto':    round(total_gasto, 2),
-        'num_faturas':    num_faturas,
-        'top_loja':       top_loja,
-        'orcamento':      orcamento,
-        'streak':         streak,
-        'mood':           mood,
-        'feed':           feed_verly,
-        'alertas':        alertas,
-        'comparacao':     comparacao,
-        'score_ultima':   score_ultima,
-        'desperdicado_mes': round(desperdicado_mes, 2),
-        'categorias':     [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
-        'lojas':          [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
-        'evolucao':       {'labels': trend_labels, 'values': trend_values},
+    result = {
+        'total_gasto':       round(total_gasto, 2),
+        'num_faturas':       num_faturas,
+        'top_loja':          top_loja,
+        'orcamento':         orcamento,
+        'streak':            streak,
+        'mood':              mood,
+        'feed':              feed_verly,
+        'alertas':           alertas,
+        'comparacao':        comparacao,
+        'score_ultima':      score_ultima,
+        'desperdicado_mes':  round(desperdicado_mes, 2),
+        'categorias':        [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        'lojas':             [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
+        'evolucao':          {'labels': trend_labels, 'values': trend_values},
         'subscricoes': {
-            'total_mensal': round(subs_data['total_mensal_desperdicado'], 2),
-            'count_danger': subs_data['count_danger'],
-            'count_warning': subs_data['count_warning'],
-            'top3': subs_data['subscriptions'][:3],
+            'total_mensal':   round(subs_data['total_mensal_desperdicado'], 2),
+            'count_danger':   subs_data['count_danger'],
+            'count_warning':  subs_data['count_warning'],
+            'top3':           subs_data['subscriptions'][:3],
         },
         'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
-    })
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)
 
 
-# ── Estatísticas ──────────────────────────────────────────────────────────────
+# ── Estatísticas ───────────────────────────────────────────────────────────────
 
 def _parse_date_str(s):
     if not s:
@@ -8804,16 +9102,22 @@ def _parse_date_str(s):
 @jwt_required()
 def estatisticas():
     user_id = int(get_jwt_identity())
+
+    cache_key = f'estatisticas:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
     faturas = Fatura.query.filter_by(user_id=user_id).all()
 
     if not faturas:
         return jsonify({
             'por_categoria': [],
-            'por_mes': [],
-            'total_geral': 0,
-            'media_mensal': 0,
+            'por_mes':       [],
+            'total_geral':   0,
+            'media_mensal':  0,
             'categoria_top': None,
-            'num_faturas': 0,
+            'num_faturas':   0,
         })
 
     cat_totais = defaultdict(float)
@@ -8821,7 +9125,7 @@ def estatisticas():
     mes_totais = defaultdict(float)
 
     for f in faturas:
-        cat = f.categoria or 'Outros'
+        cat   = f.categoria or 'Outros'
         total = f.total or 0
         cat_totais[cat] += total
         cat_counts[cat] += 1
@@ -8845,33 +9149,37 @@ def estatisticas():
     total_geral  = sum(f.total or 0 for f in faturas)
     media_mensal = total_geral / len(mes_totais) if mes_totais else 0
 
-    return jsonify({
+    result = {
         'por_categoria': por_categoria,
         'por_mes':       por_mes,
         'total_geral':   round(total_geral, 2),
         'media_mensal':  round(media_mensal, 2),
         'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
         'num_faturas':   len(faturas),
-    })
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)
 </file>
 
 <file path="app/api/faturas.py">
 """
 app/api/faturas.py — CRUD de faturas para o mobile
 
-GET    /api/v1/faturas           → lista
-POST   /api/v1/faturas/upload    → upload de ficheiro
-GET    /api/v1/faturas/<id>      → detalhe
-DELETE /api/v1/faturas/<id>      → apagar
+GET    /api/v1/faturas              → lista
+POST   /api/v1/faturas/upload       → upload (R2 + OCR em background)
+GET    /api/v1/faturas/<id>         → detalhe
+GET    /api/v1/faturas/<id>/url     → signed URL para download
+DELETE /api/v1/faturas/<id>         → apagar (R2 + DB + Qdrant)
 """
 
-import os
 import json
 import logging
-from flask import request, jsonify, current_app
+from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Fatura, CATEGORIAS
+from app.extensions import limiter
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -8893,8 +9201,11 @@ def _fatura_to_dict(f):
         'categoria':      f.categoria or 'Outros',
         'data_garantia':  f.data_garantia,
         'data_devolucao': f.data_devolucao,
+        'has_file':       bool(f.file_key),   # indica se tem ficheiro no R2
     }
 
+
+# ── Listar ────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/faturas', methods=['GET'])
 @jwt_required()
@@ -8935,6 +9246,8 @@ def listar_faturas():
     })
 
 
+# ── Detalhe ───────────────────────────────────────────────────────────────────
+
 @api_bp.route('/faturas/<int:fatura_id>', methods=['GET'])
 @jwt_required()
 def detalhe_fatura(fatura_id):
@@ -8943,32 +9256,42 @@ def detalhe_fatura(fatura_id):
     return jsonify(_fatura_to_dict(f))
 
 
-@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+# ── Signed URL para download ──────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>/url', methods=['GET'])
 @jwt_required()
-def apagar_fatura(fatura_id):
+def fatura_signed_url(fatura_id):
+    """Devolve URL assinada temporária (15 min) para download seguro do ficheiro."""
     user_id = int(get_jwt_identity())
     f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-    db.session.delete(f)
-    db.session.commit()
-    return jsonify({'success': True})
 
+    if not f.file_key:
+        return jsonify({'erro': 'Ficheiro não disponível no R2.'}), 404
+
+    from app.r2_service import get_signed_url
+    url = get_signed_url(f.file_key, expires_in=900)   # 15 min
+    return jsonify({'url': url, 'expires_in': 900})
+
+
+# ── Upload ────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/faturas/upload', methods=['POST'])
 @jwt_required()
+@limiter.limit("20 per hour", key_func=lambda: get_jwt_identity())
 def upload_fatura():
     """
     Upload de fatura via multipart/form-data.
-    O processamento é igual ao da web app.
+    1. Valida o ficheiro (extensão + magic bytes)
+    2. Faz upload para o Cloudflare R2
+    3. Cria registo na DB com status 'processing'
+    4. Dispara task Celery para OCR em background
+    5. Retorna 202 imediatamente (o cliente deve fazer polling ou usar push)
     """
-    from app.ai import get_user_paths, rebuild_index, extract_invoice_info
-    from security import validate_upload, sanitize_filename, check_rate_limit
+    from security import validate_upload, sanitize_filename
+    from app.r2_service import upload_file
+    from app.tasks.ocr import processar_ocr_task
 
     user_id = int(get_jwt_identity())
-
-    rate_key = f'upload:{user_id}'
-    allowed, _ = check_rate_limit(rate_key, max_requests=20, window_seconds=3600)
-    if not allowed:
-        return jsonify({'error': 'Demasiados uploads. Tenta em 1 hora.'}), 429
 
     if 'file' not in request.files:
         return jsonify({'error': 'Nenhum ficheiro enviado.'}), 400
@@ -8977,8 +9300,8 @@ def upload_fatura():
     if not file or file.filename == '':
         return jsonify({'error': 'Ficheiro inválido.'}), 400
 
-    allowed_ext = current_app.config.get('ALLOWED_EXTENSIONS', {'.pdf', '.png', '.jpg', '.jpeg', '.txt'})
-    is_valid, error_msg = validate_upload(file, allowed_ext)
+    # Validar (extensão + magic bytes) — usa o security.py existente
+    is_valid, error_msg, mime = validate_upload(file)
     if not is_valid:
         return jsonify({'error': error_msg}), 400
 
@@ -8986,52 +9309,58 @@ def upload_fatura():
     if not safe_name:
         return jsonify({'error': 'Nome de ficheiro inválido.'}), 400
 
-    data_dir, storage_dir = get_user_paths(
-        current_app.config['UPLOAD_FOLDER'],
-        current_app.config['STORAGE_FOLDER'],
-        user_id
-    )
-    os.makedirs(data_dir, exist_ok=True)
+    # Ler bytes (após validate_upload que faz seek(0))
+    file_bytes = file.read()
 
-    file_path  = os.path.join(data_dir, safe_name)
-    final_name = os.path.basename(file_path)
-
+    # Upload para R2
     try:
-        file.save(file_path)
-    except OSError as e:
-        logger.error(f'Erro ao guardar ficheiro: {e}')
-        return jsonify({'error': 'Erro ao guardar o ficheiro.'}), 500
-
-    try:
-        # Despacha por extensão: imagens → Vision, PDF → pdfplumber+LLM, txt → LLM/regex
-        # NÃO usa LlamaIndex para evitar confundir faturas diferentes.
-        info = extract_invoice_info(file_path, final_name)
-
-        # Actualiza índice do chat em background (falha silenciosa)
-        try:
-            rebuild_index(data_dir, storage_dir)
-        except Exception:
-            pass
-
-        fatura = Fatura(
-            user_id=user_id,
-            nome_ficheiro=final_name,
-            loja=info['loja'],
-            data_compra=info['data_compra'],
-            total=info['total'],
-            items=info['items'],
-            categoria=info['categoria'],
-            data_garantia=info['data_garantia'],
-            data_devolucao=info['data_devolucao'],
-        )
-        db.session.add(fatura)
-        db.session.commit()
-
-        return jsonify({'success': True, 'fatura': _fatura_to_dict(fatura)}), 201
-
+        key = upload_file(file_bytes, safe_name, user_id, mime)
     except Exception as e:
-        logger.error(f'Erro ao processar fatura: {e}')
-        return jsonify({'error': 'Erro ao processar a fatura.'}), 500
+        logger.error(f'Erro no upload R2 para user {user_id}: {e}')
+        return jsonify({'error': 'Erro ao guardar o ficheiro. Tenta novamente.'}), 500
+
+    # Criar registo na DB
+    fatura = Fatura(
+        user_id=user_id,
+        nome_ficheiro=safe_name,
+        file_key=key,
+    )
+    db.session.add(fatura)
+    db.session.commit()
+
+    # Disparar OCR em background (Celery)
+    processar_ocr_task.delay(fatura.id)
+
+    return jsonify({
+        'id':     fatura.id,
+        'status': 'processing',
+        'message': 'Fatura recebida. O processamento OCR está em curso.',
+    }), 202
+
+
+# ── Apagar ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+
+    # Apagar do R2 se existir
+    if f.file_key:
+        from app.r2_service import delete_file
+        delete_file(f.file_key)
+
+    # Apagar do Qdrant
+    try:
+        from app.qdrant_service import delete_fatura
+        delete_fatura(fatura_id)
+    except Exception as e:
+        logger.warning(f'Qdrant delete falhou para fatura {fatura_id}: {e}')
+
+    db.session.delete(f)
+    db.session.commit()
+    return jsonify({'success': True})
 </file>
 
 <file path="app/api/gmail.py">
@@ -10883,12 +11212,28 @@ if __name__ == '__main__':
 </file>
 
 <file path="run.py">
-from app import create_app
+"""
+run.py — Ponto de entrada da aplicação Verly
 
-app = create_app()
+Iniciar Flask:
+    python run.py
+    flask run
+
+Iniciar Celery worker:
+    celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails
+
+Iniciar Flower (monitor):
+    celery -A run.celery flower --port=5555
+"""
+
+from app import create_app
+from app.celery_app import make_celery
+
+flask_app = create_app()
+celery = make_celery(flask_app)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    flask_app.run(debug=True)
 </file>
 
 <file path="templates/configuracoes.html">
@@ -22520,18 +22865,21 @@ const s = StyleSheet.create({
 app/api/insights.py — Insights da Verly com IA real + princípios financeiros
 
 GET /api/v1/insights
-    Gera insights personalizados com base nos dados reais do utilizador.
-    Inclui: score, tendência, categorias, metas, previsão, subscrições detetadas.
-    Os insights citam estudos e princípios financeiros reais.
+GET /api/v1/poupanca
 """
 
 import json
+import re
+import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Fatura, User, Meta
+from app.extensions import cache
+
+logger = logging.getLogger(__name__)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -22574,7 +22922,6 @@ def _build_context(user_id: int) -> dict:
     total_mes = 0.0
     total_mes_anterior = 0.0
     faturas_mes = []
-
     historico_mensal = defaultdict(float)
 
     for f in faturas:
@@ -22651,6 +22998,7 @@ def _build_context(user_id: int) -> dict:
     subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
     total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
 
+    meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
     historico_lista = []
     for i in range(5, -1, -1):
         mes = mes_atual - i
@@ -22659,8 +23007,6 @@ def _build_context(user_id: int) -> dict:
             mes += 12
             ano -= 1
         chave = f"{ano}-{mes:02d}"
-        meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
         historico_lista.append({
             'mes': meses_pt[mes - 1],
             'valor': round(historico_mensal.get(chave, 0), 2),
@@ -22672,7 +23018,6 @@ def _build_context(user_id: int) -> dict:
     objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
     personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
 
-    # Calcular regra 50/30/20 se tiver rendimento
     regra_5030_20 = None
     if rendimento > 0:
         necessidades_ideal = rendimento * 0.50
@@ -22686,7 +23031,6 @@ def _build_context(user_id: int) -> dict:
             'pct_rendimento': round((total_mes / rendimento) * 100, 1),
         }
 
-    # Análise de risco: concentração de gasto numa categoria
     risco_concentracao = None
     if top_cats and total_mes > 0:
         top_cat_nome, top_cat_val = top_cats[0]
@@ -22698,7 +23042,6 @@ def _build_context(user_id: int) -> dict:
                 'valor': round(top_cat_val, 2),
             }
 
-    # Agrupar faturas do mês por categoria para drill-down
     itens_por_categoria = {}
     for fatura in faturas_mes:
         cat = fatura['categoria']
@@ -22709,7 +23052,6 @@ def _build_context(user_id: int) -> dict:
             'valor': fatura['valor'],
             'data': fatura['data'],
         })
-    # Ordenar por valor desc dentro de cada categoria
     for cat in itens_por_categoria:
         itens_por_categoria[cat].sort(key=lambda x: x['valor'], reverse=True)
 
@@ -22737,8 +23079,10 @@ def _build_context(user_id: int) -> dict:
     }
 
 
-def _gerar_insights_llm(ctx: dict, personalidade: str) -> list:
+def _gerar_insights_llm(ctx: dict, personalidade: str = None) -> list:
     """Chama o LLM para gerar insights personalizados com princípios financeiros reais."""
+    if personalidade is None:
+        personalidade = ctx.get('personalidade', 'calm')
 
     SYSTEM_PROMPTS = {
         'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
@@ -22863,16 +23207,13 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
             temperature=0.72,
         )
         raw = response.choices[0].message.content.strip()
-        import re
         raw = re.sub(r'```json|```', '', raw).strip()
         insights = json.loads(raw)
         if isinstance(insights, list):
             return insights[:6]
         return []
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f'Erro ao gerar insights LLM: {e}')
-        # Fallback com insights básicos mas mais informativos
+        logger.error(f'Erro ao gerar insights LLM: {e}')
         insights = []
         if ctx['total_gasto_mes'] > 0:
             insights.append({
@@ -22903,7 +23244,7 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
                          f"O Latte Factor de David Bach mostra como pequenos gastos recorrentes têm grande impacto a longo prazo.",
                 'valor': ctx['total_subscricoes'],
             })
-        if ctx['variacao_pct'] is not None and not (ctx['variacao_pct'] > 0):
+        if ctx['variacao_pct'] is not None and ctx['variacao_pct'] < 0:
             insights.append({
                 'tipo': 'positivo',
                 'texto': f"Gastaste {abs(ctx['variacao_pct'])}% menos que o mês anterior. Excelente progresso!",
@@ -22912,13 +23253,20 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
         return insights[:5]
 
 
-# ── Endpoint ──────────────────────────────────────────────────────────────────
+# Alias para as tasks Celery
+_gerar_insights_com_llm = _gerar_insights_llm
+
+
+# ── GET /api/v1/insights ──────────────────────────────────────────────────────
 
 @api_bp.route('/insights', methods=['GET'])
 @jwt_required()
 def get_insights():
     """
-    Gera insights personalizados com IA para o utilizador autenticado.
+    Gera insights personalizados com IA.
+    - Se existir cache Redis: serve imediatamente (200)
+    - Se não existir: dispara task Celery em background e retorna 202
+    - O cliente deve fazer retry em 10s
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -22927,47 +23275,64 @@ def get_insights():
 
     personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
 
+    cache_key = f'insights:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    # Cache miss — disparar task Celery em background
+    try:
+        from app.tasks.ai_insights import gerar_insights_task
+        gerar_insights_task.delay(user_id)
+        return jsonify({
+            'success': False,
+            'status': 'a_calcular',
+            'message': 'Os insights estão a ser calculados. Tenta novamente em 10 segundos.',
+            'retry_in': 10,
+        }), 202
+    except Exception:
+        pass
+
+    # Fallback síncrono se Celery não estiver disponível
     ctx = _build_context(user_id)
     insights = _gerar_insights_llm(ctx, personalidade)
 
-    return jsonify({
+    result = {
         'success': True,
         'insights': insights,
         'resumo': {
-            'total_gasto':        ctx['total_gasto_mes'],
-            'num_faturas':        ctx['num_faturas_mes'],
-            'variacao_pct':       ctx['variacao_pct'],
-            'variacao_subiu':     (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal':   ctx['orcamento_mensal'],
-            'rendimento_mensal':  ctx['rendimento_mensal'],
-            'pct_orcamento':      round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
-                                  if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento':     round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
-                                  if ctx['rendimento_mensal'] > 0 else None,
-            'top_categorias':     ctx['top_categorias'],
-            'metas':              ctx['metas'],
-            'previsao_mensal':    ctx['previsao_mensal'],
-            'subscricoes':        ctx['subscricoes_detetadas'],
-            'total_subscricoes':  ctx['total_subscricoes'],
-            'historico_mensal':   ctx['historico_mensal'],
-            'regra_5030_20':      ctx['regra_5030_20'],
+            'total_gasto':         ctx['total_gasto_mes'],
+            'num_faturas':         ctx['num_faturas_mes'],
+            'variacao_pct':        ctx['variacao_pct'],
+            'variacao_subiu':      (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':    ctx['orcamento_mensal'],
+            'rendimento_mensal':   ctx['rendimento_mensal'],
+            'pct_orcamento':       round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
+                                   if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':      round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
+                                   if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':      ctx['top_categorias'],
+            'metas':               ctx['metas'],
+            'previsao_mensal':     ctx['previsao_mensal'],
+            'subscricoes':         ctx['subscricoes_detetadas'],
+            'total_subscricoes':   ctx['total_subscricoes'],
+            'historico_mensal':    ctx['historico_mensal'],
+            'regra_5030_20':       ctx['regra_5030_20'],
             'itens_por_categoria': ctx['itens_por_categoria'],
         },
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
-    })
+    }
+    return jsonify(result)
 
 
-# ── Endpoint Poupança Inteligente ─────────────────────────────────────────────
+# ── GET /api/v1/poupanca ──────────────────────────────────────────────────────
 
 @api_bp.route('/poupanca', methods=['GET'])
 @jwt_required()
 def get_poupanca():
     """
-    GET /api/v1/poupanca
-    Gera um plano de poupança personalizado e concreto com base nos dados
-    reais dos últimos meses: histórico, padrões, metas, subscrições, regra 50/30/20.
-    Muito mais rico do que o chat genérico — usa contexto longitudinal real.
+    Gera um plano de poupança personalizado e concreto com base nos dados reais.
     """
     user_id = int(get_jwt_identity())
     user = User.query.get(user_id)
@@ -22986,7 +23351,6 @@ def get_poupanca():
             'breakdown': [],
         })
 
-    # Calcular poupança possível com base em dados reais
     orcamento    = ctx['orcamento_mensal']
     rendimento   = ctx['rendimento_mensal']
     gasto_atual  = ctx['total_gasto_mes']
@@ -22994,22 +23358,19 @@ def get_poupanca():
     previsao     = ctx['previsao_mensal'] or gasto_atual
     top_cats     = ctx['top_categorias']
 
-    # Poupança possível: diferença entre orçamento/rendimento e gasto previsto
     if orcamento > 0:
         poupanca_possivel = max(0, orcamento - previsao)
     elif rendimento > 0:
-        poupanca_possivel = max(0, rendimento * 0.20)  # regra 50/30/20
+        poupanca_possivel = max(0, rendimento * 0.20)
     else:
         poupanca_possivel = None
 
-    # Breakdown por categoria: onde pode cortar
+    categorias_cortaveis = {'lazer', 'restaurantes', 'vestuário', 'takeaway',
+                             'entretenimento', 'outros', 'compras'}
     breakdown = []
     for cat_item in top_cats[:4]:
         cat   = cat_item['categoria']
         valor = cat_item['valor']
-        # Sugere corte de 15-30% nas categorias de lazer/vestuário/restaurantes
-        categorias_cortaveis = ['lazer', 'restaurantes', 'vestuário', 'takeaway',
-                                 'entretenimento', 'outros', 'compras']
         pct_corte = 0.20 if cat.lower() in categorias_cortaveis else 0.10
         economia = round(valor * pct_corte, 2)
         if economia > 0:
@@ -23021,12 +23382,8 @@ def get_poupanca():
                 'economia_anual': round(economia * 12, 2),
             })
 
-    # Prompt muito específico para poupança — usa TODOS os dados reais
-    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
-
-    historico_txt = ', '.join([
-        f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']
-    ])
+    top_cats_txt  = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
+    historico_txt = ', '.join([f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']])
 
     subscricoes_txt = ''
     if ctx['subscricoes_detetadas']:
@@ -23094,7 +23451,7 @@ Responde APENAS com JSON válido:
 }}"""
 
     try:
-        import os, json, re
+        import os
         from groq import Groq
         client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
         response = client.chat.completions.create(
@@ -23107,15 +23464,13 @@ Responde APENAS com JSON válido:
         raw = re.sub(r'```json|```', '', raw).strip()
         resultado = json.loads(raw)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f'Erro poupanca LLM: {e}')
-        # Fallback inteligente com dados reais
+        logger.error(f'Erro poupanca LLM: {e}')
         foco = top_cats[0]['categoria'] if top_cats else 'geral'
         economia_mensal = round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0
         resultado = {
             'sugestao': (
                 f"Com base nos teus padrões, podes poupar cortando 20% em {foco} "
-                f"({round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0}€/mês). "
+                f"({economia_mensal}€/mês). "
                 f"{'As tuas subscrições custam ' + str(subscricoes) + '€/mês = ' + str(round(subscricoes*12)) + '€/ano — vale a pena rever.' if subscricoes > 0 else ''}"
             ).strip(),
             'poupanca_estimada_mensal': economia_mensal,
@@ -28364,15 +28719,19 @@ def extract_invoice_info(file_path, filename):
 """
 app/api/auth.py — Endpoints de autenticação para o mobile
 
-POST  /api/v1/auth/login              → {access_token, user}
-POST  /api/v1/auth/register           → {message} (envia email de confirmação)
-POST  /api/v1/auth/confirm/<token>    → {access_token, user}
+POST  /api/v1/auth/login              → {access_token, refresh_token, user}
+POST  /api/v1/auth/register           → {message}
+POST  /api/v1/auth/refresh            → {access_token}  (usa refresh token)
+POST  /api/v1/auth/logout             → revoga tokens no Redis
+POST  /api/v1/auth/confirm/<token>    → {access_token, refresh_token, user}
+GET   /api/v1/auth/confirm-web/<tok>  → redirect deep link
 POST  /api/v1/auth/resend-confirm     → reenvia email de confirmação
 GET   /api/v1/auth/me                 → {user}
 PATCH /api/v1/auth/me                 → atualiza perfil
 POST  /api/v1/auth/avatar             → upload de foto de perfil
 POST  /api/v1/auth/onboarding         → marca onboarding como completo
 POST  /api/v1/auth/firebase           → login com Google/Apple via Firebase
+DELETE /api/v1/auth/account           → apagar conta
 """
 
 import logging
@@ -28383,10 +28742,15 @@ import secrets
 from datetime import datetime, timedelta
 from flask import request, jsonify, current_app
 from flask_jwt_extended import (
-    create_access_token, jwt_required, get_jwt_identity,
+    create_access_token,
+    create_refresh_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
 )
 from app.api import api_bp
 from app.models import User
+from app.extensions import limiter, get_redis_client
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -28416,8 +28780,8 @@ def _enviar_email_confirmacao(user):
             logger.warning('RESEND_API_KEY não definida — email de confirmação não enviado.')
             return False
 
-        app_url    = os.getenv('APP_URL', 'https://verly.app')
-        from_email = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
+        app_url     = os.getenv('APP_URL', 'https://verly.app')
+        from_email  = os.getenv('EMAIL_FROM', 'Verly <noreply@verly.app>')
         confirm_url = f"{app_url}/api/v1/auth/confirm-web/{user.email_confirm_token}"
 
         html = f"""
@@ -28449,7 +28813,10 @@ def _enviar_email_confirmacao(user):
         return False
 
 
+# ── Login ─────────────────────────────────────────────────────────────────────
+
 @api_bp.route('/auth/login', methods=['POST'])
+@limiter.limit("10 per minute")
 def login():
     data     = request.get_json(silent=True) or {}
     email    = (data.get('email') or '').strip().lower()
@@ -28468,11 +28835,54 @@ def login():
             'code':  'EMAIL_NOT_CONFIRMED',
         }), 403
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
+
+# ── Refresh ───────────────────────────────────────────────────────────────────
+
+@api_bp.route('/auth/refresh', methods=['POST'])
+@jwt_required(refresh=True)
+def refresh():
+    """Emite novo access token usando o refresh token (15 min de validade)."""
+    user_id      = get_jwt_identity()
+    access_token = create_access_token(identity=user_id)
+    return jsonify({'access_token': access_token})
+
+
+# ── Logout ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/auth/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """
+    Revoga o access token actual no Redis (TTL = 15 min).
+    Se o cliente enviar o refresh token no body, revoga-o também.
+    """
+    jti   = get_jwt()['jti']
+    redis = get_redis_client()
+
+    # Revogar access token (15 min TTL)
+    redis.setex(f'blacklist:{jti}', int(timedelta(minutes=15).total_seconds()), 'revoked')
+
+    # Revogar refresh token se enviado
+    data = request.get_json(silent=True) or {}
+    refresh_jti = data.get('refresh_jti')
+    if refresh_jti:
+        redis.setex(f'blacklist:{refresh_jti}', int(timedelta(days=30).total_seconds()), 'revoked')
+
+    return jsonify({'message': 'Sessão terminada com sucesso.'})
+
+
+# ── Register ──────────────────────────────────────────────────────────────────
 
 @api_bp.route('/auth/register', methods=['POST'])
+@limiter.limit("5 per minute")
 def register():
     data     = request.get_json(silent=True) or {}
     nome     = (data.get('nome') or '').strip()
@@ -28515,14 +28925,14 @@ def register():
     }), 201
 
 
+# ── Confirm email ─────────────────────────────────────────────────────────────
+
 @api_bp.route('/auth/confirm/<token>', methods=['POST'])
 def confirm_email(token):
     """Confirma o email via token (chamado pela app após deep link)."""
     user = User.query.filter_by(email_confirm_token=token).first()
-
     if not user:
         return jsonify({'error': 'Token inválido.'}), 400
-
     if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
         return jsonify({'error': 'Link expirado.', 'code': 'TOKEN_EXPIRED'}), 400
 
@@ -28531,18 +28941,21 @@ def confirm_email(token):
     user.email_confirm_expiry = None
     db.session.commit()
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
 
 @api_bp.route('/auth/confirm-web/<token>', methods=['GET'])
 def confirm_email_web(token):
     """Confirma o email via link no browser — redireciona para a app."""
     user = User.query.filter_by(email_confirm_token=token).first()
-
     if not user:
         return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link inválido ou já utilizado.</h2>', 400
-
     if user.email_confirm_expiry and datetime.utcnow() > user.email_confirm_expiry:
         return '<h2 style="font-family:sans-serif;text-align:center;padding:40px">Link expirado. Abre a app e pede um novo email.</h2>', 400
 
@@ -28570,11 +28983,10 @@ def resend_confirm():
     """Reenvia email de confirmação."""
     data  = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip().lower()
+    user  = User.query.filter_by(email=email).first()
 
-    user = User.query.filter_by(email=email).first()
     if not user:
         return jsonify({'message': 'Se o email existir, receberás um novo link.'}), 200
-
     if getattr(user, 'email_confirmado', True):
         return jsonify({'message': 'Este email já está confirmado.'}), 200
 
@@ -28585,6 +28997,8 @@ def resend_confirm():
     _enviar_email_confirmacao(user)
     return jsonify({'message': 'Email de confirmação reenviado!'}), 200
 
+
+# ── Me ────────────────────────────────────────────────────────────────────────
 
 @api_bp.route('/auth/me', methods=['GET'])
 @jwt_required()
@@ -28629,26 +29043,21 @@ def upload_avatar():
     image_b64 = data.get('image_base64', '')
     if not image_b64:
         return jsonify({'error': 'Imagem não fornecida.'}), 400
-
     if not image_b64.startswith('data:image/'):
         return jsonify({'error': 'Formato de imagem inválido. Usa data URI.'}), 400
-
     if len(image_b64) > 2_800_000:
         return jsonify({'error': 'Imagem demasiado grande. Máximo ~2MB.'}), 400
 
     try:
         avatars_dir = os.path.join(current_app.static_folder, 'avatars')
         os.makedirs(avatars_dir, exist_ok=True)
-
         header, b64data = image_b64.split(',', 1)
         ext = 'jpg' if 'jpeg' in header else ('png' if 'png' in header else 'jpg')
         img_bytes = base64.b64decode(b64data)
-
-        filename = f'avatar_{user_id}.{ext}'
-        filepath = os.path.join(avatars_dir, filename)
+        filename  = f'avatar_{user_id}.{ext}'
+        filepath  = os.path.join(avatars_dir, filename)
         with open(filepath, 'wb') as f:
             f.write(img_bytes)
-
         user.avatar_url = f'/static/avatars/{filename}'
     except Exception as e:
         logger.warning(f'Avatar disk save failed: {e}')
@@ -28674,7 +29083,6 @@ def complete_onboarding():
     user.onboarding_completo = True
     user.personalidade = personalidade
     db.session.commit()
-
     return jsonify({'success': True})
 
 
@@ -28683,7 +29091,6 @@ def firebase_login():
     """Login com Google/Apple via Firebase — email confirmado pelo Google."""
     data     = request.get_json(silent=True) or {}
     id_token = data.get('idToken', '').strip()
-
     if not id_token:
         return jsonify({'error': 'idToken é obrigatório.'}), 400
 
@@ -28726,20 +29133,22 @@ def firebase_login():
 
     db.session.commit()
 
-    access_token = create_access_token(identity=str(user.id))
-    return jsonify({'access_token': access_token, 'user': _user_to_dict(user)})
+    access_token  = create_access_token(identity=str(user.id))
+    refresh_token = create_refresh_token(identity=str(user.id))
+    return jsonify({
+        'access_token':  access_token,
+        'refresh_token': refresh_token,
+        'user':          _user_to_dict(user),
+    })
 
-# ── Adicionar no final de app/api/auth.py ─────────────────────────────────────
 
 @api_bp.route('/auth/account', methods=['DELETE'])
 @jwt_required()
 def delete_account():
     user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-
+    user    = User.query.get(user_id)
     if not user:
         return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
-
     try:
         db.session.delete(user)
         db.session.commit()
@@ -29019,8 +29428,8 @@ class User(UserMixin, db.Model):
     nome = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(150), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False, default='')
-    google_id = db.Column(db.String(128), unique=True)           # ← Google OAuth
-    avatar_url = db.Column(db.String(512))                       # ← foto de perfil (URL ou base64 key)
+    google_id = db.Column(db.String(128), unique=True)
+    avatar_url = db.Column(db.String(512))
     criado_em = db.Column(db.DateTime, default=datetime.utcnow)
     notificacoes_email = db.Column(db.Boolean, default=False)
     email_notificacoes = db.Column(db.String(150))
@@ -29032,16 +29441,15 @@ class User(UserMixin, db.Model):
     streak_ultima_atualizacao = db.Column(db.DateTime)
     lingua = db.Column(db.String(10), default='pt')
 
-    # ── Confirmação de email ────────────────────────────────────────────────────
     email_confirmado     = db.Column(db.Boolean, default=False)
     email_confirm_token  = db.Column(db.String(100))
     email_confirm_expiry = db.Column(db.DateTime)
 
-    faturas = db.relationship('Fatura', backref='user', lazy=True, cascade='all, delete-orphan')
-    conversas = db.relationship('Conversa', backref='user', lazy=True, cascade='all, delete-orphan')
-    metas = db.relationship('Meta', backref='user', lazy=True, cascade='all, delete-orphan')
-    subscricoes = db.relationship('Subscricao', backref='user', lazy=True, cascade='all, delete-orphan')
-    playlists_proprias = db.relationship('Playlist', backref='owner', lazy=True, cascade='all, delete-orphan')
+    faturas            = db.relationship('Fatura',    backref='user', lazy=True, cascade='all, delete-orphan')
+    conversas          = db.relationship('Conversa',  backref='user', lazy=True, cascade='all, delete-orphan')
+    metas              = db.relationship('Meta',      backref='user', lazy=True, cascade='all, delete-orphan')
+    subscricoes        = db.relationship('Subscricao',backref='user', lazy=True, cascade='all, delete-orphan')
+    playlists_proprias = db.relationship('Playlist',  backref='owner',lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -29062,87 +29470,85 @@ CATEGORIAS = [
 class Fatura(db.Model):
     __tablename__ = 'faturas'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     nome_ficheiro = db.Column(db.String(255), nullable=False)
-    loja = db.Column(db.String(150))
-    data_compra = db.Column(db.String(50))
-    total = db.Column(db.Float)
-    items = db.Column(db.Text)
-    categoria = db.Column(db.String(50), default='Outros')
-    data_garantia = db.Column(db.String(50))
+    loja          = db.Column(db.String(150))
+    data_compra   = db.Column(db.String(50))
+    total         = db.Column(db.Float)
+    items         = db.Column(db.Text)
+    categoria     = db.Column(db.String(50), default='Outros')
+    data_garantia  = db.Column(db.String(50))
     data_devolucao = db.Column(db.String(50))
-    notas = db.Column(db.Text)
-    data_upload = db.Column(db.DateTime, default=datetime.utcnow)
-    # ── Gmail import ────────────────────────────────────────────────────────────
-    gmail_message_id = db.Column(db.String(100), unique=True)   # evita duplicados
-    fonte = db.Column(db.String(20), default='upload')          # 'upload' | 'gmail'
+    notas         = db.Column(db.Text)
+    data_upload   = db.Column(db.DateTime, default=datetime.utcnow)
+    file_key      = db.Column(db.String(512))   # chave no Cloudflare R2
+    gmail_message_id = db.Column(db.String(100), unique=True)
+    fonte            = db.Column(db.String(20), default='upload')
 
 
 class Conversa(db.Model):
     __tablename__ = 'conversas'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    pergunta = db.Column(db.Text, nullable=False)
-    resposta = db.Column(db.Text, nullable=False)
+    id        = db.Column(db.Integer, primary_key=True)
+    user_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    pergunta  = db.Column(db.Text, nullable=False)
+    resposta  = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Meta(db.Model):
     __tablename__ = 'metas'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    nome = db.Column(db.String(100))          # ← campo nome que estava a faltar
-    categoria = db.Column(db.String(50), nullable=False)
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    nome         = db.Column(db.String(100))
+    categoria    = db.Column(db.String(50), nullable=False)
     valor_limite = db.Column(db.Float, nullable=False)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em    = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class ContaBancaria(db.Model):
     __tablename__ = 'contas_bancarias'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    account_id = db.Column(db.String(100), nullable=False)
-    requisition_id = db.Column(db.String(100), nullable=False)
-    institution_id = db.Column(db.String(100))
-    iban = db.Column(db.String(50))
-    nome_banco = db.Column(db.String(100))
-    ligada_em = db.Column(db.DateTime, default=datetime.utcnow)
+    id               = db.Column(db.Integer, primary_key=True)
+    user_id          = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    account_id       = db.Column(db.String(100), nullable=False)
+    requisition_id   = db.Column(db.String(100), nullable=False)
+    institution_id   = db.Column(db.String(100))
+    iban             = db.Column(db.String(50))
+    nome_banco       = db.Column(db.String(100))
+    ligada_em        = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class Subscricao(db.Model):
     __tablename__ = 'subscricoes'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    nome = db.Column(db.String(200), nullable=False)
-    categoria = db.Column(db.String(50), default='outro')
-    icone = db.Column(db.String(10), default='📦')
-    preco_mensal = db.Column(db.Float, default=0.0)
-    meses_pago = db.Column(db.Integer, default=1)
-    risk = db.Column(db.String(20), default='ok')
-    fonte = db.Column(db.String(20), default='extrato')
-    ativa = db.Column(db.Boolean, default=True)
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    nome          = db.Column(db.String(200), nullable=False)
+    categoria     = db.Column(db.String(50), default='outro')
+    icone         = db.Column(db.String(10), default='📦')
+    preco_mensal  = db.Column(db.Float, default=0.0)
+    meses_pago    = db.Column(db.Integer, default=1)
+    risk          = db.Column(db.String(20), default='ok')
+    fonte         = db.Column(db.String(20), default='extrato')
+    ativa         = db.Column(db.Boolean, default=True)
     atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
 
-
-# ── Playlists ("Criar Em") ─────────────────────────────────────────────────────
 
 playlist_fatura = db.Table(
     'playlist_fatura',
-    db.Column('playlist_id', db.Integer, db.ForeignKey('playlist.id'), primary_key=True),
-    db.Column('fatura_id',   db.Integer, db.ForeignKey('faturas.id'),  primary_key=True),
+    db.Column('playlist_id',   db.Integer, db.ForeignKey('playlist.id'), primary_key=True),
+    db.Column('fatura_id',     db.Integer, db.ForeignKey('faturas.id'),  primary_key=True),
     db.Column('adicionado_em', db.DateTime, default=datetime.utcnow),
 )
 
 playlist_membro = db.Table(
     'playlist_membro',
-    db.Column('playlist_id', db.Integer, db.ForeignKey('playlist.id'),  primary_key=True),
-    db.Column('user_id',     db.Integer, db.ForeignKey('users.id'),     primary_key=True),
+    db.Column('playlist_id', db.Integer, db.ForeignKey('playlist.id'), primary_key=True),
+    db.Column('user_id',     db.Integer, db.ForeignKey('users.id'),    primary_key=True),
     db.Column('papel',       db.String(20), default='editor'),
     db.Column('joined_at',   db.DateTime,   default=datetime.utcnow),
 )
@@ -29151,21 +29557,19 @@ playlist_membro = db.Table(
 class Playlist(db.Model):
     __tablename__ = 'playlist'
 
-    id          = db.Column(db.Integer, primary_key=True)
-    nome        = db.Column(db.String(100), nullable=False)
-    descricao   = db.Column(db.Text)
-    cor         = db.Column(db.String(20), default='#6C5CE7')
-    icone       = db.Column(db.String(20), default='list')
-    owner_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    codigo      = db.Column(db.String(20), unique=True)
+    id           = db.Column(db.Integer, primary_key=True)
+    nome         = db.Column(db.String(100), nullable=False)
+    descricao    = db.Column(db.Text)
+    cor          = db.Column(db.String(20), default='#6C5CE7')
+    icone        = db.Column(db.String(20), default='list')
+    owner_id     = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    codigo       = db.Column(db.String(20), unique=True)
     colaborativa = db.Column(db.Boolean, default=False)
-    criado_em   = db.Column(db.DateTime, default=datetime.utcnow)
+    criado_em    = db.Column(db.DateTime, default=datetime.utcnow)
 
     faturas = db.relationship('Fatura', secondary=playlist_fatura, lazy='dynamic')
     membros = db.relationship('User',   secondary=playlist_membro, lazy='dynamic')
 
-
-# ── Amizades / Conexões ────────────────────────────────────────────────────────
 
 class Amizade(db.Model):
     __tablename__ = 'amizades'
@@ -29173,14 +29577,12 @@ class Amizade(db.Model):
     id           = db.Column(db.Integer, primary_key=True)
     de_user_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     para_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    estado       = db.Column(db.String(20), default='pendente')  # pendente | aceite | bloqueado
+    estado       = db.Column(db.String(20), default='pendente')
     criado_em    = db.Column(db.DateTime, default=datetime.utcnow)
 
     de_user   = db.relationship('User', foreign_keys=[de_user_id])
     para_user = db.relationship('User', foreign_keys=[para_user_id])
 
-
-# ── Gmail Integration ──────────────────────────────────────────────────────────
 
 class GmailConnection(db.Model):
     __tablename__ = 'gmail_connections'
@@ -29188,7 +29590,7 @@ class GmailConnection(db.Model):
     id                 = db.Column(db.Integer, primary_key=True)
     user_id            = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, unique=True)
     gmail_email        = db.Column(db.String(200))
-    credentials_json   = db.Column(db.Text, nullable=False)   # JSON com token + refresh_token
+    credentials_json   = db.Column(db.Text, nullable=False)
     ativa              = db.Column(db.Boolean, default=True)
     ultima_sync        = db.Column(db.DateTime)
     faturas_importadas = db.Column(db.Integer, default=0)
@@ -29196,6 +29598,15 @@ class GmailConnection(db.Model):
     atualizado_em      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = db.relationship('User', backref=db.backref('gmail_connection', uselist=False))
+
+
+class TokenBlacklist(db.Model):
+    __tablename__ = 'token_blacklist'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    jti        = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False)
 </file>
 
 <file path="verly-mobile/src/screens/DashboardScreen.js">
@@ -32258,19 +32669,14 @@ export default function AppNavigator() {
 """
 app/__init__.py — Factory da aplicação Verly
 
-Melhorias de segurança incluídas:
-  - Configuração por ambiente (dev/prod) via config.py
-  - Flask-WTF CSRF protection em todas as rotas WEB (excluídas as /api/v1/*)
-  - Headers de segurança HTTP
-  - MAX_CONTENT_LENGTH para limitar tamanho de uploads
-  - Logging estruturado
-  - Firebase Admin SDK inicializado para login social
 """
 
 import os
 import logging
 import firebase_admin
 from firebase_admin import credentials
+from datetime import timedelta
+from dotenv import load_dotenv
 
 from flask import Flask, redirect, url_for, jsonify, request
 from flask_sqlalchemy import SQLAlchemy
@@ -32278,150 +32684,110 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
-from datetime import timedelta
-from dotenv import load_dotenv
 
 load_dotenv()
 
 db = SQLAlchemy()
 login_manager = LoginManager()
 csrf = CSRFProtect()
+jwt = JWTManager()
 
 
 def _init_firebase(app):
-    """Inicializa o Firebase Admin SDK (uma só vez)."""
-
     if firebase_admin._apps:
-        return  # já inicializado (evita erro em reloads)
-
-    # Caminho para o ficheiro de credenciais
-    # ⚠️ NUNCA commitar este ficheiro no Git
+        return
     service_account_path = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
         'firebase-service-account.json'
     )
-
     if os.path.exists(service_account_path):
         try:
             cred = credentials.Certificate(service_account_path)
             firebase_admin.initialize_app(cred)
-
             app.logger.info('✅ Firebase Admin SDK inicializado.')
-
         except Exception as e:
             app.logger.error(f'Erro ao inicializar Firebase: {str(e)}')
-
     else:
-        app.logger.warning(
-            '⚠️ firebase-service-account.json não encontrado. '
-            'Login social desativado. '
-            'Obtém o ficheiro em Firebase Console → '
-            'Definições do Projeto → Contas de serviço.'
-        )
+        app.logger.warning('⚠️ firebase-service-account.json não encontrado. Login social desativado.')
 
 
 def create_app(config_override=None):
     app = Flask(__name__, template_folder='../templates', static_folder='../static')
 
-    # ── Carregar configuração ─────────────────────────────────────────────────
     from config import get_config
     cfg_class = config_override or get_config()
     app.config.from_object(cfg_class)
 
-    # ✅ Inicializar Firebase Admin SDK
-    _init_firebase(app)
+    app.config['JWT_SECRET_KEY'] = app.config.get('JWT_SECRET_KEY', os.getenv('SECRET_KEY', 'dev-secret'))
+    app.config['JWT_ACCESS_TOKEN_EXPIRES']  = timedelta(minutes=15)
+    app.config['JWT_REFRESH_TOKEN_EXPIRES'] = timedelta(days=30)
 
-    # ── Logging estruturado ───────────────────────────────────────────────────
+    _init_firebase(app)
     _setup_logging(app)
 
-    # ── Inicializar extensões ─────────────────────────────────────────────────
     db.init_app(app)
     login_manager.init_app(app)
     csrf.init_app(app)
+    jwt.init_app(app)
 
-    # ✅ CORS — permite pedidos da app mobile e do browser
+    from app.extensions import cache, limiter
+    cache.init_app(app)
+    limiter.init_app(app)
+
+    @jwt.token_in_blocklist_loader
+    def check_if_revoked(jwt_header, jwt_payload):
+        try:
+            from app.extensions import get_redis_client
+            jti = jwt_payload['jti']
+            redis = get_redis_client()
+            return redis.exists(f'blacklist:{jti}') == 1
+        except Exception:
+            return False
+
     CORS(app, resources={r"/api/*": {"origins": "*"}})
-
-    # ✅ JWT (Configurado dentro da função)
-    jwt = JWTManager(app)
-
-    app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
-    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Precisas de fazer login primeiro.'
     login_manager.login_message_category = 'warning'
 
-    # ── Headers de segurança HTTP ─────────────────────────────────────────────
     @app.after_request
     def set_security_headers(response):
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-XSS-Protection'] = '1; mode=block'
         response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-
         if not app.debug:
-            response.headers['Strict-Transport-Security'] = (
-                'max-age=31536000; includeSubDomains'
-            )
-
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
         return response
 
-    # ── CSRF error handler ────────────────────────────────────────────────────
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
-        app.logger.warning(
-            f'CSRF error: {e.description} — IP: {request.remote_addr}'
-        )
-
-        if (
-            request.is_json or
-            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-        ):
-            return jsonify({
-                'success': False,
-                'message': 'Sessão expirada. Recarrega a página e tenta novamente.',
-                'csrf_error': True
-            }), 403
-
+        app.logger.warning(f'CSRF error: {e.description} — IP: {request.remote_addr}')
+        if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': 'Sessão expirada. Recarrega a página e tenta novamente.', 'csrf_error': True}), 403
         from flask import flash
-
         flash('A tua sessão expirou. Faz login novamente.', 'error')
         return redirect(url_for('auth.login'))
 
-    # ── Upload too large ──────────────────────────────────────────────────────
     @app.errorhandler(413)
     def handle_too_large(e):
-        max_mb = (
-            app.config.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024)
-            // (1024 * 1024)
-        )
-
-        if (
-            request.is_json or
-            request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-        ):
-            return jsonify({
-                'success': False,
-                'message': (
-                    f'Ficheiro demasiado grande. '
-                    f'Máximo permitido: {max_mb} MB.'
-                )
-            }), 413
-
+        max_mb = app.config.get('MAX_CONTENT_LENGTH', 10 * 1024 * 1024) // (1024 * 1024)
+        if request.is_json or request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({'success': False, 'message': f'Ficheiro demasiado grande. Máximo permitido: {max_mb} MB.'}), 413
         from flask import flash
-
         flash(f'Ficheiro demasiado grande. Máximo: {max_mb} MB.', 'error')
         return redirect(url_for('faturas.faturas'))
 
-    # ── User loader ───────────────────────────────────────────────────────────
+    @app.errorhandler(429)
+    def handle_rate_limit(e):
+        return jsonify({'success': False, 'message': 'Demasiados pedidos. Tenta novamente mais tarde.', 'retry_after': str(e.retry_after) if hasattr(e, 'retry_after') else '60'}), 429
+
     from app.models import User
 
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))
 
-    # ── Blueprints web ────────────────────────────────────────────────────────
     from app.auth           import auth_bp
     from app.dashboard      import dashboard_bp
     from app.faturas        import faturas_bp
@@ -32441,9 +32807,7 @@ def create_app(config_override=None):
     from app.configuracoes  import configuracoes_bp
     from app.notificacoes   import notificacoes_bp
     from app.email_routes   import email_bp
-
-    # ✅ Blueprint da API mobile (JWT — sem CSRF)
-    from app.api import api_bp
+    from app.api            import api_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(dashboard_bp)
@@ -32465,7 +32829,6 @@ def create_app(config_override=None):
     app.register_blueprint(notificacoes_bp)
     app.register_blueprint(email_bp)
 
-    # ✅ API mobile registada e imediatamente isenta de CSRF
     app.register_blueprint(api_bp, url_prefix='/api/v1')
     csrf.exempt(api_bp)
 
@@ -32473,27 +32836,16 @@ def create_app(config_override=None):
         db.create_all()
         _migrate_db()
 
-    app.logger.info(
-        f'Verly iniciada — ambiente: '
-        f'{os.getenv("FLASK_ENV", "development")}'
-    )
-
+    app.logger.info(f'Verly iniciada — ambiente: {os.getenv("FLASK_ENV", "development")}')
     return app
 
 
 def _setup_logging(app: Flask):
     level = logging.DEBUG if app.config.get('DEBUG') else logging.INFO
-
     handler = logging.StreamHandler()
     handler.setLevel(level)
-
-    formatter = logging.Formatter(
-        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-
+    formatter = logging.Formatter('[%(asctime)s] %(levelname)s in %(module)s: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     handler.setFormatter(formatter)
-
     app.logger.handlers.clear()
     app.logger.addHandler(handler)
     app.logger.setLevel(level)
@@ -32501,46 +32853,39 @@ def _setup_logging(app: Flask):
 
 def _migrate_db():
     from sqlalchemy import text, inspect
-
     inspector = inspect(db.engine)
 
     def column_exists(table, column):
-        cols = [c['name'] for c in inspector.get_columns(table)]
-        return column in cols
+        try:
+            cols = [c['name'] for c in inspector.get_columns(table)]
+            return column in cols
+        except Exception:
+            return True
 
     migrations = [
-        ('faturas', 'categoria', "VARCHAR(50) DEFAULT 'Outros'"),
-        ('faturas', 'data_garantia', 'VARCHAR(50)'),
+        ('faturas', 'categoria',      "VARCHAR(50) DEFAULT 'Outros'"),
+        ('faturas', 'data_garantia',  'VARCHAR(50)'),
         ('faturas', 'data_devolucao', 'VARCHAR(50)'),
-        ('faturas', 'notas', 'TEXT'),
-        ('users', 'notificacoes_email', 'BOOLEAN DEFAULT 0'),
-        ('users', 'email_notificacoes', 'VARCHAR(150)'),
-        ('users', 'personalidade', "VARCHAR(20) DEFAULT 'calm'"),
-        ('users', 'orcamento_mensal', 'FLOAT DEFAULT 0'),
-        ('users', 'onboarding_completo', 'BOOLEAN DEFAULT 0'),
-        ('users', 'avatar', 'VARCHAR(255)'),
-        ('users', 'streak_dias', 'INTEGER DEFAULT 0'),
-        ('users', 'streak_ultima_atualizacao', 'DATETIME'),
-        ('users', 'lingua', "VARCHAR(10) DEFAULT 'pt'"),
+        ('faturas', 'notas',          'TEXT'),
+        ('faturas', 'file_key',       'VARCHAR(512)'),
+        ('users',   'notificacoes_email',        'BOOLEAN DEFAULT 0'),
+        ('users',   'email_notificacoes',        'VARCHAR(150)'),
+        ('users',   'personalidade',             "VARCHAR(20) DEFAULT 'calm'"),
+        ('users',   'orcamento_mensal',          'FLOAT DEFAULT 0'),
+        ('users',   'onboarding_completo',       'BOOLEAN DEFAULT 0'),
+        ('users',   'avatar',                    'VARCHAR(255)'),
+        ('users',   'streak_dias',               'INTEGER DEFAULT 0'),
+        ('users',   'streak_ultima_atualizacao', 'DATETIME'),
+        ('users',   'lingua',                    "VARCHAR(10) DEFAULT 'pt'"),
     ]
 
     for table, column, col_type in migrations:
         if not column_exists(table, column):
             try:
-                db.session.execute(
-                    text(
-                        f'ALTER TABLE {table} '
-                        f'ADD COLUMN {column} {col_type}'
-                    )
-                )
-
+                db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
                 db.session.commit()
-
             except Exception:
                 db.session.rollback()
-               
-                from app.api import subscricoes  # noqa
-                from app.api import notificacoes_mobile  # noqa
 </file>
 
 <file path="requirements.txt">
@@ -32657,6 +33002,14 @@ google-auth-oauthlib==1.4.0
 google-api-python-client==2.196.0
 gunicorn
 python-dateutil==2.9.0
+redis==5.0.3
+flask-caching==2.3.0
+celery==5.4.0
+flower==2.0.1
+flask-limiter==3.7.0
+boto3==1.34.0
+qdrant-client==1.9.1
+llama-index-vector-stores-qdrant==0.2.8
 </file>
 
 <file path="verly-mobile/src/services/api.js">
