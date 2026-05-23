@@ -219,6 +219,8 @@ verly-mobile/src/components/AdMobConfig.js
 verly-mobile/src/components/DonutCategorias.js
 verly-mobile/src/components/DraggableDashboard.js
 verly-mobile/src/components/DrawerContent.js
+verly-mobile/src/components/DynamicDashboardEngine.js
+verly-mobile/src/components/ExplainableInsightCard.js
 verly-mobile/src/components/TabIcon.js
 verly-mobile/src/components/UI.js
 verly-mobile/src/constants/theme.js
@@ -250,6 +252,7 @@ verly-mobile/src/screens/PerfilScreen.js
 verly-mobile/src/screens/RelatorioScreen.js
 verly-mobile/src/screens/RetrospetivaMensalScreen.js
 verly-mobile/src/screens/ScoreScreen.js
+verly-mobile/src/screens/SimuladorScreen.js
 verly-mobile/src/screens/SubscricoesScreen.js
 verly-mobile/src/services/api.js
 verly-mobile/src/utils/haptics.js
@@ -257,6 +260,735 @@ verly-mobile/src/utils/haptics.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="verly-mobile/src/components/DynamicDashboardEngine.js">
+// src/components/DynamicDashboardEngine.js — Verly Fase 5A: Dynamic Dashboard
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
+import { COLORS, FONT, SPACE, RADIUS } from '../constants/theme';
+
+const C = COLORS;
+
+const PERFIS = {
+  impulsivo: { label: 'Controlador de Impulsos', emoji: '⚡', cor: C.red, descricao: 'Tens padrões de gasto impulsivo. O dashboard foca em alertas e limites.', mensagemPersonalizada: 'Hoje: foca em não ultrapassar o limite diário' },
+  disciplinado: { label: 'Gestor Estratégico', emoji: '📊', cor: C.green, descricao: 'Tens bom controlo financeiro. O dashboard foca em previsões e crescimento.', mensagemPersonalizada: 'Continua assim — estás no caminho certo' },
+  gastador: { label: 'Otimizador de Gastos', emoji: '🔍', cor: C.yellow, descricao: 'Gastas acima do orçamento. O dashboard foca em onde cortar.', mensagemPersonalizada: 'Esta semana: identifica 1 categoria para cortar' },
+  poupador: { label: 'Acumulador', emoji: '🏦', cor: C.brand, descricao: 'Poupas consistentemente. O dashboard foca em crescimento e objetivos.', mensagemPersonalizada: 'O teu ritmo de poupança está acima da média' },
+  equilibrado: { label: 'Financeiramente Equilibrado', emoji: '⚖️', cor: C.brandMid, descricao: 'Gastos dentro do esperado. Dashboard equilibrado.', mensagemPersonalizada: 'Mantém o equilíbrio atual' },
+};
+
+export function detectarPerfil(resumo) {
+  if (!resumo) return 'equilibrado';
+  const { total_gasto = 0, orcamento_mensal = 0, variacao_pct = 0, variacao_subiu = false, total_subscricoes = 0, metas = [], historico_mensal = [] } = resumo;
+  let pontos = { impulsivo: 0, disciplinado: 0, gastador: 0, poupador: 0, equilibrado: 0 };
+
+  if (orcamento_mensal > 0) {
+    const pct = (total_gasto / orcamento_mensal) * 100;
+    if (pct > 120) pontos.gastador += 3;
+    else if (pct > 100) pontos.gastador += 2;
+    else if (pct > 80) pontos.equilibrado += 1;
+    else if (pct < 60) pontos.poupador += 2;
+    else pontos.equilibrado += 2;
+  }
+  if (variacao_subiu && variacao_pct > 20) pontos.impulsivo += 2;
+  else if (variacao_subiu && variacao_pct > 10) pontos.gastador += 1;
+  else if (!variacao_subiu && variacao_pct && variacao_pct < -10) pontos.disciplinado += 2;
+  else if (!variacao_subiu) pontos.poupador += 1;
+  if (total_subscricoes > 100) pontos.impulsivo += 2;
+  else if (total_subscricoes > 50) pontos.gastador += 1;
+  const metasUltrapassadas = metas.filter(m => m.ultrapassou).length;
+  if (metasUltrapassadas >= 2) pontos.impulsivo += 2;
+  else if (metasUltrapassadas >= 1) pontos.gastador += 1;
+  else if (metas.length > 0) pontos.disciplinado += 1;
+  if (historico_mensal.length >= 3) {
+    const valores = historico_mensal.map(h => h.valor).filter(v => v > 0);
+    if (valores.length >= 2) {
+      const media = valores.reduce((a, b) => a + b, 0) / valores.length;
+      const desvio = Math.sqrt(valores.reduce((s, v) => s + Math.pow(v - media, 2), 0) / valores.length);
+      const cv = media > 0 ? desvio / media : 0;
+      if (cv > 0.3) pontos.impulsivo += 1;
+      else if (cv < 0.1) pontos.disciplinado += 2;
+    }
+  }
+  return Object.entries(pontos).reduce((a, b) => b[1] > a[1] ? b : a, ['equilibrado', 0])[0];
+}
+
+export function AIStateBanner({ resumo }) {
+  const perfilKey = useMemo(() => detectarPerfil(resumo), [resumo]);
+  const perfil = PERFIS[perfilKey];
+  if (!resumo || !perfil) return null;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(20).duration(500).springify()} style={[bannerStyles.wrap, { borderColor: perfil.cor + '30' }]}>
+      <View style={[bannerStyles.strip, { backgroundColor: perfil.cor }]} />
+      <View style={bannerStyles.content}>
+        <View style={bannerStyles.row}>
+          <View style={[bannerStyles.emojiWrap, { backgroundColor: perfil.cor + '18' }]}>
+            <Text style={bannerStyles.emoji}>{perfil.emoji}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[bannerStyles.perfilLabel, { color: perfil.cor }]}>PERFIL DETETADO</Text>
+            <Text style={bannerStyles.perfilNome}>{perfil.label}</Text>
+            <Text style={bannerStyles.perfilDesc}>{perfil.descricao}</Text>
+          </View>
+        </View>
+        <View style={[bannerStyles.mensagemWrap, { backgroundColor: perfil.cor + '10' }]}>
+          <Text style={[bannerStyles.mensagem, { color: perfil.cor }]}>💬 {perfil.mensagemPersonalizada}</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+export function useDashboardLayout(resumo) {
+  return useMemo(() => {
+    const perfilKey = detectarPerfil(resumo);
+    const perfil = PERFIS[perfilKey];
+    const { total_gasto = 0, orcamento_mensal = 0, variacao_pct = 0, variacao_subiu = false, total_subscricoes = 0, metas = [], previsao_mensal = 0 } = resumo || {};
+    const pctOrcamento = orcamento_mensal > 0 ? (total_gasto / orcamento_mensal) * 100 : 0;
+    const nivelRisco = pctOrcamento > 100 ? 'critico' : pctOrcamento > 85 ? 'alto' : pctOrcamento > 60 ? 'medio' : 'baixo';
+    const corRisco = nivelRisco === 'critico' ? C.red : nivelRisco === 'alto' ? C.yellow : nivelRisco === 'medio' ? C.brand : C.green;
+    const alertasBanners = [];
+    if (pctOrcamento > 100) alertasBanners.push({ tipo: 'critico', mensagem: `🚨 Ultrapassaste o orçamento em ${Math.round(pctOrcamento - 100)}%`, cor: C.red, prioridade: 1 });
+    else if (previsao_mensal > orcamento_mensal && orcamento_mensal > 0) alertasBanners.push({ tipo: 'aviso', mensagem: `⚠️ Prevês ultrapassar o orçamento este mês`, cor: C.yellow, prioridade: 2 });
+    else if (variacao_subiu && variacao_pct > 25) alertasBanners.push({ tipo: 'tendencia', mensagem: `📈 Gastos subiram ${variacao_pct}% vs mês passado`, cor: C.orange, prioridade: 3 });
+    if (total_subscricoes > 80) alertasBanners.push({ tipo: 'subscricoes', mensagem: `🔁 ${total_subscricoes.toFixed(0)}€/mês em subscrições (${(total_subscricoes * 12).toFixed(0)}€/ano)`, cor: C.orange, prioridade: 4 });
+    const metasUltrapassadas = metas.filter(m => m.ultrapassou);
+    if (metasUltrapassadas.length > 0) alertasBanners.push({ tipo: 'metas', mensagem: `🎯 ${metasUltrapassadas.length} meta(s) ultrapassada(s) este mês`, cor: C.red, prioridade: 5 });
+    return {
+      perfilKey, perfil, nivelRisco, corRisco,
+      alertasBanners: alertasBanners.sort((a, b) => a.prioridade - b.prioridade),
+      mostrarSimulador: total_subscricoes > 20 || pctOrcamento > 75,
+      destacarMetas: metasUltrapassadas.length > 0 || pctOrcamento > 80,
+      destacarPrevisao: previsao_mensal > 0 && orcamento_mensal > 0,
+    };
+  }, [resumo]);
+}
+
+export function DynamicAlertBanners({ resumo }) {
+  const { alertasBanners } = useDashboardLayout(resumo);
+  if (!alertasBanners.length) return null;
+  return (
+    <View style={{ marginHorizontal: SPACE.lg, marginBottom: SPACE.sm, gap: 6 }}>
+      {alertasBanners.slice(0, 2).map((alerta, i) => (
+        <Animated.View key={alerta.tipo} entering={FadeInDown.delay(i * 80).duration(400).springify()} style={[alertStyles.banner, { borderColor: alerta.cor + '30', backgroundColor: alerta.cor + '0D' }]}>
+          <View style={[alertStyles.bannerStrip, { backgroundColor: alerta.cor }]} />
+          <Text style={[alertStyles.bannerText, { color: alerta.cor }]}>{alerta.mensagem}</Text>
+        </Animated.View>
+      ))}
+    </View>
+  );
+}
+
+export function SimuladorQuickAccess({ resumo, onPress }) {
+  const { mostrarSimulador } = useDashboardLayout(resumo);
+  if (!mostrarSimulador) return null;
+  return (
+    <Animated.View entering={FadeInDown.delay(100).duration(400).springify()} style={simStyles.wrap}>
+      <View style={[simStyles.icon, { backgroundColor: C.brand + '20' }]}>
+        <Text style={simStyles.iconText}>🎛️</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={simStyles.titulo}>E se cortasses alguns gastos?</Text>
+        <Text style={simStyles.sub}>Ver simulação interativa →</Text>
+      </View>
+      <Text style={simStyles.cta} onPress={onPress}>Simular</Text>
+    </Animated.View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  wrap: { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, overflow: 'hidden', marginHorizontal: SPACE.lg, marginBottom: SPACE.sm },
+  strip: { height: 3, width: '100%' },
+  content: { padding: SPACE.md, gap: 10 },
+  row: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  emojiWrap: { width: 38, height: 38, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center' },
+  emoji: { fontSize: 18 },
+  perfilLabel: { fontSize: 9, fontWeight: '800', letterSpacing: 1.2, marginBottom: 2 },
+  perfilNome: { fontSize: FONT.md, fontWeight: '800', color: C.text, marginBottom: 2 },
+  perfilDesc: { fontSize: FONT.xs, color: C.textMid, lineHeight: 16 },
+  mensagemWrap: { borderRadius: RADIUS.xs, padding: 8 },
+  mensagem: { fontSize: FONT.xs, fontWeight: '600' },
+});
+
+const alertStyles = StyleSheet.create({
+  banner: { flexDirection: 'row', alignItems: 'center', borderRadius: RADIUS.sm, borderWidth: 1, overflow: 'hidden', paddingVertical: 10, paddingRight: 12 },
+  bannerStrip: { width: 3, alignSelf: 'stretch', marginRight: 10 },
+  bannerText: { fontSize: FONT.sm, fontWeight: '700', flex: 1 },
+});
+
+const simStyles = StyleSheet.create({
+  wrap: { flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: SPACE.lg, marginBottom: SPACE.sm, padding: SPACE.md, backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.brand + '30' },
+  icon: { width: 38, height: 38, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center' },
+  iconText: { fontSize: 18 },
+  titulo: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  sub: { fontSize: FONT.xs, color: C.brand, marginTop: 1 },
+  cta: { fontSize: FONT.sm, fontWeight: '800', color: C.brand, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: C.brandDim, borderRadius: RADIUS.pill },
+});
+</file>
+
+<file path="verly-mobile/src/components/ExplainableInsightCard.js">
+// src/components/ExplainableInsightCard.js — Verly Fase 5A: Explainable AI
+// Mostra "PORQUÊ" o insight foi gerado, com dados visuais que o suportam.
+import React, { useState } from 'react';
+import {
+  View, Text, Pressable, StyleSheet, Dimensions,
+} from 'react-native';
+import Animated, {
+  FadeInDown, FadeIn, useSharedValue, useAnimatedStyle,
+  withSpring, withTiming, interpolate,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import {
+  ChevronDown, ChevronUp, Brain, TrendingUp, TrendingDown,
+  AlertTriangle, CheckCircle, Zap, Target, BookOpen,
+  BarChart2, Calendar, DollarSign, Info,
+} from 'lucide-react-native';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const W = Dimensions.get('window').width;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const TIPO_CONFIG = {
+  alerta: { icon: AlertTriangle, cor: C.red, corDim: C.redDim, label: 'Alerta', emoji: '⚠️' },
+  tendencia: { icon: TrendingUp, cor: C.yellow, corDim: C.yellowDim, label: 'Tendência', emoji: '📈' },
+  positivo: { icon: CheckCircle, cor: '#00D68F', corDim: 'rgba(0,214,143,0.10)', label: 'Positivo', emoji: '✅' },
+  dica: { icon: Zap, cor: C.brand, corDim: C.brandDim, label: 'Dica', emoji: '💡' },
+  previsao: { icon: Calendar, cor: '#22D4FD', corDim: 'rgba(34,212,253,0.10)', label: 'Previsão', emoji: '🔮' },
+};
+
+function MiniBar({ label, valor, max, cor }) {
+  const pct = max > 0 ? Math.min((valor / max) * 100, 100) : 0;
+  return (
+    <View style={xStyles.miniBarWrap}>
+      <View style={xStyles.miniBarHeader}>
+        <Text style={xStyles.miniBarLabel}>{label}</Text>
+        <Text style={[xStyles.miniBarVal, { color: cor }]}>{fmt(valor)}€</Text>
+      </View>
+      <View style={xStyles.miniBarBg}>
+        <MotiView from={{ width: '0%' }} animate={{ width: `${pct}%` }} transition={{ type: 'timing', duration: 600 }} style={[xStyles.miniBarFill, { backgroundColor: cor }]} />
+      </View>
+    </View>
+  );
+}
+
+function EvidenciaItem({ icon: Icon, texto, cor }) {
+  return (
+    <View style={xStyles.evidenciaItem}>
+      <View style={[xStyles.evidenciaDot, { backgroundColor: cor }]} />
+      <Text style={xStyles.evidenciaText}>{texto}</Text>
+    </View>
+  );
+}
+
+function buildEvidencias(insight, resumo) {
+  const evidencias = [];
+  const tipo = insight.tipo;
+  const texto = insight.texto || '';
+  if (!resumo) return evidencias;
+  const { total_gasto, orcamento_mensal, rendimento_mensal, variacao_pct, variacao_subiu, previsao_mensal, top_categorias = [], subscricoes = [], total_subscricoes, metas = [], regra_5030_20 } = resumo;
+
+  if (tipo === 'alerta' || tipo === 'tendencia') {
+    if (variacao_pct != null) evidencias.push({ icon: variacao_subiu ? TrendingUp : TrendingDown, texto: `${variacao_subiu ? 'Aumento' : 'Redução'} de ${Math.abs(variacao_pct)}% vs mês anterior`, cor: variacao_subiu ? C.red : C.green });
+    if (orcamento_mensal > 0 && total_gasto > orcamento_mensal * 0.85) { const pct = Math.round((total_gasto / orcamento_mensal) * 100); evidencias.push({ icon: BarChart2, texto: `Usaste ${pct}% do orçamento mensal (${fmt(total_gasto)}€/${fmt(orcamento_mensal)}€)`, cor: pct > 100 ? C.red : C.yellow }); }
+    if (previsao_mensal && orcamento_mensal > 0 && previsao_mensal > orcamento_mensal) evidencias.push({ icon: Calendar, texto: `Previsão fim de mês: ${fmt(previsao_mensal)}€ (acima do orçamento)`, cor: C.red });
+  }
+  if (tipo === 'positivo') {
+    if (variacao_pct != null && variacao_pct < 0) evidencias.push({ icon: TrendingDown, texto: `Gastos reduziram ${Math.abs(variacao_pct)}% vs mês passado`, cor: C.green });
+    if (orcamento_mensal > 0 && total_gasto < orcamento_mensal * 0.8) evidencias.push({ icon: CheckCircle, texto: `Estás ${Math.round((1 - total_gasto / orcamento_mensal) * 100)}% abaixo do orçamento`, cor: C.green });
+  }
+  if (tipo === 'dica' && total_subscricoes > 0) {
+    evidencias.push({ icon: Zap, texto: `${subscricoes.length} subscrição(ões) detetada(s) = ${fmt(total_subscricoes)}€/mês`, cor: C.orange });
+    evidencias.push({ icon: Calendar, texto: `Custo anual estimado: ${fmt(total_subscricoes * 12)}€`, cor: C.orange });
+  }
+  if (tipo === 'previsao' && previsao_mensal) {
+    evidencias.push({ icon: Calendar, texto: `Taxa diária atual: ${fmt(total_gasto / new Date().getDate())}€/dia`, cor: C.brand });
+    if (orcamento_mensal > 0) { const diff = previsao_mensal - orcamento_mensal; evidencias.push({ icon: Target, texto: diff > 0 ? `Excederia o orçamento em ${fmt(diff)}€` : `Ficaria ${fmt(Math.abs(diff))}€ abaixo do orçamento`, cor: diff > 0 ? C.red : C.green }); }
+  }
+  if (top_categorias.length > 0) { const top = top_categorias[0]; if (texto.toLowerCase().includes(top.categoria.toLowerCase())) evidencias.push({ icon: BarChart2, texto: `${top.categoria}: ${fmt(top.valor)}€ este mês`, cor: C.brand }); }
+  if (regra_5030_20 && (tipo === 'dica' || tipo === 'alerta') && regra_5030_20.pct_rendimento > 80) evidencias.push({ icon: Info, texto: `Gastos = ${regra_5030_20.pct_rendimento}% do rendimento (ideal: máx 80%)`, cor: C.yellow });
+  return evidencias.slice(0, 4);
+}
+
+function ContextBars({ insight, resumo }) {
+  const tipo = insight.tipo;
+  if (!resumo) return null;
+  const { top_categorias = [], total_gasto, orcamento_mensal } = resumo;
+  if (tipo === 'alerta' && orcamento_mensal > 0) {
+    return (
+      <View style={{ gap: 6, marginTop: 8 }}>
+        <MiniBar label="Gasto atual" valor={total_gasto} max={orcamento_mensal} cor={total_gasto > orcamento_mensal ? C.red : C.brand} />
+        <MiniBar label="Orçamento mensal" valor={orcamento_mensal} max={orcamento_mensal} cor={C.surface3} />
+      </View>
+    );
+  }
+  if ((tipo === 'dica' || tipo === 'tendencia') && top_categorias.length > 0) {
+    const max = top_categorias[0].valor || 1;
+    return (
+      <View style={{ gap: 6, marginTop: 8 }}>
+        {top_categorias.slice(0, 3).map((cat, i) => (
+          <MiniBar key={cat.categoria} label={cat.categoria} valor={cat.valor} max={max} cor={['#7C6FE0', '#FF4D6D', '#FFB300'][i]} />
+        ))}
+      </View>
+    );
+  }
+  return null;
+}
+
+function PrincipioFinanceiro({ texto }) {
+  const principios = [
+    { key: '50/30/20', titulo: 'Regra 50/30/20', autor: 'Elizabeth Warren, 2005' },
+    { key: 'latte factor', titulo: 'Latte Factor', autor: 'David Bach, 2004' },
+    { key: 'parkinson', titulo: 'Lei de Parkinson', autor: 'C.N. Parkinson' },
+    { key: 'juro composto', titulo: 'Juro Composto', autor: 'Princípio universal' },
+    { key: 'fundo de emergência', titulo: 'Fundo de Emergência', autor: 'CFPs certificados' },
+  ];
+  const textoLower = texto.toLowerCase();
+  const found = principios.find(p => textoLower.includes(p.key.toLowerCase()));
+  if (!found) return null;
+  return (
+    <View style={xStyles.principioWrap}>
+      <View style={xStyles.principioHeader}>
+        <BookOpen size={11} color={C.brand} />
+        <Text style={xStyles.principioTitulo}>{found.titulo}</Text>
+      </View>
+      <Text style={xStyles.principioAutor}>📖 {found.autor}</Text>
+    </View>
+  );
+}
+
+export default function ExplainableInsightCard({ insight, resumo, delay = 0 }) {
+  const [expanded, setExpanded] = useState(false);
+  const tipo = insight.tipo || 'dica';
+  const cfg = TIPO_CONFIG[tipo] || TIPO_CONFIG.dica;
+  const Icon = cfg.icon;
+  const evidencias = buildEvidencias(insight, resumo);
+  const hasDetails = evidencias.length > 0;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(delay).duration(450).springify()} style={[xStyles.card, { borderLeftColor: cfg.cor }]}>
+      <Pressable onPress={() => hasDetails && setExpanded(e => !e)} style={xStyles.cardHeader} disabled={!hasDetails}>
+        <View style={[xStyles.iconWrap, { backgroundColor: cfg.corDim }]}><Icon size={16} color={cfg.cor} /></View>
+        <View style={{ flex: 1 }}>
+          <View style={xStyles.tipoBadgeRow}>
+            <View style={[xStyles.tipoBadge, { backgroundColor: cfg.cor + '18' }]}><Text style={[xStyles.tipoText, { color: cfg.cor }]}>{cfg.emoji} {cfg.label}</Text></View>
+            {insight.valor != null && (<View style={xStyles.valorBadge}><Text style={xStyles.valorText}>{fmt(insight.valor)}€</Text></View>)}
+          </View>
+          <Text style={xStyles.insightTexto}>{insight.texto}</Text>
+        </View>
+        {hasDetails && (<View style={{ paddingLeft: 4 }}>{expanded ? <ChevronUp size={14} color={C.textMid} /> : <ChevronDown size={14} color={C.textMid} />}</View>)}
+      </Pressable>
+
+      {expanded && hasDetails && (
+        <Animated.View entering={FadeIn.duration(250)} style={xStyles.expandedWrap}>
+          <View style={xStyles.divider} />
+          <View style={xStyles.explicacaoHeader}><Brain size={12} color={C.brand} /><Text style={xStyles.explicacaoTitulo}>Baseado em:</Text></View>
+          {evidencias.map((ev, i) => <EvidenciaItem key={i} icon={ev.icon} texto={ev.texto} cor={ev.cor} />)}
+          <ContextBars insight={insight} resumo={resumo} />
+          <PrincipioFinanceiro texto={insight.texto} />
+        </Animated.View>
+      )}
+
+      {!expanded && hasDetails && (
+        <View style={xStyles.expandHint}>
+          <View style={[xStyles.expandDot, { backgroundColor: cfg.cor }]} />
+          <View style={[xStyles.expandDot, { backgroundColor: cfg.cor }]} />
+          <View style={[xStyles.expandDot, { backgroundColor: cfg.cor }]} />
+        </View>
+      )}
+    </Animated.View>
+  );
+}
+
+const xStyles = StyleSheet.create({
+  card: { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, borderLeftWidth: 3, marginBottom: SPACE.sm, overflow: 'hidden' },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', padding: SPACE.md, gap: 10 },
+  iconWrap: { width: 34, height: 34, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center', marginTop: 1 },
+  tipoBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  tipoBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: RADIUS.pill },
+  tipoText: { fontSize: 10, fontWeight: '700' },
+  valorBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: RADIUS.pill, backgroundColor: C.surface3 },
+  valorText: { fontSize: 10, fontWeight: '700', color: C.textMid },
+  insightTexto: { fontSize: FONT.sm, color: C.text, lineHeight: 19 },
+  expandedWrap: { paddingHorizontal: SPACE.md, paddingBottom: SPACE.md },
+  divider: { height: 1, backgroundColor: C.border, marginBottom: SPACE.sm },
+  explicacaoHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 8 },
+  explicacaoTitulo: { fontSize: FONT.xs, fontWeight: '700', color: C.brand, letterSpacing: 0.5 },
+  evidenciaItem: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 5 },
+  evidenciaDot: { width: 6, height: 6, borderRadius: 3 },
+  evidenciaText: { fontSize: FONT.xs, color: C.textMid, flex: 1, lineHeight: 16 },
+  miniBarWrap: { marginBottom: 4 },
+  miniBarHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 },
+  miniBarLabel: { fontSize: 10, color: C.textMid },
+  miniBarVal: { fontSize: 10, fontWeight: '700' },
+  miniBarBg: { height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' },
+  miniBarFill: { height: '100%', borderRadius: 2 },
+  principioWrap: { marginTop: 10, padding: 9, backgroundColor: C.brandDim, borderRadius: RADIUS.xs },
+  principioHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  principioTitulo: { fontSize: FONT.xs, fontWeight: '700', color: C.brand },
+  principioAutor: { fontSize: 10, color: C.textMid },
+  expandHint: { flexDirection: 'row', justifyContent: 'center', gap: 3, paddingBottom: 8 },
+  expandDot: { width: 4, height: 4, borderRadius: 2, opacity: 0.4 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/SimuladorScreen.js">
+// src/screens/SimuladorScreen.js — Verly Fase 5A: Simulações Interativas
+// Mostra projeções dinâmicas baseadas nos dados reais do utilizador
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  View, Text, ScrollView, Pressable, StyleSheet,
+  Dimensions, ActivityIndicator, TextInput, Alert,
+} from 'react-native';
+import Animated, {
+  FadeInDown, FadeIn, useSharedValue, useAnimatedStyle,
+  withTiming, withSpring, Easing, interpolate,
+} from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  Sliders, TrendingDown, TrendingUp, Target,
+  Zap, Calendar, DollarSign, ChevronRight,
+  Info, ArrowRight, Sparkles, AlertTriangle,
+} from 'lucide-react-native';
+import { insightsAPI, apiFetch } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const { width: W } = Dimensions.get('window');
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const fmtK = (n) => {
+  const v = +(n || 0);
+  return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : fmt(v);
+};
+
+function Slider({ value, min, max, step = 1, onChange, color = C.brand }) {
+  const sliderWidth = W - SPACE.lg * 2 - 32;
+  const pct = Math.min(Math.max((value - min) / (max - min), 0), 1);
+  const fillWidth = pct * sliderWidth;
+
+  const handlePress = (e) => {
+    const x = e.nativeEvent.locationX;
+    const ratio = Math.min(Math.max(x / sliderWidth, 0), 1);
+    const raw = min + ratio * (max - min);
+    const stepped = Math.round(raw / step) * step;
+    onChange(Math.min(Math.max(stepped, min), max));
+  };
+
+  return (
+    <Pressable onPress={handlePress} style={styles.sliderTrack} hitSlop={12}>
+      <View style={[styles.sliderBg, { width: sliderWidth }]}>
+        <Animated.View style={[styles.sliderFill, { width: fillWidth, backgroundColor: color }]} />
+        <View style={[styles.sliderThumb, { left: fillWidth - 10, backgroundColor: color }]} />
+      </View>
+    </Pressable>
+  );
+}
+
+function PctButtons({ value, min, max, onChange, options = [5, 10, 20, 30] }) {
+  return (
+    <View style={styles.pctRow}>
+      {options.map(pct => {
+        const newVal = Math.min(max, Math.round((value * (1 - pct / 100)) / 5) * 5);
+        const isActive = Math.abs(value - newVal) < 1;
+        return (
+          <Pressable
+            key={pct}
+            onPress={() => onChange(newVal)}
+            style={[styles.pctBtn, isActive && { backgroundColor: C.brand + '30', borderColor: C.brand }]}
+          >
+            <Text style={[styles.pctBtnText, isActive && { color: C.brand }]}>-{pct}%</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function ImpactoCard({ poupancaMes, poupancaAno, label, icon: Icon, color, delay = 0 }) {
+  return (
+    <Animated.View entering={FadeInDown.delay(delay).duration(400).springify()} style={[styles.impactoCard, { borderColor: color + '30' }]}>
+      <View style={[styles.impactoIconWrap, { backgroundColor: color + '15' }]}>
+        <Icon size={18} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.impactoLabel}>{label}</Text>
+        <Text style={[styles.impactoValMes, { color }]}>+{fmtK(poupancaMes)}€/mês</Text>
+        <Text style={styles.impactoValAno}>+{fmtK(poupancaAno)}€/ano</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+function SimulacaoBloco({ titulo, subtitulo, valorAtual, min, max, step, unidade, onChange, cor, children }) {
+  return (
+    <View style={styles.simulacaoBloco}>
+      <View style={styles.simulacaoHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.simulacaoTitulo}>{titulo}</Text>
+          <Text style={styles.simulacaoSub}>{subtitulo}</Text>
+        </View>
+        <View style={[styles.simulacaoValWrap, { backgroundColor: cor + '15' }]}>
+          <Text style={[styles.simulacaoVal, { color: cor }]}>{fmt(valorAtual)}{unidade}</Text>
+        </View>
+      </View>
+      <Slider value={valorAtual} min={min} max={max} step={step} onChange={onChange} color={cor} />
+      <View style={styles.sliderLabels}>
+        <Text style={styles.sliderLabelText}>{fmt(min)}{unidade}</Text>
+        <Text style={styles.sliderLabelText}>{fmt(max)}{unidade}</Text>
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function TimelineCard({ poupancaMes, objetivo }) {
+  if (!poupancaMes || poupancaMes <= 0) return null;
+
+  const marcos = [
+    { label: 'Fundo emergência (1 mês)', valor: objetivo > 0 ? objetivo : 500, icon: '🛡️' },
+    { label: 'Férias de verão', valor: 800, icon: '✈️' },
+    { label: 'Fundo emergência (3 meses)', valor: objetivo > 0 ? objetivo * 3 : 1500, icon: '💪' },
+    { label: 'Grande objetivo', valor: objetivo > 0 ? objetivo * 6 : 3000, icon: '🏆' },
+  ];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(200).duration(500).springify()} style={styles.timelineCard}>
+      <View style={styles.sectionTitleRow}>
+        <Calendar size={14} color={C.brand} />
+        <Text style={styles.sectionTitle}>Em quanto tempo poupas?</Text>
+      </View>
+      {marcos.map((marco, i) => {
+        const meses = Math.ceil(marco.valor / poupancaMes);
+        const anos = (meses / 12).toFixed(1);
+        const cor = meses <= 3 ? C.green : meses <= 12 ? C.yellow : C.brand;
+        return (
+          <View key={i} style={styles.marcoRow}>
+            <Text style={styles.marcoIcon}>{marco.icon}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.marcoLabel}>{marco.label}</Text>
+              <Text style={[styles.marcoTempo, { color: cor }]}>
+                {meses <= 12 ? `${meses} meses` : `${anos} anos`}
+              </Text>
+            </View>
+            <Text style={[styles.marcoValor, { color: C.textMid }]}>{fmtK(marco.valor)}€</Text>
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+}
+
+export default function SimuladorScreen({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [dados, setDados] = useState(null);
+  const [delivery, setDelivery] = useState(0);
+  const [subscricoes, setSubscricoes] = useState(0);
+  const [lazer, setLazer] = useState(0);
+  const [vestuario, setVestuario] = useState(0);
+  const [rendimento, setRendimento] = useState(0);
+  const [activeSimulacao, setActiveSimulacao] = useState('cortes');
+
+  const totalCorte = (dados?.delivery_original || 0) - delivery
+    + (dados?.subscricoes_original || 0) - subscricoes
+    + (dados?.lazer_original || 0) - lazer
+    + (dados?.vestuario_original || 0) - vestuario;
+
+  const poupancaAnual = totalCorte * 12;
+  const rendimentoExtra = rendimento - (dados?.rendimento_original || 0);
+
+  useFocusEffect(useCallback(() => { loadDados(); }, []));
+
+  const loadDados = async () => {
+    try {
+      setLoading(true);
+      const res = await insightsAPI.get();
+      if (res.success && res.resumo) {
+        const r = res.resumo;
+        const cats = r.top_categorias || [];
+        const getVal = (nome) => {
+          const c = cats.find(c => c.categoria?.toLowerCase().includes(nome));
+          return c ? Math.round(c.valor || 0) : 0;
+        };
+        const deliveryVal = getVal('delivery') || getVal('alimentação') || getVal('restaurante') || 50;
+        const subsVal = Math.round(r.total_subscricoes || 0) || 30;
+        const lazerVal = getVal('lazer') || getVal('entretenimento') || 40;
+        const vestuarioVal = getVal('vestuário') || getVal('vestuario') || 30;
+        const rendimentoVal = Math.round(r.rendimento_mensal || 0) || 1000;
+        setDados({ delivery_original: deliveryVal, subscricoes_original: subsVal, lazer_original: lazerVal, vestuario_original: vestuarioVal, rendimento_original: rendimentoVal, total_gasto: r.total_gasto || 0, orcamento: r.orcamento_mensal || 0 });
+        setDelivery(deliveryVal); setSubscricoes(subsVal); setLazer(lazerVal); setVestuario(vestuarioVal); setRendimento(rendimentoVal);
+      }
+    } catch (e) {
+      setDados({ delivery_original: 120, subscricoes_original: 45, lazer_original: 80, vestuario_original: 60, rendimento_original: 1200, total_gasto: 850, orcamento: 1000 });
+      setDelivery(120); setSubscricoes(45); setLazer(80); setVestuario(60); setRendimento(1200);
+    } finally { setLoading(false); }
+  };
+
+  if (loading) return (
+    <View style={styles.loadingWrap}>
+      <ActivityIndicator size="large" color={C.brand} />
+      <Text style={styles.loadingText}>A calcular os teus dados...</Text>
+    </View>
+  );
+
+  const poupancaMesTotal = totalCorte + rendimentoExtra;
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>Simulador</Text>
+          <Text style={styles.headerSub}>O que acontece se mudares os teus hábitos?</Text>
+        </View>
+        <View style={[styles.headerBadge, { backgroundColor: C.brand + '20' }]}>
+          <Sliders size={18} color={C.brand} />
+        </View>
+      </View>
+
+      <View style={styles.tabsWrap}>
+        <Pressable onPress={() => setActiveSimulacao('cortes')} style={[styles.tab, activeSimulacao === 'cortes' && styles.tabActive]}>
+          <Text style={[styles.tabText, activeSimulacao === 'cortes' && styles.tabTextActive]}>Cortar gastos</Text>
+        </Pressable>
+        <Pressable onPress={() => setActiveSimulacao('rendimento')} style={[styles.tab, activeSimulacao === 'rendimento' && styles.tabActive]}>
+          <Text style={[styles.tabText, activeSimulacao === 'rendimento' && styles.tabTextActive]}>Aumentar rendimento</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        {poupancaMesTotal > 0 && (
+          <Animated.View entering={FadeIn.duration(400)} style={styles.resultHero}>
+            <View style={styles.resultBg} />
+            <Text style={styles.resultLabel}>POUPANÇA ESTIMADA</Text>
+            <Text style={styles.resultValMes}>+{fmtK(poupancaMesTotal)}€<Text style={styles.resultPerMes}>/mês</Text></Text>
+            <Text style={styles.resultValAno}>+{fmtK(poupancaMesTotal * 12)}€/ano</Text>
+            {dados?.orcamento > 0 && (
+              <Text style={styles.resultContexto}>Ficarias com {fmtK(Math.max(0, dados.orcamento - (dados.total_gasto - totalCorte)))}€ de folga no orçamento</Text>
+            )}
+          </Animated.View>
+        )}
+
+        {activeSimulacao === 'cortes' ? (
+          <View style={{ paddingHorizontal: SPACE.lg }}>
+            {[
+              { titulo: '🛵 Delivery & Restaurantes', sub: `Atual: ${fmt(dados?.delivery_original || 0)}€/mês`, val: delivery, setVal: setDelivery, orig: dados?.delivery_original, cor: C.red, label: 'Cortar delivery', icon: TrendingDown },
+              { titulo: '🔁 Subscrições', sub: `Atual: ${fmt(dados?.subscricoes_original || 0)}€/mês = ${fmtK((dados?.subscricoes_original || 0) * 12)}€/ano`, val: subscricoes, setVal: setSubscricoes, orig: dados?.subscricoes_original, cor: C.orange, label: 'Cancelar subscrições', icon: Zap },
+              { titulo: '🎮 Lazer & Entretenimento', sub: `Atual: ${fmt(dados?.lazer_original || 0)}€/mês`, val: lazer, setVal: setLazer, orig: dados?.lazer_original, cor: C.yellow, label: 'Reduzir lazer', icon: Target },
+              { titulo: '👕 Vestuário & Acessórios', sub: `Atual: ${fmt(dados?.vestuario_original || 0)}€/mês`, val: vestuario, setVal: setVestuario, orig: dados?.vestuario_original, cor: C.brandMid, label: 'Cortar vestuário', icon: TrendingDown },
+            ].map((item, idx) => (
+              <Animated.View key={idx} entering={FadeInDown.delay(idx * 50).duration(400).springify()} style={styles.card}>
+                <SimulacaoBloco titulo={item.titulo} subtitulo={item.sub} valorAtual={item.val} min={0} max={Math.max((item.orig || 0) * 1.5, 100)} step={5} unidade="€" onChange={item.setVal} cor={item.cor}>
+                  <PctButtons value={item.orig || item.val} min={0} max={item.orig || 200} onChange={item.setVal} />
+                  {item.val < (item.orig || 0) && (
+                    <ImpactoCard label={item.label} poupancaMes={(item.orig || 0) - item.val} poupancaAno={((item.orig || 0) - item.val) * 12} icon={item.icon} color={item.cor} delay={0} />
+                  )}
+                </SimulacaoBloco>
+              </Animated.View>
+            ))}
+            <Pressable onPress={() => { setDelivery(dados?.delivery_original || 0); setSubscricoes(dados?.subscricoes_original || 0); setLazer(dados?.lazer_original || 0); setVestuario(dados?.vestuario_original || 0); }} style={styles.resetBtn}>
+              <Text style={styles.resetBtnText}>↩ Repor valores originais</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={{ paddingHorizontal: SPACE.lg }}>
+            <Animated.View entering={FadeInDown.delay(50).duration(400).springify()} style={styles.card}>
+              <SimulacaoBloco titulo="💰 Rendimento mensal" subtitulo={`Atual: ${fmt(dados?.rendimento_original || 0)}€/mês`} valorAtual={rendimento} min={dados?.rendimento_original || 500} max={Math.max((dados?.rendimento_original || 1000) * 2, 3000)} step={50} unidade="€" onChange={setRendimento} cor={C.green}>
+                {rendimento > (dados?.rendimento_original || 0) && (
+                  <View style={[styles.impactoCard, { borderColor: C.green + '30' }]}>
+                    <View style={[styles.impactoIconWrap, { backgroundColor: C.green + '15' }]}><TrendingUp size={18} color={C.green} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.impactoLabel}>Rendimento adicional</Text>
+                      <Text style={[styles.impactoValMes, { color: C.green }]}>+{fmtK(rendimento - (dados?.rendimento_original || 0))}€/mês</Text>
+                      <Text style={styles.impactoValAno}>+{fmtK((rendimento - (dados?.rendimento_original || 0)) * 12)}€/ano</Text>
+                    </View>
+                  </View>
+                )}
+              </SimulacaoBloco>
+              {rendimento > 0 && (
+                <View style={styles.regra5020}>
+                  <Info size={12} color={C.brand} />
+                  <Text style={styles.regra5020Text}>Regra 50/30/20: com {fmt(rendimento)}€ devias poupar <Text style={{ color: C.green, fontWeight: '700' }}>{fmt(rendimento * 0.2)}€/mês</Text></Text>
+                </View>
+              )}
+            </Animated.View>
+          </View>
+        )}
+
+        {poupancaMesTotal > 0 && (
+          <View style={{ paddingHorizontal: SPACE.lg }}>
+            <TimelineCard poupancaMes={poupancaMesTotal} objetivo={dados?.orcamento || 500} />
+          </View>
+        )}
+
+        {poupancaMesTotal <= 0 && (
+          <Animated.View entering={FadeInDown.delay(300).duration(500).springify()} style={[styles.dicaCard, { marginHorizontal: SPACE.lg }]}>
+            <AlertTriangle size={16} color={C.yellow} />
+            <Text style={styles.dicaText}>Move os sliders para cima para ver o impacto de reduzir os teus gastos. Pequenas mudanças têm grande impacto ao longo do tempo.</Text>
+          </Animated.View>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg, gap: 12 },
+  loadingText: { color: C.textMid, fontSize: FONT.sm },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACE.lg, paddingTop: SPACE.xl, paddingBottom: SPACE.md },
+  headerTitle: { fontSize: FONT.xxl, fontWeight: '800', color: C.text },
+  headerSub: { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+  headerBadge: { width: 44, height: 44, borderRadius: RADIUS.md, justifyContent: 'center', alignItems: 'center' },
+  tabsWrap: { flexDirection: 'row', marginHorizontal: SPACE.lg, marginBottom: SPACE.md, backgroundColor: C.surface2, borderRadius: RADIUS.sm, padding: 4 },
+  tab: { flex: 1, paddingVertical: 8, borderRadius: RADIUS.xs, alignItems: 'center' },
+  tabActive: { backgroundColor: C.brand },
+  tabText: { fontSize: FONT.sm, fontWeight: '600', color: C.textMid },
+  tabTextActive: { color: '#FFF', fontWeight: '700' },
+  resultHero: { marginHorizontal: SPACE.lg, marginBottom: SPACE.md, backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.brand + '30', padding: SPACE.lg, alignItems: 'center', overflow: 'hidden' },
+  resultBg: { position: 'absolute', top: -20, left: -20, right: -20, height: 80, backgroundColor: C.brand + '08', borderRadius: 40 },
+  resultLabel: { fontSize: FONT.xs, fontWeight: '700', color: C.brand, letterSpacing: 1.2, marginBottom: 4 },
+  resultValMes: { fontSize: 38, fontWeight: '900', color: C.green },
+  resultPerMes: { fontSize: FONT.lg, fontWeight: '500', color: C.textMid },
+  resultValAno: { fontSize: FONT.md, color: C.textMid, marginTop: 2 },
+  resultContexto: { fontSize: FONT.xs, color: C.brand, marginTop: 8, textAlign: 'center' },
+  card: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
+  simulacaoBloco: { gap: 10 },
+  simulacaoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  simulacaoTitulo: { fontSize: FONT.md, fontWeight: '700', color: C.text },
+  simulacaoSub: { fontSize: FONT.xs, color: C.textMid, marginTop: 1 },
+  simulacaoValWrap: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: RADIUS.xs },
+  simulacaoVal: { fontSize: FONT.lg, fontWeight: '800' },
+  sliderTrack: { height: 32, justifyContent: 'center' },
+  sliderBg: { height: 4, backgroundColor: C.surface3, borderRadius: 2, position: 'relative', justifyContent: 'center' },
+  sliderFill: { height: '100%', borderRadius: 2, position: 'absolute', left: 0 },
+  sliderThumb: { width: 20, height: 20, borderRadius: 10, position: 'absolute', top: -8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 },
+  sliderLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: -2 },
+  sliderLabelText: { fontSize: 10, color: C.textSub },
+  pctRow: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  pctBtn: { paddingHorizontal: 10, paddingVertical: 5, backgroundColor: C.surface3, borderRadius: RADIUS.xs, borderWidth: 1, borderColor: C.border },
+  pctBtnText: { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
+  impactoCard: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, backgroundColor: C.surface2, borderRadius: RADIUS.sm, borderWidth: 1, marginTop: 4 },
+  impactoIconWrap: { width: 36, height: 36, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center' },
+  impactoLabel: { fontSize: FONT.xs, color: C.textMid, fontWeight: '500' },
+  impactoValMes: { fontSize: FONT.lg, fontWeight: '800', marginTop: 1 },
+  impactoValAno: { fontSize: FONT.xs, color: C.textMid },
+  timelineCard: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sectionTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  marcoRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: C.border },
+  marcoIcon: { fontSize: 18 },
+  marcoLabel: { fontSize: FONT.xs, color: C.textMid, flex: 1 },
+  marcoTempo: { fontSize: FONT.sm, fontWeight: '700' },
+  marcoValor: { fontSize: FONT.xs, fontWeight: '600' },
+  regra5020: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, padding: 10, backgroundColor: C.brandDim, borderRadius: RADIUS.xs },
+  regra5020Text: { fontSize: FONT.xs, color: C.textMid, flex: 1, lineHeight: 16 },
+  resetBtn: { alignSelf: 'center', marginTop: 4, marginBottom: 8, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: C.surface2, borderRadius: RADIUS.pill },
+  resetBtnText: { fontSize: FONT.sm, color: C.textMid },
+  dicaCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: SPACE.md, backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.yellow + '25', marginBottom: SPACE.sm },
+  dicaText: { flex: 1, fontSize: FONT.xs, color: C.textMid, lineHeight: 17 },
+});
+</file>
 
 <file path="app/api/amizades.py">
 """
@@ -19111,6 +19843,7 @@ import {
 } from 'lucide-react-native';
 import { insightsAPI } from '../services/api';
 import DonutCategorias from '../components/DonutCategorias';
+import ExplainableInsightCard from '../components/ExplainableInsightCard';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
 const C = COLORS;
@@ -19656,7 +20389,7 @@ function EmptyState({ onRefresh, semDados }) {
 }
 
 // ─── Ecrã Principal ───────────────────────────────────────────────────────────
-export default function InsightsScreen() {
+export default function InsightsScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -19768,13 +20501,34 @@ export default function InsightsScreen() {
                 <Text style={styles.sectionCount}>{insights.length}</Text>
               </View>
               {insights.map((item, i) => (
-                <InsightCard key={i} item={item} index={i} />
+                <ExplainableInsightCard key={i} insight={item} resumo={resumo} delay={i * 60} />
               ))}
             </Animated.View>
           )}
 
           {/* FAQ Interativo */}
           <FAQCard />
+
+          {/* Botão Simulador */}
+          <Animated.View entering={FadeInDown.delay(300).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: SPACE.lg }}>
+            <Pressable
+              onPress={() => navigation.navigate('Simulador')}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                padding: 16, borderRadius: 14,
+                backgroundColor: C.brand + '12',
+                borderWidth: 1, borderColor: C.brand + '35',
+              }}
+            >
+              <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: C.brand + '20', justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ fontSize: 20 }}>🎛️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: C.text }}>Simular o meu futuro</Text>
+                <Text style={{ fontSize: 12, color: C.brand, marginTop: 1 }}>E se cortasses alguns gastos? →</Text>
+              </View>
+            </Pressable>
+          </Animated.View>
 
           {/* Footer */}
           <View style={styles.footer}>
@@ -29913,6 +30667,7 @@ import {
 import { haptic } from '../utils/haptics';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { AIStateBanner, DynamicAlertBanners, SimuladorQuickAccess } from '../components/DynamicDashboardEngine';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -30958,6 +31713,7 @@ export default function DashboardScreen({ navigation, route }) {
   const [notifLoad,  setNotifLoad]  = useState(false);
   const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
   const [insights,   setInsights]   = useState([]);
+  const [resumoInsights, setResumoInsights] = useState(null);
   const [streakDias,   setStreakDias]   = useState(0);
   const [numGarantias, setNumGarantias] = useState(0);
   const [previsao,     setPrevisao]     = useState(null);
@@ -30982,6 +31738,7 @@ export default function DashboardScreen({ navigation, route }) {
     try {
       const data = await insightsAPI.get();
       setInsights((data.insights || []).slice(0, 3));
+      if (data.resumo) setResumoInsights(data.resumo);
     } catch (e) {}
   }, []);
 
@@ -31245,6 +32002,9 @@ export default function DashboardScreen({ navigation, route }) {
             }
           >
             <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+            <AIStateBanner resumo={resumoInsights} />
+            <DynamicAlertBanners resumo={resumoInsights} />
+            <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
             {loading ? <LoadingSkeleton /> : (
               cardOrder.map((id) => renderCard(id))
             )}
@@ -31259,6 +32019,9 @@ export default function DashboardScreen({ navigation, route }) {
             ListHeaderComponent={() => (
               <>
                 <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+                <AIStateBanner resumo={resumoInsights} />
+                <DynamicAlertBanners resumo={resumoInsights} />
+                <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
                 {loading && <LoadingSkeleton />}
                 <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
                   <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>

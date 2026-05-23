@@ -22,6 +22,7 @@ import {
 } from 'lucide-react-native';
 import { insightsAPI } from '../services/api';
 import DonutCategorias from '../components/DonutCategorias';
+import ExplainableInsightCard from '../components/ExplainableInsightCard';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
 const C = COLORS;
@@ -567,7 +568,7 @@ function EmptyState({ onRefresh, semDados }) {
 }
 
 // ─── Ecrã Principal ───────────────────────────────────────────────────────────
-export default function InsightsScreen() {
+export default function InsightsScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -679,13 +680,34 @@ export default function InsightsScreen() {
                 <Text style={styles.sectionCount}>{insights.length}</Text>
               </View>
               {insights.map((item, i) => (
-                <InsightCard key={i} item={item} index={i} />
+                <ExplainableInsightCard key={i} insight={item} resumo={resumo} delay={i * 60} />
               ))}
             </Animated.View>
           )}
 
           {/* FAQ Interativo */}
           <FAQCard />
+
+          {/* Botão Simulador */}
+          <Animated.View entering={FadeInDown.delay(300).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: SPACE.lg }}>
+            <Pressable
+              onPress={() => navigation.navigate('Simulador')}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                padding: 16, borderRadius: 14,
+                backgroundColor: C.brand + '12',
+                borderWidth: 1, borderColor: C.brand + '35',
+              }}
+            >
+              <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: C.brand + '20', justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ fontSize: 20 }}>🎛️</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: C.text }}>Simular o meu futuro</Text>
+                <Text style={{ fontSize: 12, color: C.brand, marginTop: 1 }}>E se cortasses alguns gastos? →</Text>
+              </View>
+            </Pressable>
+          </Animated.View>
 
           {/* Footer */}
           <View style={styles.footer}>

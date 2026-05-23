@@ -46,6 +46,7 @@ import {
 import { haptic } from '../utils/haptics';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { AIStateBanner, DynamicAlertBanners, SimuladorQuickAccess } from '../components/DynamicDashboardEngine';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -1091,6 +1092,7 @@ export default function DashboardScreen({ navigation, route }) {
   const [notifLoad,  setNotifLoad]  = useState(false);
   const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
   const [insights,   setInsights]   = useState([]);
+  const [resumoInsights, setResumoInsights] = useState(null);
   const [streakDias,   setStreakDias]   = useState(0);
   const [numGarantias, setNumGarantias] = useState(0);
   const [previsao,     setPrevisao]     = useState(null);
@@ -1111,10 +1113,16 @@ export default function DashboardScreen({ navigation, route }) {
 
   useEffect(() => { fetchNotifs(); }, [fetchNotifs]);
 
-  const fetchInsights = useCallback(async () => {
+  const fetchInsights = useCallback(async (retryCount = 0) => {
     try {
       const data = await insightsAPI.get();
-      setInsights((data.insights || []).slice(0, 3));
+      if (data.success && data.resumo) {
+        setInsights((data.insights || []).slice(0, 3));
+        setResumoInsights(data.resumo);
+      } else if (data.status === 'a_calcular' && retryCount < 4) {
+        // Backend está a calcular — retry em 10s
+        setTimeout(() => fetchInsights(retryCount + 1), 10000);
+      }
     } catch (e) {}
   }, []);
 
@@ -1378,6 +1386,9 @@ export default function DashboardScreen({ navigation, route }) {
             }
           >
             <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+            <AIStateBanner resumo={resumoInsights} />
+            <DynamicAlertBanners resumo={resumoInsights} />
+            <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
             {loading ? <LoadingSkeleton /> : (
               cardOrder.map((id) => renderCard(id))
             )}
@@ -1392,6 +1403,9 @@ export default function DashboardScreen({ navigation, route }) {
             ListHeaderComponent={() => (
               <>
                 <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
+                <AIStateBanner resumo={resumoInsights} />
+                <DynamicAlertBanners resumo={resumoInsights} />
+                <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
                 {loading && <LoadingSkeleton />}
                 <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
                   <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
