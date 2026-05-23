@@ -104,7 +104,6 @@ dados_utilizadores/1/zara_fatura.pdf
 dados_utilizadores/2/ps5_game.txt
 dados_utilizadores/3/pullbear_tshirts.txt
 dados_utilizadores/5/sephora_skincare.txt
-docker-compose.yml
 enviar_alertas_push.py
 enviar_alertas.py
 firebase-service-account.json
@@ -258,271 +257,6 @@ verly-mobile/src/utils/haptics.js
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="app/celery_app.py">
-"""
-app/celery_app.py — Fábrica Celery com contexto Flask injetado
-"""
-
-from celery import Celery
-from flask import Flask
-
-
-def make_celery(app: Flask) -> Celery:
-    celery = Celery(app.import_name)
-    celery.conf.update(
-        broker_url=app.config['CELERY_BROKER_URL'],
-        result_backend=app.config['CELERY_RESULT_BACKEND'],
-        task_serializer='json',
-        accept_content=['json'],
-        result_serializer='json',
-        timezone='Europe/Lisbon',
-        task_track_started=True,
-        task_acks_late=True,
-        worker_prefetch_multiplier=1,
-    )
-
-    class ContextTask(celery.Task):
-        """Garante que cada task corre dentro do contexto da app Flask."""
-        def __call__(self, *args, **kwargs):
-            with app.app_context():
-                return self.run(*args, **kwargs)
-
-    celery.Task = ContextTask
-    return celery
-</file>
-
-<file path="app/extensions.py">
-"""
-app/extensions.py — Instâncias únicas de todas as extensões Flask/Celery.
-Importar daqui em vez de criar instâncias espalhadas pelo código.
-"""
-
-import os
-import boto3
-import redis as redis_py
-from flask_caching import Cache
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
-# ── Cache Redis ───────────────────────────────────────────────────────────────
-cache = Cache()
-
-# ── Rate Limiter (Redis, multi-worker safe) ───────────────────────────────────
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"],
-    storage_uri=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-)
-
-
-def get_redis_client() -> redis_py.Redis:
-    """Retorna cliente Redis com decode_responses=True."""
-    return redis_py.from_url(
-        os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
-        decode_responses=True,
-    )
-
-
-def get_r2_client():
-    """Retorna cliente boto3 apontado ao Cloudflare R2."""
-    return boto3.client(
-        's3',
-        endpoint_url=os.getenv('R2_ENDPOINT_URL'),
-        aws_access_key_id=os.getenv('R2_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
-        region_name='auto',
-    )
-</file>
-
-<file path="app/qdrant_service.py">
-"""
-app/qdrant_service.py — Integração LlamaIndex + Qdrant para RAG por utilizador.
-"""
-
-import os
-import json
-import logging
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams
-from llama_index.core import Settings, VectorStoreIndex, Document
-from llama_index.core.storage import StorageContext
-from llama_index.vector_stores.qdrant import QdrantVectorStore
-
-logger = logging.getLogger(__name__)
-
-COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
-VECTOR_DIM = 384
-
-_client: QdrantClient | None = None
-
-
-def get_qdrant_client() -> QdrantClient:
-    global _client
-    if _client is None:
-        _client = QdrantClient(
-            url=os.getenv('QDRANT_URL', 'http://localhost:6333'),
-            api_key=os.getenv('QDRANT_API_KEY') or None,
-        )
-        _ensure_collection(_client)
-    return _client
-
-
-def _ensure_collection(client: QdrantClient) -> None:
-    existing = [c.name for c in client.get_collections().collections]
-    if COLLECTION not in existing:
-        client.create_collection(
-            collection_name=COLLECTION,
-            vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
-        )
-        logger.info(f'Qdrant: collection "{COLLECTION}" criada.')
-
-
-def upsert_fatura(fatura) -> None:
-    """Indexa / actualiza o documento de uma fatura no Qdrant."""
-    client = get_qdrant_client()
-    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
-    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
-
-    texto = _fatura_to_text(fatura)
-    doc = Document(
-        text=texto,
-        doc_id=f"fatura_{fatura.id}",
-        metadata={
-            'user_id':   fatura.user_id,
-            'fatura_id': fatura.id,
-            'loja':      fatura.loja      or '',
-            'categoria': fatura.categoria or '',
-            'total':     fatura.total     or 0,
-        },
-    )
-    VectorStoreIndex.from_documents([doc], storage_context=storage_ctx, show_progress=False)
-    logger.info(f'Qdrant: fatura {fatura.id} indexada.')
-
-
-def query_user(user_id: int, query_text: str, top_k: int = 5) -> list[dict]:
-    """RAG: devolve os k chunks mais relevantes para o utilizador."""
-    from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
-
-    client = get_qdrant_client()
-    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
-    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
-    index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_ctx)
-
-    filters = MetadataFilters(filters=[MetadataFilter(key='user_id', value=user_id)])
-    retriever = index.as_retriever(similarity_top_k=top_k, filters=filters)
-    nodes = retriever.retrieve(query_text)
-
-    return [{'text': n.text, 'score': n.score, **n.metadata} for n in nodes]
-
-
-def delete_fatura(fatura_id: int) -> None:
-    """Remove os vectores de uma fatura apagada."""
-    client = get_qdrant_client()
-    from qdrant_client.models import Filter, FieldCondition, MatchValue
-    client.delete(
-        collection_name=COLLECTION,
-        points_selector=Filter(
-            must=[FieldCondition(key='fatura_id', match=MatchValue(value=fatura_id))]
-        ),
-    )
-    logger.info(f'Qdrant: fatura {fatura_id} removida.')
-
-
-def _fatura_to_text(f) -> str:
-    try:
-        items = json.loads(f.items) if f.items else []
-    except Exception:
-        items = []
-    items_txt = '; '.join(f"{i.get('nome', '?')} {i.get('preco', 0)}€" for i in items)
-    return (
-        f"Loja: {f.loja or 'desconhecida'}. "
-        f"Data: {f.data_compra or 'N/A'}. "
-        f"Total: {f.total or 0}€. "
-        f"Categoria: {f.categoria or 'Outros'}. "
-        f"Items: {items_txt}."
-    )
-</file>
-
-<file path="app/r2_service.py">
-"""
-app/r2_service.py — Upload, download e signed URLs para o Cloudflare R2.
-"""
-
-import os
-import uuid
-import logging
-from app.extensions import get_r2_client
-
-logger = logging.getLogger(__name__)
-
-BUCKET = os.getenv('R2_BUCKET_NAME', 'verly-docs')
-
-
-def upload_file(file_bytes: bytes, original_name: str, user_id: int, content_type: str) -> str:
-    """
-    Faz upload de um ficheiro para o R2.
-    Returns: key (str) — guardar em Fatura.file_key
-    """
-    ext = os.path.splitext(original_name)[1].lower()
-    key = f"users/{user_id}/{uuid.uuid4().hex}{ext}"
-
-    client = get_r2_client()
-    client.put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=file_bytes,
-        ContentType=content_type,
-        ServerSideEncryption='AES256',
-    )
-    logger.info(f'R2 upload OK: {key}')
-    return key
-
-
-def get_signed_url(key: str, expires_in: int = 3600) -> str:
-    """Gera URL assinada privada para acesso temporário ao ficheiro."""
-    client = get_r2_client()
-    return client.generate_presigned_url(
-        'get_object',
-        Params={'Bucket': BUCKET, 'Key': key},
-        ExpiresIn=expires_in,
-    )
-
-
-def delete_file(key: str) -> bool:
-    """Apaga um ficheiro do R2. Retorna True se bem sucedido."""
-    try:
-        get_r2_client().delete_object(Bucket=BUCKET, Key=key)
-        logger.info(f'R2 delete OK: {key}')
-        return True
-    except Exception as e:
-        logger.error(f'R2 delete erro ({key}): {e}')
-        return False
-</file>
-
-<file path="app/tasks/__init__.py">
-# app/tasks/__init__.py
-</file>
-
-<file path="app/tasks/ai_insights.py">
-
-</file>
-
-<file path="app/tasks/emails.py">
-
-</file>
-
-<file path="app/tasks/ocr.py">
-
-</file>
-
-<file path="app/tasks/qdrant_task.py">
-
-</file>
-
-<file path="docker-compose.yml">
-
-</file>
 
 <file path="app/api/amizades.py">
 """
@@ -1674,6 +1408,39 @@ def perfil_mobile_update():
     return jsonify({'success': True, 'message': 'Perfil atualizado.'})
 </file>
 
+<file path="app/celery_app.py">
+"""
+app/celery_app.py — Fábrica Celery com contexto Flask injetado
+"""
+
+from celery import Celery
+from flask import Flask
+
+
+def make_celery(app: Flask) -> Celery:
+    celery = Celery(app.import_name)
+    celery.conf.update(
+        broker_url=app.config['CELERY_BROKER_URL'],
+        result_backend=app.config['CELERY_RESULT_BACKEND'],
+        task_serializer='json',
+        accept_content=['json'],
+        result_serializer='json',
+        timezone='Europe/Lisbon',
+        task_track_started=True,
+        task_acks_late=True,
+        worker_prefetch_multiplier=1,
+    )
+
+    class ContextTask(celery.Task):
+        """Garante que cada task corre dentro do contexto da app Flask."""
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery.Task = ContextTask
+    return celery
+</file>
+
 <file path="app/configuracoes.py">
 """
 configuracoes.py — Página de configurações (personalidade, língua, preferências)
@@ -2229,6 +1996,49 @@ def estatisticas():
         top_lojas_values=[round(l[1], 2) for l in top_lojas],
         dia_semana_labels=dias_semana_nomes,
         dia_semana_values=dia_semana_values,
+    )
+</file>
+
+<file path="app/extensions.py">
+"""
+app/extensions.py — Instâncias únicas de todas as extensões Flask/Celery.
+Importar daqui em vez de criar instâncias espalhadas pelo código.
+"""
+
+import os
+import boto3
+import redis as redis_py
+from flask_caching import Cache
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# ── Cache Redis ───────────────────────────────────────────────────────────────
+cache = Cache()
+
+# ── Rate Limiter (Redis, multi-worker safe) ───────────────────────────────────
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+)
+
+
+def get_redis_client() -> redis_py.Redis:
+    """Retorna cliente Redis com decode_responses=True."""
+    return redis_py.from_url(
+        os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+        decode_responses=True,
+    )
+
+
+def get_r2_client():
+    """Retorna cliente boto3 apontado ao Cloudflare R2."""
+    return boto3.client(
+        's3',
+        endpoint_url=os.getenv('R2_ENDPOINT_URL'),
+        aws_access_key_id=os.getenv('R2_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('R2_SECRET_ACCESS_KEY'),
+        region_name='auto',
     )
 </file>
 
@@ -2903,6 +2713,171 @@ def save_onboarding():
     return jsonify({'success': True})
 </file>
 
+<file path="app/qdrant_service.py">
+"""
+app/qdrant_service.py — Integração LlamaIndex + Qdrant para RAG por utilizador.
+"""
+
+import os
+import json
+import logging
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
+from llama_index.core import Settings, VectorStoreIndex, Document
+from llama_index.core.storage import StorageContext
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+
+logger = logging.getLogger(__name__)
+
+COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
+VECTOR_DIM = 384
+
+_client: QdrantClient | None = None
+
+
+def get_qdrant_client() -> QdrantClient:
+    global _client
+    if _client is None:
+        _client = QdrantClient(
+            url=os.getenv('QDRANT_URL', 'http://localhost:6333'),
+            api_key=os.getenv('QDRANT_API_KEY') or None,
+        )
+        _ensure_collection(_client)
+    return _client
+
+
+def _ensure_collection(client: QdrantClient) -> None:
+    existing = [c.name for c in client.get_collections().collections]
+    if COLLECTION not in existing:
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),
+        )
+        logger.info(f'Qdrant: collection "{COLLECTION}" criada.')
+
+
+def upsert_fatura(fatura) -> None:
+    """Indexa / actualiza o documento de uma fatura no Qdrant."""
+    client = get_qdrant_client()
+    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
+    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
+
+    texto = _fatura_to_text(fatura)
+    doc = Document(
+        text=texto,
+        doc_id=f"fatura_{fatura.id}",
+        metadata={
+            'user_id':   fatura.user_id,
+            'fatura_id': fatura.id,
+            'loja':      fatura.loja      or '',
+            'categoria': fatura.categoria or '',
+            'total':     fatura.total     or 0,
+        },
+    )
+    VectorStoreIndex.from_documents([doc], storage_context=storage_ctx, show_progress=False)
+    logger.info(f'Qdrant: fatura {fatura.id} indexada.')
+
+
+def query_user(user_id: int, query_text: str, top_k: int = 5) -> list[dict]:
+    """RAG: devolve os k chunks mais relevantes para o utilizador."""
+    from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
+
+    client = get_qdrant_client()
+    vector_store = QdrantVectorStore(client=client, collection_name=COLLECTION)
+    storage_ctx  = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex.from_vector_store(vector_store, storage_context=storage_ctx)
+
+    filters = MetadataFilters(filters=[MetadataFilter(key='user_id', value=user_id)])
+    retriever = index.as_retriever(similarity_top_k=top_k, filters=filters)
+    nodes = retriever.retrieve(query_text)
+
+    return [{'text': n.text, 'score': n.score, **n.metadata} for n in nodes]
+
+
+def delete_fatura(fatura_id: int) -> None:
+    """Remove os vectores de uma fatura apagada."""
+    client = get_qdrant_client()
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    client.delete(
+        collection_name=COLLECTION,
+        points_selector=Filter(
+            must=[FieldCondition(key='fatura_id', match=MatchValue(value=fatura_id))]
+        ),
+    )
+    logger.info(f'Qdrant: fatura {fatura_id} removida.')
+
+
+def _fatura_to_text(f) -> str:
+    try:
+        items = json.loads(f.items) if f.items else []
+    except Exception:
+        items = []
+    items_txt = '; '.join(f"{i.get('nome', '?')} {i.get('preco', 0)}€" for i in items)
+    return (
+        f"Loja: {f.loja or 'desconhecida'}. "
+        f"Data: {f.data_compra or 'N/A'}. "
+        f"Total: {f.total or 0}€. "
+        f"Categoria: {f.categoria or 'Outros'}. "
+        f"Items: {items_txt}."
+    )
+</file>
+
+<file path="app/r2_service.py">
+"""
+app/r2_service.py — Upload, download e signed URLs para o Cloudflare R2.
+"""
+
+import os
+import uuid
+import logging
+from app.extensions import get_r2_client
+
+logger = logging.getLogger(__name__)
+
+BUCKET = os.getenv('R2_BUCKET_NAME', 'verly-docs')
+
+
+def upload_file(file_bytes: bytes, original_name: str, user_id: int, content_type: str) -> str:
+    """
+    Faz upload de um ficheiro para o R2.
+    Returns: key (str) — guardar em Fatura.file_key
+    """
+    ext = os.path.splitext(original_name)[1].lower()
+    key = f"users/{user_id}/{uuid.uuid4().hex}{ext}"
+
+    client = get_r2_client()
+    client.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=file_bytes,
+        ContentType=content_type,
+        ServerSideEncryption='AES256',
+    )
+    logger.info(f'R2 upload OK: {key}')
+    return key
+
+
+def get_signed_url(key: str, expires_in: int = 3600) -> str:
+    """Gera URL assinada privada para acesso temporário ao ficheiro."""
+    client = get_r2_client()
+    return client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': BUCKET, 'Key': key},
+        ExpiresIn=expires_in,
+    )
+
+
+def delete_file(key: str) -> bool:
+    """Apaga um ficheiro do R2. Retorna True se bem sucedido."""
+    try:
+        get_r2_client().delete_object(Bucket=BUCKET, Key=key)
+        logger.info(f'R2 delete OK: {key}')
+        return True
+    except Exception as e:
+        logger.error(f'R2 delete erro ({key}): {e}')
+        return False
+</file>
+
 <file path="app/reports.py">
 """
 reports.py — Financial Damage Report
@@ -3116,138 +3091,196 @@ def relatorio_api():
     return jsonify({'success': True, **data})
 </file>
 
-<file path="config.py">
+<file path="app/tasks/__init__.py">
+# app/tasks/__init__.py
+</file>
+
+<file path="app/tasks/ai_insights.py">
 """
-config.py — Configuração por ambiente (development / production)
+app/tasks/ai_insights.py — Task Celery: gera insights IA e guarda em cache Redis.
 """
 
-import os
-import secrets
-import sys
-from pathlib import Path
-from dotenv import load_dotenv
+import logging
+from run import celery
+from app.extensions import cache
 
-load_dotenv()
-
-BASE_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger(__name__)
 
 
-class Config:
-    """Configuração base partilhada por todos os ambientes."""
+@celery.task(
+    bind=True,
+    name='tasks.gerar_insights',
+    queue='ai',
+    max_retries=2,
+    default_retry_delay=60,
+)
+def gerar_insights_task(self, user_id: int):
+    try:
+        from app.api.insights import _build_context, _gerar_insights_com_llm
+        ctx = _build_context(user_id)
+        insights = _gerar_insights_com_llm(ctx)
 
-    SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_hex(32)
+        cache_key = f'insights:{user_id}'
+        cache.set(cache_key, insights, timeout=900)  # 15 min
 
-    WTF_CSRF_ENABLED = True
-    WTF_CSRF_TIME_LIMIT = 3600
+        logger.info(f'Insights gerados para user {user_id}')
+        return {'status': 'ok', 'user_id': user_id}
 
-    SQLALCHEMY_TRACK_MODIFICATIONS = False
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,
-    }
+    except Exception as exc:
+        logger.exception(f'Insights IA falharam para user {user_id}: {exc}')
+        raise self.retry(exc=exc)
+</file>
 
-    MAX_CONTENT_LENGTH = int(os.getenv('MAX_UPLOAD_MB', 10)) * 1024 * 1024
-    UPLOAD_FOLDER = str(BASE_DIR / 'dados_utilizadores')
-    STORAGE_FOLDER = str(BASE_DIR / 'storage_utilizadores')
+<file path="app/tasks/emails.py">
+"""
+app/tasks/emails.py — Task Celery: envia emails via Resend em background.
+"""
 
-    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.txt'}
-    ALLOWED_MIME_TYPES = {
-        'application/pdf',
-        'image/png',
-        'image/jpeg',
-        'text/plain',
-    }
+import logging
+from run import celery
 
-    SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = 'Lax'
-    PERMANENT_SESSION_LIFETIME = 86400 * 7
-
-    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-
-    # ── Redis ─────────────────────────────────────────────────────────────────
-    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-
-    # ── Flask-Caching ─────────────────────────────────────────────────────────
-    CACHE_TYPE = 'RedisCache'
-    CACHE_REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    CACHE_DEFAULT_TIMEOUT = 300
-
-    # ── Celery ────────────────────────────────────────────────────────────────
-    CELERY_BROKER_URL     = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-
-    # ── Cloudflare R2 ─────────────────────────────────────────────────────────
-    R2_ENDPOINT_URL      = os.getenv('R2_ENDPOINT_URL')
-    R2_ACCESS_KEY_ID     = os.getenv('R2_ACCESS_KEY_ID')
-    R2_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
-    R2_BUCKET_NAME       = os.getenv('R2_BUCKET_NAME', 'verly-docs')
-    R2_PUBLIC_URL        = os.getenv('R2_PUBLIC_URL', '')
-
-    # ── Qdrant ────────────────────────────────────────────────────────────────
-    QDRANT_URL        = os.getenv('QDRANT_URL', 'http://localhost:6333')
-    QDRANT_API_KEY    = os.getenv('QDRANT_API_KEY', '')
-    QDRANT_COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
-
-    # ── JWT ───────────────────────────────────────────────────────────────────
-    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('SECRET_KEY', 'dev-secret')
+logger = logging.getLogger(__name__)
 
 
-class DevelopmentConfig(Config):
-    DEBUG = True
-    TESTING = False
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        'DATABASE_URL',
-        f'sqlite:///{BASE_DIR / "shopping_police.db"}'
-    )
-    SESSION_COOKIE_SECURE = False
-    SQLALCHEMY_ECHO = False
+@celery.task(
+    bind=True,
+    name='tasks.enviar_email',
+    queue='emails',
+    max_retries=3,
+    default_retry_delay=120,
+)
+def enviar_email_task(self, destinatario: str, assunto: str, html: str, texto: str = ''):
+    """
+    Uso:
+        from app.tasks.emails import enviar_email_task
+        enviar_email_task.delay('user@exemplo.com', 'Assunto', '<p>HTML</p>')
+    """
+    try:
+        import os
+        import resend
+
+        resend.api_key = os.getenv('RESEND_API_KEY', '')
+        if not resend.api_key:
+            logger.warning('RESEND_API_KEY não definida — email não enviado.')
+            return {'status': 'skipped', 'reason': 'no_api_key'}
+
+        from_email = os.getenv('EMAIL_FROM', 'Verly <alertas@verly.app>')
+        params = {'from': from_email, 'to': [destinatario], 'subject': assunto, 'html': html}
+        if texto:
+            params['text'] = texto
+
+        resend.Emails.send(params)
+        logger.info(f'Email enviado para {destinatario}: {assunto}')
+        return {'status': 'sent', 'to': destinatario}
+
+    except Exception as exc:
+        logger.exception(f'Falha ao enviar email para {destinatario}: {exc}')
+        raise self.retry(exc=exc)
+</file>
+
+<file path="app/tasks/ocr.py">
+"""
+app/tasks/ocr.py — Task Celery: processa OCR de uma fatura em background.
+"""
+
+import logging
+from run import celery
+from app.models import Fatura
+from app import db
+
+logger = logging.getLogger(__name__)
 
 
-class ProductionConfig(Config):
-    DEBUG = False
-    TESTING = False
-    SESSION_COOKIE_SECURE = True
-    SQLALCHEMY_ECHO = False
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        'pool_pre_ping': True,
-        'pool_size': 10,
-        'max_overflow': 20,
-        'pool_timeout': 30,
-    }
+@celery.task(
+    bind=True,
+    name='tasks.processar_ocr',
+    queue='ocr',
+    max_retries=3,
+    default_retry_delay=30,
+)
+def processar_ocr_task(self, fatura_id: int):
+    try:
+        fatura = Fatura.query.get(fatura_id)
+        if not fatura:
+            logger.warning(f'OCR: fatura {fatura_id} não encontrada.')
+            return {'status': 'not_found'}
 
-    @classmethod
-    def validate(cls):
-        db_url = os.getenv('DATABASE_URL')
-        if not db_url:
-            print('[ERRO FATAL] DATABASE_URL não definida em produção.', file=sys.stderr)
-            sys.exit(1)
-        if db_url.startswith('postgres://'):
-            db_url = db_url.replace('postgres://', 'postgresql://', 1)
-        cls.SQLALCHEMY_DATABASE_URI = db_url
+        from app.ai import extract_invoice_info
+        from app.r2_service import get_signed_url
+
+        if fatura.file_key:
+            file_source = get_signed_url(fatura.file_key, expires_in=300)
+        else:
+            import os
+            from flask import current_app
+            file_source = os.path.join(
+                current_app.config['UPLOAD_FOLDER'],
+                str(fatura.user_id),
+                fatura.nome_ficheiro,
+            )
+
+        info = extract_invoice_info(file_source, fatura.nome_ficheiro)
+
+        fatura.loja           = info.get('loja')          or fatura.loja
+        fatura.total          = info.get('total')         or fatura.total
+        fatura.items          = info.get('items')         or fatura.items
+        fatura.categoria      = info.get('categoria')     or fatura.categoria
+        fatura.data_compra    = info.get('data_compra')   or fatura.data_compra
+        fatura.data_garantia  = info.get('data_garantia')  or fatura.data_garantia
+        fatura.data_devolucao = info.get('data_devolucao') or fatura.data_devolucao
+        db.session.commit()
+
+        # Invalidar cache do dashboard após novo OCR
+        from app.extensions import cache
+        cache.delete(f'dashboard:{fatura.user_id}')
+        cache.delete(f'estatisticas:{fatura.user_id}')
+
+        from app.tasks.qdrant_task import indexar_fatura_task
+        indexar_fatura_task.delay(fatura_id)
+
+        logger.info(f'OCR OK: fatura {fatura_id}')
+        return {'status': 'ok', 'fatura_id': fatura_id}
+
+    except Exception as exc:
+        logger.exception(f'OCR falhou para fatura {fatura_id}: {exc}')
+        raise self.retry(exc=exc)
+</file>
+
+<file path="app/tasks/qdrant_task.py">
+"""
+app/tasks/qdrant_task.py — Task Celery: indexa fatura no Qdrant para RAG.
+"""
+
+import logging
+from run import celery
+
+logger = logging.getLogger(__name__)
 
 
-class TestingConfig(Config):
-    TESTING = True
-    DEBUG = False
-    WTF_CSRF_ENABLED = False
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
-    SECRET_KEY = 'test-secret-key'
+@celery.task(
+    bind=True,
+    name='tasks.indexar_fatura',
+    queue='ai',
+    max_retries=2,
+    default_retry_delay=30,
+)
+def indexar_fatura_task(self, fatura_id: int):
+    try:
+        from app.models import Fatura
+        from app.qdrant_service import upsert_fatura
 
+        fatura = Fatura.query.get(fatura_id)
+        if not fatura:
+            logger.warning(f'Qdrant index: fatura {fatura_id} não encontrada.')
+            return {'status': 'not_found'}
 
-config_map = {
-    'development': DevelopmentConfig,
-    'production': ProductionConfig,
-    'testing': TestingConfig,
-}
+        upsert_fatura(fatura)
+        logger.info(f'Qdrant: fatura {fatura_id} indexada.')
+        return {'status': 'indexed', 'fatura_id': fatura_id}
 
-
-def get_config():
-    env = os.getenv('FLASK_ENV', 'development').lower()
-    cfg = config_map.get(env, DevelopmentConfig)
-    if env == 'production':
-        cfg.validate()
-    elif env == 'development' and not os.getenv('SECRET_KEY'):
-        print('[AVISO] SECRET_KEY não definida. A usar chave temporária.')
-    return cfg
+    except Exception as exc:
+        logger.exception(f'Qdrant index falhou para fatura {fatura_id}: {exc}')
+        raise self.retry(exc=exc)
 </file>
 
 <file path="dados_utilizadores/1/extrato_abril_2025.txt">
@@ -8948,421 +8981,6 @@ def chat_limpar():
     return jsonify({'success': True})
 </file>
 
-<file path="app/api/dashboard.py">
-"""
-app/api/dashboard.py — Endpoint do dashboard para o mobile
-
-GET /api/v1/dashboard    → resumo completo (cache 5 min por user)
-GET /api/v1/estatisticas → estatísticas detalhadas (cache 5 min por user)
-"""
-
-import json
-import logging
-from collections import defaultdict
-from datetime import datetime
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import Fatura, Conversa
-from app.subscriptions import detect_subscriptions
-from app.dashboard import (
-    _normalise_personality, _calcular_mood, _atualizar_streak,
-    _evolucao_mensal_real, _comparacao_mensal, _get_metas_dashboard,
-    _gerar_feed_verly, _score_ultima_fatura, _parse_date
-)
-from app.notificacoes import gerar_notificacoes
-from app.reports import _regret_factor
-from app.extensions import cache
-from app import db
-
-logger = logging.getLogger(__name__)
-
-
-@api_bp.route('/dashboard', methods=['GET'])
-@jwt_required()
-def dashboard():
-    from app.models import User
-    user_id = int(get_jwt_identity())
-
-    # Cache por utilizador (5 min) — invalida no upload de faturas
-    cache_key = f'dashboard:{user_id}'
-    cached = cache.get(cache_key)
-    if cached:
-        return jsonify(cached)
-
-    user = User.query.get_or_404(user_id)
-
-    faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
-    conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
-
-    total_gasto   = sum(f.total or 0 for f in faturas)
-    num_faturas   = len(faturas)
-    orcamento     = getattr(user, 'orcamento_mensal', 0) or 0
-    personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
-
-    categorias = defaultdict(float)
-    for f in faturas:
-        categorias[f.categoria or 'Outros'] += f.total or 0
-
-    lojas = defaultdict(float)
-    for f in faturas:
-        lojas[f.loja or 'Desconhecida'] += f.total or 0
-    top_loja = max(lojas, key=lojas.get) if lojas else None
-
-    hoje = datetime.now()
-    alertas = []
-    for f in faturas:
-        data_dev = _parse_date(f.data_devolucao)
-        if data_dev and data_dev >= hoje:
-            dias = (data_dev - hoje).days
-            if dias <= 7:
-                alertas.append({
-                    'tipo': 'devolucao', 'fatura': f.nome_ficheiro,
-                    'loja': f.loja or '—', 'data': f.data_devolucao,
-                    'dias': dias, 'urgencia': 'critico' if dias <= 3 else 'aviso'
-                })
-        data_gar = _parse_date(f.data_garantia)
-        if data_gar and data_gar >= hoje:
-            dias = (data_gar - hoje).days
-            if dias <= 30:
-                alertas.append({
-                    'tipo': 'garantia', 'fatura': f.nome_ficheiro,
-                    'loja': f.loja or '—', 'data': f.data_garantia,
-                    'dias': dias, 'urgencia': 'critico' if dias <= 7 else 'aviso'
-                })
-    alertas.sort(key=lambda x: x['dias'])
-
-    subs_data    = detect_subscriptions(user_id)
-    metas_info   = _get_metas_dashboard(user_id)
-    mood         = _calcular_mood(total_gasto, orcamento, len(alertas), personalidade)
-    streak       = _atualizar_streak(user, faturas, orcamento)
-    feed_verly   = _gerar_feed_verly(faturas, conversas, orcamento, subs_data, personalidade, metas_info)
-    comparacao   = _comparacao_mensal(faturas)
-    trend_labels, trend_values = _evolucao_mensal_real(faturas)
-
-    ultima_fatura = faturas[0] if faturas else None
-    score_ultima  = _score_ultima_fatura(ultima_fatura)
-
-    desperdicado_mes = sum(
-        (f.total or 0) * _regret_factor(f.categoria or 'Outros') for f in faturas
-    )
-
-    def fatura_mini(f):
-        return {
-            'id':          f.id,
-            'loja':        f.loja or f.nome_ficheiro,
-            'total':       f.total or 0,
-            'categoria':   f.categoria or 'Outros',
-            'data_compra': f.data_compra,
-            'data_upload': f.data_upload.isoformat() if f.data_upload else None,
-        }
-
-    result = {
-        'total_gasto':       round(total_gasto, 2),
-        'num_faturas':       num_faturas,
-        'top_loja':          top_loja,
-        'orcamento':         orcamento,
-        'streak':            streak,
-        'mood':              mood,
-        'feed':              feed_verly,
-        'alertas':           alertas,
-        'comparacao':        comparacao,
-        'score_ultima':      score_ultima,
-        'desperdicado_mes':  round(desperdicado_mes, 2),
-        'categorias':        [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
-        'lojas':             [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
-        'evolucao':          {'labels': trend_labels, 'values': trend_values},
-        'subscricoes': {
-            'total_mensal':   round(subs_data['total_mensal_desperdicado'], 2),
-            'count_danger':   subs_data['count_danger'],
-            'count_warning':  subs_data['count_warning'],
-            'top3':           subs_data['subscriptions'][:3],
-        },
-        'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
-    }
-
-    cache.set(cache_key, result, timeout=300)   # 5 min
-    return jsonify(result)
-
-
-# ── Estatísticas ───────────────────────────────────────────────────────────────
-
-def _parse_date_str(s):
-    if not s:
-        return None
-    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
-        try:
-            return datetime.strptime(s.strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
-@api_bp.route('/estatisticas', methods=['GET'])
-@jwt_required()
-def estatisticas():
-    user_id = int(get_jwt_identity())
-
-    cache_key = f'estatisticas:{user_id}'
-    cached = cache.get(cache_key)
-    if cached:
-        return jsonify(cached)
-
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
-
-    if not faturas:
-        return jsonify({
-            'por_categoria': [],
-            'por_mes':       [],
-            'total_geral':   0,
-            'media_mensal':  0,
-            'categoria_top': None,
-            'num_faturas':   0,
-        })
-
-    cat_totais = defaultdict(float)
-    cat_counts = defaultdict(int)
-    mes_totais = defaultdict(float)
-
-    for f in faturas:
-        cat   = f.categoria or 'Outros'
-        total = f.total or 0
-        cat_totais[cat] += total
-        cat_counts[cat] += 1
-
-        data = _parse_date_str(f.data_compra) or f.data_upload
-        if data:
-            chave_mes = data.strftime('%Y-%m') if hasattr(data, 'strftime') else str(data)[:7]
-            mes_totais[chave_mes] += total
-
-    por_categoria = sorted(
-        [{'categoria': k, 'total': round(v, 2), 'count': cat_counts[k]}
-         for k, v in cat_totais.items()],
-        key=lambda x: x['total'], reverse=True
-    )
-
-    por_mes = sorted(
-        [{'mes': k, 'total': round(v, 2)} for k, v in mes_totais.items()],
-        key=lambda x: x['mes']
-    )
-
-    total_geral  = sum(f.total or 0 for f in faturas)
-    media_mensal = total_geral / len(mes_totais) if mes_totais else 0
-
-    result = {
-        'por_categoria': por_categoria,
-        'por_mes':       por_mes,
-        'total_geral':   round(total_geral, 2),
-        'media_mensal':  round(media_mensal, 2),
-        'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
-        'num_faturas':   len(faturas),
-    }
-
-    cache.set(cache_key, result, timeout=300)   # 5 min
-    return jsonify(result)
-</file>
-
-<file path="app/api/faturas.py">
-"""
-app/api/faturas.py — CRUD de faturas para o mobile
-
-GET    /api/v1/faturas              → lista
-POST   /api/v1/faturas/upload       → upload (R2 + OCR em background)
-GET    /api/v1/faturas/<id>         → detalhe
-GET    /api/v1/faturas/<id>/url     → signed URL para download
-DELETE /api/v1/faturas/<id>         → apagar (R2 + DB + Qdrant)
-"""
-
-import json
-import logging
-from flask import request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import Fatura, CATEGORIAS
-from app.extensions import limiter
-from app import db
-
-logger = logging.getLogger(__name__)
-
-
-def _fatura_to_dict(f):
-    try:
-        items = json.loads(f.items) if f.items else []
-    except Exception:
-        items = []
-    return {
-        'id':             f.id,
-        'nome_ficheiro':  f.nome_ficheiro,
-        'loja':           f.loja,
-        'data_compra':    f.data_compra,
-        'data_upload':    f.data_upload.isoformat() if f.data_upload else None,
-        'total':          f.total or 0,
-        'items':          items,
-        'categoria':      f.categoria or 'Outros',
-        'data_garantia':  f.data_garantia,
-        'data_devolucao': f.data_devolucao,
-        'has_file':       bool(f.file_key),   # indica se tem ficheiro no R2
-    }
-
-
-# ── Listar ────────────────────────────────────────────────────────────────────
-
-@api_bp.route('/faturas', methods=['GET'])
-@jwt_required()
-def listar_faturas():
-    user_id   = int(get_jwt_identity())
-    search    = request.args.get('q', '').strip()[:200]
-    categoria = request.args.get('categoria', '').strip()
-    ordenar   = request.args.get('ordenar', 'recente').strip()
-
-    if categoria and categoria not in CATEGORIAS:
-        categoria = ''
-    if ordenar not in {'recente', 'antigo', 'maior', 'menor'}:
-        ordenar = 'recente'
-
-    query = Fatura.query.filter_by(user_id=user_id)
-    if search:
-        query = query.filter(
-            db.or_(
-                Fatura.loja.ilike(f'%{search}%'),
-                Fatura.nome_ficheiro.ilike(f'%{search}%'),
-            )
-        )
-    if categoria:
-        query = query.filter_by(categoria=categoria)
-
-    order_map = {
-        'recente': Fatura.data_upload.desc(),
-        'antigo':  Fatura.data_upload.asc(),
-        'maior':   Fatura.total.desc(),
-        'menor':   Fatura.total.asc(),
-    }
-    faturas = query.order_by(order_map[ordenar]).all()
-
-    return jsonify({
-        'faturas':    [_fatura_to_dict(f) for f in faturas],
-        'total':      round(sum(f.total or 0 for f in faturas), 2),
-        'categorias': CATEGORIAS,
-    })
-
-
-# ── Detalhe ───────────────────────────────────────────────────────────────────
-
-@api_bp.route('/faturas/<int:fatura_id>', methods=['GET'])
-@jwt_required()
-def detalhe_fatura(fatura_id):
-    user_id = int(get_jwt_identity())
-    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-    return jsonify(_fatura_to_dict(f))
-
-
-# ── Signed URL para download ──────────────────────────────────────────────────
-
-@api_bp.route('/faturas/<int:fatura_id>/url', methods=['GET'])
-@jwt_required()
-def fatura_signed_url(fatura_id):
-    """Devolve URL assinada temporária (15 min) para download seguro do ficheiro."""
-    user_id = int(get_jwt_identity())
-    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-
-    if not f.file_key:
-        return jsonify({'erro': 'Ficheiro não disponível no R2.'}), 404
-
-    from app.r2_service import get_signed_url
-    url = get_signed_url(f.file_key, expires_in=900)   # 15 min
-    return jsonify({'url': url, 'expires_in': 900})
-
-
-# ── Upload ────────────────────────────────────────────────────────────────────
-
-@api_bp.route('/faturas/upload', methods=['POST'])
-@jwt_required()
-@limiter.limit("20 per hour", key_func=lambda: get_jwt_identity())
-def upload_fatura():
-    """
-    Upload de fatura via multipart/form-data.
-    1. Valida o ficheiro (extensão + magic bytes)
-    2. Faz upload para o Cloudflare R2
-    3. Cria registo na DB com status 'processing'
-    4. Dispara task Celery para OCR em background
-    5. Retorna 202 imediatamente (o cliente deve fazer polling ou usar push)
-    """
-    from security import validate_upload, sanitize_filename
-    from app.r2_service import upload_file
-    from app.tasks.ocr import processar_ocr_task
-
-    user_id = int(get_jwt_identity())
-
-    if 'file' not in request.files:
-        return jsonify({'error': 'Nenhum ficheiro enviado.'}), 400
-
-    file = request.files['file']
-    if not file or file.filename == '':
-        return jsonify({'error': 'Ficheiro inválido.'}), 400
-
-    # Validar (extensão + magic bytes) — usa o security.py existente
-    is_valid, error_msg, mime = validate_upload(file)
-    if not is_valid:
-        return jsonify({'error': error_msg}), 400
-
-    safe_name = sanitize_filename(file.filename)
-    if not safe_name:
-        return jsonify({'error': 'Nome de ficheiro inválido.'}), 400
-
-    # Ler bytes (após validate_upload que faz seek(0))
-    file_bytes = file.read()
-
-    # Upload para R2
-    try:
-        key = upload_file(file_bytes, safe_name, user_id, mime)
-    except Exception as e:
-        logger.error(f'Erro no upload R2 para user {user_id}: {e}')
-        return jsonify({'error': 'Erro ao guardar o ficheiro. Tenta novamente.'}), 500
-
-    # Criar registo na DB
-    fatura = Fatura(
-        user_id=user_id,
-        nome_ficheiro=safe_name,
-        file_key=key,
-    )
-    db.session.add(fatura)
-    db.session.commit()
-
-    # Disparar OCR em background (Celery)
-    processar_ocr_task.delay(fatura.id)
-
-    return jsonify({
-        'id':     fatura.id,
-        'status': 'processing',
-        'message': 'Fatura recebida. O processamento OCR está em curso.',
-    }), 202
-
-
-# ── Apagar ────────────────────────────────────────────────────────────────────
-
-@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
-@jwt_required()
-def apagar_fatura(fatura_id):
-    user_id = int(get_jwt_identity())
-    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-
-    # Apagar do R2 se existir
-    if f.file_key:
-        from app.r2_service import delete_file
-        delete_file(f.file_key)
-
-    # Apagar do Qdrant
-    try:
-        from app.qdrant_service import delete_fatura
-        delete_fatura(fatura_id)
-    except Exception as e:
-        logger.warning(f'Qdrant delete falhou para fatura {fatura_id}: {e}')
-
-    db.session.delete(f)
-    db.session.commit()
-    return jsonify({'success': True})
-</file>
-
 <file path="app/api/gmail.py">
 """
 app/api/gmail.py — Integração Gmail para importação automática de faturas
@@ -11122,6 +10740,140 @@ def adicionar_manual():
     return jsonify({'success': True, 'id': sub.id})
 </file>
 
+<file path="config.py">
+"""
+config.py — Configuração por ambiente (development / production)
+"""
+
+import os
+import secrets
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+
+
+class Config:
+    """Configuração base partilhada por todos os ambientes."""
+
+    SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_hex(32)
+
+    WTF_CSRF_ENABLED = True
+    WTF_CSRF_TIME_LIMIT = 3600
+
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+    }
+
+    MAX_CONTENT_LENGTH = int(os.getenv('MAX_UPLOAD_MB', 10)) * 1024 * 1024
+    UPLOAD_FOLDER = str(BASE_DIR / 'dados_utilizadores')
+    STORAGE_FOLDER = str(BASE_DIR / 'storage_utilizadores')
+
+    ALLOWED_EXTENSIONS = {'.pdf', '.png', '.jpg', '.jpeg', '.txt'}
+    ALLOWED_MIME_TYPES = {
+        'application/pdf',
+        'image/png',
+        'image/jpeg',
+        'text/plain',
+    }
+
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    PERMANENT_SESSION_LIFETIME = 86400 * 7
+
+    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+
+    # ── Redis ─────────────────────────────────────────────────────────────────
+    REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Flask-Caching ─────────────────────────────────────────────────────────
+    CACHE_TYPE = 'RedisCache'
+    CACHE_REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CACHE_DEFAULT_TIMEOUT = 300
+
+    # ── Celery ────────────────────────────────────────────────────────────────
+    CELERY_BROKER_URL     = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # ── Cloudflare R2 ─────────────────────────────────────────────────────────
+    R2_ENDPOINT_URL      = os.getenv('R2_ENDPOINT_URL')
+    R2_ACCESS_KEY_ID     = os.getenv('R2_ACCESS_KEY_ID')
+    R2_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
+    R2_BUCKET_NAME       = os.getenv('R2_BUCKET_NAME', 'verly-docs')
+    R2_PUBLIC_URL        = os.getenv('R2_PUBLIC_URL', '')
+
+    # ── Qdrant ────────────────────────────────────────────────────────────────
+    QDRANT_URL        = os.getenv('QDRANT_URL', 'http://localhost:6333')
+    QDRANT_API_KEY    = os.getenv('QDRANT_API_KEY', '')
+    QDRANT_COLLECTION = os.getenv('QDRANT_COLLECTION', 'verly_docs')
+
+    # ── JWT ───────────────────────────────────────────────────────────────────
+    JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('SECRET_KEY', 'dev-secret')
+
+
+class DevelopmentConfig(Config):
+    DEBUG = True
+    TESTING = False
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        'DATABASE_URL',
+        f'sqlite:///{BASE_DIR / "shopping_police.db"}'
+    )
+    SESSION_COOKIE_SECURE = False
+    SQLALCHEMY_ECHO = False
+
+
+class ProductionConfig(Config):
+    DEBUG = False
+    TESTING = False
+    SESSION_COOKIE_SECURE = True
+    SQLALCHEMY_ECHO = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_pre_ping': True,
+        'pool_size': 10,
+        'max_overflow': 20,
+        'pool_timeout': 30,
+    }
+
+    @classmethod
+    def validate(cls):
+        db_url = os.getenv('DATABASE_URL')
+        if not db_url:
+            print('[ERRO FATAL] DATABASE_URL não definida em produção.', file=sys.stderr)
+            sys.exit(1)
+        if db_url.startswith('postgres://'):
+            db_url = db_url.replace('postgres://', 'postgresql://', 1)
+        cls.SQLALCHEMY_DATABASE_URI = db_url
+
+
+class TestingConfig(Config):
+    TESTING = True
+    DEBUG = False
+    WTF_CSRF_ENABLED = False
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SECRET_KEY = 'test-secret-key'
+
+
+config_map = {
+    'development': DevelopmentConfig,
+    'production': ProductionConfig,
+    'testing': TestingConfig,
+}
+
+
+def get_config():
+    env = os.getenv('FLASK_ENV', 'development').lower()
+    cfg = config_map.get(env, DevelopmentConfig)
+    if env == 'production':
+        cfg.validate()
+    elif env == 'development' and not os.getenv('SECRET_KEY'):
+        print('[AVISO] SECRET_KEY não definida. A usar chave temporária.')
+    return cfg
+</file>
+
 <file path="dados_utilizadores/1/pullbear_tshirts.txt">
 ================================================================================
                               FATURA / RECIBO
@@ -11209,31 +10961,6 @@ def main():
 
 if __name__ == '__main__':
     main()
-</file>
-
-<file path="run.py">
-"""
-run.py — Ponto de entrada da aplicação Verly
-
-Iniciar Flask:
-    python run.py
-    flask run
-
-Iniciar Celery worker:
-    celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails
-
-Iniciar Flower (monitor):
-    celery -A run.celery flower --port=5555
-"""
-
-from app import create_app
-from app.celery_app import make_celery
-
-flask_app = create_app()
-celery = make_celery(flask_app)
-
-if __name__ == '__main__':
-    flask_app.run(debug=True)
 </file>
 
 <file path="templates/configuracoes.html">
@@ -15772,6 +15499,421 @@ verly-mobile/node_modules/
 verly-mobile/.expo/
 </file>
 
+<file path="app/api/dashboard.py">
+"""
+app/api/dashboard.py — Endpoint do dashboard para o mobile
+
+GET /api/v1/dashboard    → resumo completo (cache 5 min por user)
+GET /api/v1/estatisticas → estatísticas detalhadas (cache 5 min por user)
+"""
+
+import json
+import logging
+from collections import defaultdict
+from datetime import datetime
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, Conversa
+from app.subscriptions import detect_subscriptions
+from app.dashboard import (
+    _normalise_personality, _calcular_mood, _atualizar_streak,
+    _evolucao_mensal_real, _comparacao_mensal, _get_metas_dashboard,
+    _gerar_feed_verly, _score_ultima_fatura, _parse_date
+)
+from app.notificacoes import gerar_notificacoes
+from app.reports import _regret_factor
+from app.extensions import cache
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+@api_bp.route('/dashboard', methods=['GET'])
+@jwt_required()
+def dashboard():
+    from app.models import User
+    user_id = int(get_jwt_identity())
+
+    # Cache por utilizador (5 min) — invalida no upload de faturas
+    cache_key = f'dashboard:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    user = User.query.get_or_404(user_id)
+
+    faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
+    conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
+
+    total_gasto   = sum(f.total or 0 for f in faturas)
+    num_faturas   = len(faturas)
+    orcamento     = getattr(user, 'orcamento_mensal', 0) or 0
+    personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
+
+    categorias = defaultdict(float)
+    for f in faturas:
+        categorias[f.categoria or 'Outros'] += f.total or 0
+
+    lojas = defaultdict(float)
+    for f in faturas:
+        lojas[f.loja or 'Desconhecida'] += f.total or 0
+    top_loja = max(lojas, key=lojas.get) if lojas else None
+
+    hoje = datetime.now()
+    alertas = []
+    for f in faturas:
+        data_dev = _parse_date(f.data_devolucao)
+        if data_dev and data_dev >= hoje:
+            dias = (data_dev - hoje).days
+            if dias <= 7:
+                alertas.append({
+                    'tipo': 'devolucao', 'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—', 'data': f.data_devolucao,
+                    'dias': dias, 'urgencia': 'critico' if dias <= 3 else 'aviso'
+                })
+        data_gar = _parse_date(f.data_garantia)
+        if data_gar and data_gar >= hoje:
+            dias = (data_gar - hoje).days
+            if dias <= 30:
+                alertas.append({
+                    'tipo': 'garantia', 'fatura': f.nome_ficheiro,
+                    'loja': f.loja or '—', 'data': f.data_garantia,
+                    'dias': dias, 'urgencia': 'critico' if dias <= 7 else 'aviso'
+                })
+    alertas.sort(key=lambda x: x['dias'])
+
+    subs_data    = detect_subscriptions(user_id)
+    metas_info   = _get_metas_dashboard(user_id)
+    mood         = _calcular_mood(total_gasto, orcamento, len(alertas), personalidade)
+    streak       = _atualizar_streak(user, faturas, orcamento)
+    feed_verly   = _gerar_feed_verly(faturas, conversas, orcamento, subs_data, personalidade, metas_info)
+    comparacao   = _comparacao_mensal(faturas)
+    trend_labels, trend_values = _evolucao_mensal_real(faturas)
+
+    ultima_fatura = faturas[0] if faturas else None
+    score_ultima  = _score_ultima_fatura(ultima_fatura)
+
+    desperdicado_mes = sum(
+        (f.total or 0) * _regret_factor(f.categoria or 'Outros') for f in faturas
+    )
+
+    def fatura_mini(f):
+        return {
+            'id':          f.id,
+            'loja':        f.loja or f.nome_ficheiro,
+            'total':       f.total or 0,
+            'categoria':   f.categoria or 'Outros',
+            'data_compra': f.data_compra,
+            'data_upload': f.data_upload.isoformat() if f.data_upload else None,
+        }
+
+    result = {
+        'total_gasto':       round(total_gasto, 2),
+        'num_faturas':       num_faturas,
+        'top_loja':          top_loja,
+        'orcamento':         orcamento,
+        'streak':            streak,
+        'mood':              mood,
+        'feed':              feed_verly,
+        'alertas':           alertas,
+        'comparacao':        comparacao,
+        'score_ultima':      score_ultima,
+        'desperdicado_mes':  round(desperdicado_mes, 2),
+        'categorias':        [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
+        'lojas':             [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
+        'evolucao':          {'labels': trend_labels, 'values': trend_values},
+        'subscricoes': {
+            'total_mensal':   round(subs_data['total_mensal_desperdicado'], 2),
+            'count_danger':   subs_data['count_danger'],
+            'count_warning':  subs_data['count_warning'],
+            'top3':           subs_data['subscriptions'][:3],
+        },
+        'ultimas_faturas': [fatura_mini(f) for f in faturas[:5]],
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)
+
+
+# ── Estatísticas ───────────────────────────────────────────────────────────────
+
+def _parse_date_str(s):
+    if not s:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(s.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@api_bp.route('/estatisticas', methods=['GET'])
+@jwt_required()
+def estatisticas():
+    user_id = int(get_jwt_identity())
+
+    cache_key = f'estatisticas:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+
+    if not faturas:
+        return jsonify({
+            'por_categoria': [],
+            'por_mes':       [],
+            'total_geral':   0,
+            'media_mensal':  0,
+            'categoria_top': None,
+            'num_faturas':   0,
+        })
+
+    cat_totais = defaultdict(float)
+    cat_counts = defaultdict(int)
+    mes_totais = defaultdict(float)
+
+    for f in faturas:
+        cat   = f.categoria or 'Outros'
+        total = f.total or 0
+        cat_totais[cat] += total
+        cat_counts[cat] += 1
+
+        data = _parse_date_str(f.data_compra) or f.data_upload
+        if data:
+            chave_mes = data.strftime('%Y-%m') if hasattr(data, 'strftime') else str(data)[:7]
+            mes_totais[chave_mes] += total
+
+    por_categoria = sorted(
+        [{'categoria': k, 'total': round(v, 2), 'count': cat_counts[k]}
+         for k, v in cat_totais.items()],
+        key=lambda x: x['total'], reverse=True
+    )
+
+    por_mes = sorted(
+        [{'mes': k, 'total': round(v, 2)} for k, v in mes_totais.items()],
+        key=lambda x: x['mes']
+    )
+
+    total_geral  = sum(f.total or 0 for f in faturas)
+    media_mensal = total_geral / len(mes_totais) if mes_totais else 0
+
+    result = {
+        'por_categoria': por_categoria,
+        'por_mes':       por_mes,
+        'total_geral':   round(total_geral, 2),
+        'media_mensal':  round(media_mensal, 2),
+        'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
+        'num_faturas':   len(faturas),
+    }
+
+    cache.set(cache_key, result, timeout=300)   # 5 min
+    return jsonify(result)
+</file>
+
+<file path="app/api/faturas.py">
+"""
+app/api/faturas.py — CRUD de faturas para o mobile
+
+GET    /api/v1/faturas              → lista
+POST   /api/v1/faturas/upload       → upload (R2 + OCR em background)
+GET    /api/v1/faturas/<id>         → detalhe
+GET    /api/v1/faturas/<id>/url     → signed URL para download
+DELETE /api/v1/faturas/<id>         → apagar (R2 + DB + Qdrant)
+"""
+
+import json
+import logging
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, CATEGORIAS
+from app.extensions import limiter
+from app import db
+
+logger = logging.getLogger(__name__)
+
+
+def _fatura_to_dict(f):
+    try:
+        items = json.loads(f.items) if f.items else []
+    except Exception:
+        items = []
+    return {
+        'id':             f.id,
+        'nome_ficheiro':  f.nome_ficheiro,
+        'loja':           f.loja,
+        'data_compra':    f.data_compra,
+        'data_upload':    f.data_upload.isoformat() if f.data_upload else None,
+        'total':          f.total or 0,
+        'items':          items,
+        'categoria':      f.categoria or 'Outros',
+        'data_garantia':  f.data_garantia,
+        'data_devolucao': f.data_devolucao,
+        'has_file':       bool(f.file_key),   # indica se tem ficheiro no R2
+    }
+
+
+# ── Listar ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas', methods=['GET'])
+@jwt_required()
+def listar_faturas():
+    user_id   = int(get_jwt_identity())
+    search    = request.args.get('q', '').strip()[:200]
+    categoria = request.args.get('categoria', '').strip()
+    ordenar   = request.args.get('ordenar', 'recente').strip()
+
+    if categoria and categoria not in CATEGORIAS:
+        categoria = ''
+    if ordenar not in {'recente', 'antigo', 'maior', 'menor'}:
+        ordenar = 'recente'
+
+    query = Fatura.query.filter_by(user_id=user_id)
+    if search:
+        query = query.filter(
+            db.or_(
+                Fatura.loja.ilike(f'%{search}%'),
+                Fatura.nome_ficheiro.ilike(f'%{search}%'),
+            )
+        )
+    if categoria:
+        query = query.filter_by(categoria=categoria)
+
+    order_map = {
+        'recente': Fatura.data_upload.desc(),
+        'antigo':  Fatura.data_upload.asc(),
+        'maior':   Fatura.total.desc(),
+        'menor':   Fatura.total.asc(),
+    }
+    faturas = query.order_by(order_map[ordenar]).all()
+
+    return jsonify({
+        'faturas':    [_fatura_to_dict(f) for f in faturas],
+        'total':      round(sum(f.total or 0 for f in faturas), 2),
+        'categorias': CATEGORIAS,
+    })
+
+
+# ── Detalhe ───────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['GET'])
+@jwt_required()
+def detalhe_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+    return jsonify(_fatura_to_dict(f))
+
+
+# ── Signed URL para download ──────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>/url', methods=['GET'])
+@jwt_required()
+def fatura_signed_url(fatura_id):
+    """Devolve URL assinada temporária (15 min) para download seguro do ficheiro."""
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+
+    if not f.file_key:
+        return jsonify({'erro': 'Ficheiro não disponível no R2.'}), 404
+
+    from app.r2_service import get_signed_url
+    url = get_signed_url(f.file_key, expires_in=900)   # 15 min
+    return jsonify({'url': url, 'expires_in': 900})
+
+
+# ── Upload ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas/upload', methods=['POST'])
+@jwt_required()
+@limiter.limit("20 per hour", key_func=lambda: get_jwt_identity())
+def upload_fatura():
+    """
+    Upload de fatura via multipart/form-data.
+    1. Valida o ficheiro (extensão + magic bytes)
+    2. Faz upload para o Cloudflare R2
+    3. Cria registo na DB com status 'processing'
+    4. Dispara task Celery para OCR em background
+    5. Retorna 202 imediatamente (o cliente deve fazer polling ou usar push)
+    """
+    from security import validate_upload, sanitize_filename
+    from app.r2_service import upload_file
+    from app.tasks.ocr import processar_ocr_task
+
+    user_id = int(get_jwt_identity())
+
+    if 'file' not in request.files:
+        return jsonify({'error': 'Nenhum ficheiro enviado.'}), 400
+
+    file = request.files['file']
+    if not file or file.filename == '':
+        return jsonify({'error': 'Ficheiro inválido.'}), 400
+
+    # Validar (extensão + magic bytes) — usa o security.py existente
+    is_valid, error_msg, mime = validate_upload(file)
+    if not is_valid:
+        return jsonify({'error': error_msg}), 400
+
+    safe_name = sanitize_filename(file.filename)
+    if not safe_name:
+        return jsonify({'error': 'Nome de ficheiro inválido.'}), 400
+
+    # Ler bytes (após validate_upload que faz seek(0))
+    file_bytes = file.read()
+
+    # Upload para R2
+    try:
+        key = upload_file(file_bytes, safe_name, user_id, mime)
+    except Exception as e:
+        logger.error(f'Erro no upload R2 para user {user_id}: {e}')
+        return jsonify({'error': 'Erro ao guardar o ficheiro. Tenta novamente.'}), 500
+
+    # Criar registo na DB
+    fatura = Fatura(
+        user_id=user_id,
+        nome_ficheiro=safe_name,
+        file_key=key,
+    )
+    db.session.add(fatura)
+    db.session.commit()
+
+    # Disparar OCR em background (Celery)
+    processar_ocr_task.delay(fatura.id)
+
+    return jsonify({
+        'id':     fatura.id,
+        'status': 'processing',
+        'message': 'Fatura recebida. O processamento OCR está em curso.',
+    }), 202
+
+
+# ── Apagar ────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/faturas/<int:fatura_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_fatura(fatura_id):
+    user_id = int(get_jwt_identity())
+    f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
+
+    # Apagar do R2 se existir
+    if f.file_key:
+        from app.r2_service import delete_file
+        delete_file(f.file_key)
+
+    # Apagar do Qdrant
+    try:
+        from app.qdrant_service import delete_fatura
+        delete_fatura(fatura_id)
+    except Exception as e:
+        logger.warning(f'Qdrant delete falhou para fatura {fatura_id}: {e}')
+
+    db.session.delete(f)
+    db.session.commit()
+    return jsonify({'success': True})
+</file>
+
 <file path="app/api/push_notifications.py">
 """
 app/api/push_notifications.py — Push notifications FCM reais via Firebase Admin SDK
@@ -16932,6 +17074,31 @@ with app.app_context():
                     print(f'❌ FCM erro {coluna}: {e}')
     except Exception as e:
         print(f'❌ FCM migration falhou: {e}')
+</file>
+
+<file path="run.py">
+"""
+run.py — Ponto de entrada da aplicação Verly
+
+Iniciar Flask:
+    python run.py
+    flask run
+
+Iniciar Celery worker:
+    celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails
+
+Iniciar Flower (monitor):
+    celery -A run.celery flower --port=5555
+"""
+
+from app import create_app
+from app.celery_app import make_celery
+
+flask_app = create_app()
+celery = make_celery(flask_app)
+
+if __name__ == '__main__':
+    flask_app.run(debug=True)
 </file>
 
 <file path="verly-mobile/android/app/google-services.json">
@@ -20564,204 +20731,6 @@ def exportar_pdf():
         return jsonify({'error': f'Erro ao gerar PDF: {str(e)}'}), 500
 </file>
 
-<file path="README.md">
-# Verly 💜
-
-**O teu guardião financeiro inteligente.**
-
-Verly é uma aplicação móvel + web que ajuda utilizadores portugueses a gerir as suas despesas, detetar desperdício financeiro e tomar decisões de compra mais inteligentes — com a personalidade irreverente de uma IA que conhece os teus hábitos melhor do que tu.
-
----
-
-## ✨ Funcionalidades
-
-### 📱 App Mobile (React Native / Expo)
-- **Dashboard** — visão geral do mês: gastos, faturas, alertas e tendência vs. mês anterior
-- **Faturas** — upload via câmara, galeria ou PDF; extração automática por OCR + IA
-- **Ask Verly** — chat com IA contextualizado com os teus dados financeiros pessoais
-- **Insights** — análise inteligente dos teus padrões de consumo com alertas, tendências e dicas personalizadas
-- **Perfil** — personalidade da IA, avatar, configurações
-
-### 🗂️ Menu Lateral
-- **Metas** — define limites de gasto por categoria e acompanha o progresso
-- **Amigos** — partilha e compara hábitos com amigos
-- **Playlists de compras** — listas colaborativas de produtos
-- **Estatísticas** — gráficos detalhados de consumo
-- **Relatório** — relatório mensal com estimativa de desperdício
-- **Histórico** — todas as faturas ordenadas por data
-- **Score de compra** — analisa se uma compra vale a pena antes de a fazer
-- **Subscrições** — deteta serviços recorrentes e alerta para os que não usas
-- **Notificações** — alertas de garantias e prazos de devolução
-
-### 🌐 Web (Flask + Jinja2)
-- Interface completa de gestão de faturas e relatórios
-- Exportação PDF de relatórios mensais
-- Sistema de personalidade (Savage / Sarcástico / Calmo / Pro)
-- Módulo Impulse Control — análise custo-benefício antes de comprar
-
----
-
-## 🛠️ Stack Tecnológico
-
-### Mobile
-| Camada | Tecnologia |
-|---|---|
-| Framework | React Native 0.81 + Expo 54 |
-| Linguagem | JavaScript (ES2022) |
-| Navegação | React Navigation 6 (Stack + Bottom Tabs) |
-| Animações | React Native Reanimated 4 + Moti |
-| Ícones | Lucide React Native + SVG customizados |
-| SVG | react-native-svg 15 |
-| Storage local | AsyncStorage |
-| Autenticação | Firebase Auth (email, Google, Apple) |
-| Compras in-app | RevenueCat |
-| Localização | expo-location |
-| Câmara / Galeria | expo-image-picker |
-| Ficheiros | expo-document-picker |
-| HTTP | fetch nativo (via `src/services/api.js`) |
-
-### Backend
-| Camada | Tecnologia |
-|---|---|
-| Linguagem | Python 3.10+ |
-| Framework | Flask + Flask-Login + SQLAlchemy |
-| Base de dados | SQLite (com sistema de migração próprio) |
-| IA / LLM | Meta Llama 3.3 via Groq API |
-| Orquestração IA | LlamaIndex |
-| Embeddings | HuggingFace BGE Small |
-| OCR / Extração | LlamaIndex + Groq multimodal |
-| Exportação PDF | ReportLab |
-| Autenticação web | Flask-Login + JWT (API mobile) |
-| Email | Flask-Mail |
-
-### Frontend Web
-| Camada | Tecnologia |
-|---|---|
-| Templates | Jinja2 |
-| CSS | CSS puro com variáveis (dark mode) |
-| Tipografia | Sora + Inter |
-
----
-
-## 📁 Estrutura do Projeto
-
-```
-verly/
-├── app/                        # Backend Flask
-│   ├── api/                    # Endpoints REST para mobile (JWT)
-│   │   ├── auth.py             # Login, registo, Firebase
-│   │   ├── chat.py             # Chat IA
-│   │   ├── dashboard.py        # Dados do dashboard
-│   │   ├── faturas.py          # Upload e listagem de faturas
-│   │   ├── metas.py            # Metas financeiras
-│   │   ├── mobile_extras.py    # Score, impulse, relatório, lojas
-│   │   ├── subscricoes.py      # Subscrições + RevenueCat
-│   │   └── amizades.py         # Sistema social
-│   ├── models.py               # Modelos SQLAlchemy
-│   ├── ai.py                   # Integração LlamaIndex + Groq
-│   ├── email_service.py        # Envio de emails
-│   └── ...                     # Outros módulos (scoring, impulse, etc.)
-│
-├── verly-mobile/               # App React Native / Expo
-│   ├── src/
-│   │   ├── screens/            # Ecrãs da app
-│   │   │   ├── DashboardScreen.js
-│   │   │   ├── ChatScreen.js       # "Ask Verly"
-│   │   │   ├── InsightsScreen.js   # Insights IA
-│   │   │   ├── FaturasScreen.js
-│   │   │   ├── PerfilScreen.js
-│   │   │   ├── MetasScreen.js
-│   │   │   └── ...
-│   │   ├── navigation/
-│   │   │   └── AppNavigator.js # Stack + Tabs + Menu lateral
-│   │   ├── services/
-│   │   │   └── api.js          # Comunicação com o backend Flask
-│   │   ├── context/
-│   │   │   ├── AuthContext.js  # Estado de autenticação global
-│   │   │   └── RevenueCatContext.js
-│   │   ├── components/
-│   │   │   └── UI.js           # Componentes reutilizáveis
-│   │   └── constants/
-│   │       └── theme.js        # COLORS, FONT, SPACE, RADIUS
-│   └── android/                # Build nativo Android
-│
-├── templates/                  # Templates Jinja2 (web)
-├── static/                     # CSS e assets estáticos
-├── dados_utilizadores/         # Ficheiros por utilizador (PDFs, imagens)
-├── storage_utilizadores/       # Índices vectoriais por utilizador
-├── requirements.txt
-└── run.py
-```
-
----
-
-## 🚀 Instalação e Setup
-
-### Backend
-
-```bash
-git clone https://github.com/your-username/verly.git
-cd verly
-
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-Cria um ficheiro `.env` na raiz:
-
-```env
-GROQ_API_KEY=your_groq_api_key
-FLASK_SECRET_KEY=your_secret_key
-MAIL_USERNAME=your_email@gmail.com
-MAIL_PASSWORD=your_app_password
-```
-
-Inicia o servidor:
-
-```bash
-python run.py
-```
-
-### Mobile
-
-```bash
-cd verly-mobile
-npm install
-```
-
-Em `src/services/api.js`, atualiza o IP para o da tua máquina:
-
-```js
-const BASE_URL = 'http://192.168.1.X:5000/api/v1';
-```
-
-Inicia a app:
-
-```bash
-npx expo start
-```
-
----
-
-## 🎨 Design System
-
-A app usa um sistema de design consistente definido em `src/constants/theme.js`:
-
-- **Cor primária:** `#7C6FE0` (roxo Verly)
-- **Background:** `#080810` (dark profundo)
-- **Surface:** `#0F0F1A` / `#161624`
-- **Tipografia:** FONT.xs / sm / md / lg / xl / h1
-- **Espaçamento:** SPACE.sm / md / lg
-- **Raios:** RADIUS.sm / md / lg
-
----
-
-## 📄 Licença
-
-Projeto privado — todos os direitos reservados.
-</file>
-
 <file path="templates/perfil.html">
 {% extends 'base.html' %}
 {% block title %}Perfil · Verly{% endblock %}
@@ -22860,643 +22829,6 @@ const s = StyleSheet.create({
 });
 </file>
 
-<file path="app/api/insights.py">
-"""
-app/api/insights.py — Insights da Verly com IA real + princípios financeiros
-
-GET /api/v1/insights
-GET /api/v1/poupanca
-"""
-
-import json
-import re
-import logging
-from collections import defaultdict
-from datetime import datetime
-from flask import jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.api import api_bp
-from app.models import Fatura, User, Meta
-from app.extensions import cache
-
-logger = logging.getLogger(__name__)
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _parse_date(date_str):
-    if not date_str:
-        return None
-    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
-        try:
-            return datetime.strptime(str(date_str).strip(), fmt)
-        except ValueError:
-            continue
-    return None
-
-
-def _get_data_obj(f):
-    d = _parse_date(f.data_compra)
-    if d:
-        return d
-    if f.data_upload:
-        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(
-            f.data_upload.date(), datetime.min.time()
-        )
-    return None
-
-
-def _build_context(user_id: int) -> dict:
-    """Recolhe todos os dados financeiros do utilizador para contexto do LLM."""
-    hoje = datetime.utcnow()
-    mes_atual = hoje.month
-    ano_atual = hoje.year
-    dia_atual = hoje.day
-
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
-    metas = Meta.query.filter_by(user_id=user_id).all()
-    user = User.query.get(user_id)
-
-    gastos_mes = defaultdict(float)
-    gastos_mes_anterior = defaultdict(float)
-    total_mes = 0.0
-    total_mes_anterior = 0.0
-    faturas_mes = []
-    historico_mensal = defaultdict(float)
-
-    for f in faturas:
-        data = _get_data_obj(f)
-        if not data:
-            continue
-        valor = f.total or 0
-        cat = (f.categoria or 'outros').lower()
-
-        if data.month == mes_atual and data.year == ano_atual:
-            gastos_mes[cat] += valor
-            total_mes += valor
-            faturas_mes.append({
-                'loja': f.loja or f.nome_ficheiro or 'Desconhecida',
-                'categoria': cat,
-                'valor': round(valor, 2),
-                'data': data.strftime('%d/%m/%Y'),
-            })
-
-        mes_ant = mes_atual - 1 if mes_atual > 1 else 12
-        ano_ant = ano_atual if mes_atual > 1 else ano_atual - 1
-        if data.month == mes_ant and data.year == ano_ant:
-            gastos_mes_anterior[cat] += valor
-            total_mes_anterior += valor
-
-        chave = f"{data.year}-{data.month:02d}"
-        historico_mensal[chave] += valor
-
-    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:6]
-
-    metas_info = []
-    for m in metas:
-        cat_lower = (m.categoria or '').lower()
-        gasto = gastos_mes.get(cat_lower, 0)
-        pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
-        metas_info.append({
-            'categoria': m.categoria,
-            'limite': round(m.valor_limite, 2),
-            'gasto': round(gasto, 2),
-            'pct': round(pct, 1),
-            'ultrapassou': gasto > m.valor_limite,
-        })
-
-    variacao_pct = None
-    if total_mes_anterior > 0:
-        variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
-
-    dias_no_mes = 31
-    previsao_mensal = None
-    if dia_atual > 0 and total_mes > 0:
-        taxa_diaria = total_mes / dia_atual
-        previsao_mensal = round(taxa_diaria * dias_no_mes, 2)
-
-    lojas_por_mes = defaultdict(set)
-    for f in faturas:
-        data = _get_data_obj(f)
-        if not data or not f.loja:
-            continue
-        chave_mes = f"{data.year}-{data.month:02d}"
-        lojas_por_mes[f.loja.lower()].add(chave_mes)
-
-    subscricoes_detetadas = []
-    for loja, meses in lojas_por_mes.items():
-        if len(meses) >= 2:
-            valores = [f.total or 0 for f in faturas if f.loja and f.loja.lower() == loja]
-            valor_medio = sum(valores) / len(valores) if valores else 0
-            if valor_medio > 0:
-                subscricoes_detetadas.append({
-                    'nome': loja.title(),
-                    'valor_mensal': round(valor_medio, 2),
-                    'meses_detetados': len(meses),
-                })
-
-    subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
-    total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
-
-    meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-    historico_lista = []
-    for i in range(5, -1, -1):
-        mes = mes_atual - i
-        ano = ano_atual
-        if mes <= 0:
-            mes += 12
-            ano -= 1
-        chave = f"{ano}-{mes:02d}"
-        historico_lista.append({
-            'mes': meses_pt[mes - 1],
-            'valor': round(historico_mensal.get(chave, 0), 2),
-        })
-
-    rendimento = getattr(user, 'rendimento_mensal', None) or 0
-    orcamento = getattr(user, 'orcamento_mensal', None) or 0
-    nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
-    objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
-    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
-
-    regra_5030_20 = None
-    if rendimento > 0:
-        necessidades_ideal = rendimento * 0.50
-        desejos_ideal = rendimento * 0.30
-        poupanca_ideal = rendimento * 0.20
-        regra_5030_20 = {
-            'necessidades_ideal': round(necessidades_ideal, 2),
-            'desejos_ideal': round(desejos_ideal, 2),
-            'poupanca_ideal': round(poupanca_ideal, 2),
-            'gasto_atual': round(total_mes, 2),
-            'pct_rendimento': round((total_mes / rendimento) * 100, 1),
-        }
-
-    risco_concentracao = None
-    if top_cats and total_mes > 0:
-        top_cat_nome, top_cat_val = top_cats[0]
-        top_cat_pct = round((top_cat_val / total_mes) * 100, 1)
-        if top_cat_pct > 40:
-            risco_concentracao = {
-                'categoria': top_cat_nome,
-                'pct': top_cat_pct,
-                'valor': round(top_cat_val, 2),
-            }
-
-    itens_por_categoria = {}
-    for fatura in faturas_mes:
-        cat = fatura['categoria']
-        if cat not in itens_por_categoria:
-            itens_por_categoria[cat] = []
-        itens_por_categoria[cat].append({
-            'loja': fatura['loja'],
-            'valor': fatura['valor'],
-            'data': fatura['data'],
-        })
-    for cat in itens_por_categoria:
-        itens_por_categoria[cat].sort(key=lambda x: x['valor'], reverse=True)
-
-    return {
-        'nome': nome.split()[0] if nome else 'utilizador',
-        'personalidade': personalidade,
-        'objetivo': objetivo,
-        'rendimento_mensal': round(rendimento, 2),
-        'orcamento_mensal': round(orcamento, 2),
-        'total_gasto_mes': round(total_mes, 2),
-        'total_gasto_mes_anterior': round(total_mes_anterior, 2),
-        'variacao_pct': variacao_pct,
-        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
-        'metas': metas_info,
-        'num_faturas_mes': len(faturas_mes),
-        'faturas_recentes': faturas_mes[-5:],
-        'previsao_mensal': previsao_mensal,
-        'subscricoes_detetadas': subscricoes_detetadas,
-        'total_subscricoes': round(total_subscricoes, 2),
-        'historico_mensal': historico_lista,
-        'dia_atual': dia_atual,
-        'regra_5030_20': regra_5030_20,
-        'risco_concentracao': risco_concentracao,
-        'itens_por_categoria': itens_por_categoria,
-    }
-
-
-def _gerar_insights_llm(ctx: dict, personalidade: str = None) -> list:
-    """Chama o LLM para gerar insights personalizados com princípios financeiros reais."""
-    if personalidade is None:
-        personalidade = ctx.get('personalidade', 'calm')
-
-    SYSTEM_PROMPTS = {
-        'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
-Analisa os dados financeiros e dá insights cortantes mas verdadeiros.
-Cita estudos e princípios financeiros reais (regra 50/30/20, Latte Factor, Lei de Parkinson, etc.)
-quando relevante para fundamentar as tuas observações.""",
-
-        'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
-Analisa os dados com ironia inteligente mas construtiva.
-Usa referências a estudos financeiros reais com um toque irónico.""",
-
-        'calm': """És a Verly, uma coach financeira certificada, empática e construtiva.
-Analisa os dados financeiros com tom equilibrado.
-Cita princípios financeiros reconhecidos (Warren Buffett, regra 50/30/20, Latte Factor, etc.)
-de forma natural quando adicionam valor ao conselho.""",
-
-        'pro': """És a Verly, um CFO pessoal analítico e rigoroso.
-Analisa os dados com linguagem de negócio e rigor técnico.
-Cita estudos académicos e frameworks financeiros reconhecidos (CFPB, Fed Reserve, etc.).""",
-    }
-
-    system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
-
-    metas_txt = ''
-    if ctx['metas']:
-        linhas = []
-        for m in ctx['metas']:
-            status = 'ULTRAPASSOU' if m['ultrapassou'] else f"{m['pct']}% usado"
-            linhas.append(f"  - {m['categoria']}: limite {m['limite']}€, gasto {m['gasto']}€ ({status})")
-        metas_txt = '\nMetas:\n' + '\n'.join(linhas)
-
-    variacao_txt = ''
-    if ctx['variacao_pct'] is not None:
-        sinal = '+' if ctx['variacao_pct'] > 0 else ''
-        variacao_txt = f"\nVariação vs mês anterior: {sinal}{ctx['variacao_pct']}%"
-
-    rendimento_txt = ''
-    regra_txt = ''
-    if ctx['rendimento_mensal'] > 0:
-        pct_rendimento = round((ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100, 1)
-        rendimento_txt = f"\nRendimento mensal: {ctx['rendimento_mensal']}€ (gastou {pct_rendimento}% do rendimento)"
-        if ctx['regra_5030_20']:
-            r = ctx['regra_5030_20']
-            regra_txt = (
-                f"\nRegra 50/30/20 aplicada ao rendimento de {ctx['rendimento_mensal']}€:"
-                f"\n  - Necessidades (50%): ideal {r['necessidades_ideal']}€/mês"
-                f"\n  - Desejos (30%): ideal {r['desejos_ideal']}€/mês"
-                f"\n  - Poupança (20%): ideal {r['poupanca_ideal']}€/mês"
-                f"\n  - Gasto atual: {r['gasto_atual']}€ = {r['pct_rendimento']}% do rendimento"
-            )
-
-    orcamento_txt = ''
-    if ctx['orcamento_mensal'] > 0:
-        pct_orc = round((ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100, 1)
-        orcamento_txt = f"\nOrçamento mensal definido: {ctx['orcamento_mensal']}€ ({pct_orc}% usado)"
-
-    previsao_txt = ''
-    if ctx['previsao_mensal']:
-        previsao_txt = f"\nPrevisão de gasto até fim do mês: {ctx['previsao_mensal']}€ (baseado nos primeiros {ctx['dia_atual']} dias)"
-
-    subscricoes_txt = ''
-    if ctx['subscricoes_detetadas']:
-        custo_anual = ctx['total_subscricoes'] * 12
-        linhas = [f"  - {s['nome']}: ~{s['valor_mensal']}€/mês" for s in ctx['subscricoes_detetadas']]
-        subscricoes_txt = (
-            f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano):\n"
-            + '\n'.join(linhas)
-        )
-
-    concentracao_txt = ''
-    if ctx['risco_concentracao']:
-        r = ctx['risco_concentracao']
-        concentracao_txt = f"\nALERTA: {r['pct']}% dos gastos concentrados em '{r['categoria']}' ({r['valor']}€)"
-
-    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
-
-    user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
-
-Total gasto: {ctx['total_gasto_mes']}€
-Número de faturas: {ctx['num_faturas_mes']}
-Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}{regra_txt}
-
-Top categorias de gasto:
-{top_cats_txt}{metas_txt}{subscricoes_txt}{concentracao_txt}
-
-Gera exatamente 5 insights personalizados e muito relevantes com base nestes dados reais.
-Tipos: alerta, tendencia, positivo, dica, previsao.
-
-Regras IMPORTANTES:
-- Usa os valores reais dos dados (não inventes números)
-- Sé específico — menciona categorias, valores, percentagens reais
-- Para pelo menos 2 dos 5 insights, menciona um princípio financeiro real de forma natural
-  (exemplos: regra 50/30/20 de Elizabeth Warren, Latte Factor de David Bach, Lei de Parkinson,
-  fundo de emergência de 3-6 meses, efeito do juro composto, etc.)
-- Se houver subscrições, calcula o impacto anual e comenta
-- Se houver previsão de ultrapassar o orçamento, cria um insight de "alerta" específico
-- Adapta o tom à personalidade: {personalidade}
-- Se o gasto total for baixo/controlado, cria pelo menos 1 insight "positivo" genuíno
-- Máximo 2-3 frases por insight, linguagem natural, não robótica
-
-Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
-[
-  {{
-    "tipo": "alerta|tendencia|positivo|dica|previsao",
-    "texto": "frase do insight (2-3 frases, tom adaptado, pode citar princípio financeiro)",
-    "valor": null ou número relevante
-  }},
-  ...
-]"""
-
-    try:
-        import os
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[
-                {'role': 'system', 'content': system},
-                {'role': 'user',   'content': user_prompt},
-            ],
-            max_tokens=1000,
-            temperature=0.72,
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r'```json|```', '', raw).strip()
-        insights = json.loads(raw)
-        if isinstance(insights, list):
-            return insights[:6]
-        return []
-    except Exception as e:
-        logger.error(f'Erro ao gerar insights LLM: {e}')
-        insights = []
-        if ctx['total_gasto_mes'] > 0:
-            insights.append({
-                'tipo': 'dica',
-                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras. "
-                         f"A regra 50/30/20 sugere destinar 20% do rendimento a poupança.",
-                'valor': ctx['total_gasto_mes'],
-            })
-        if ctx['orcamento_mensal'] > 0 and ctx['total_gasto_mes'] > ctx['orcamento_mensal']:
-            excesso = ctx['total_gasto_mes'] - ctx['orcamento_mensal']
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€ em {excesso:.2f}€. "
-                         f"A Lei de Parkinson diz que os gastos tendem a expandir para o rendimento disponível — um orçamento mais rígido pode ajudar.",
-                'valor': excesso,
-            })
-        if ctx['previsao_mensal']:
-            insights.append({
-                'tipo': 'previsao',
-                'texto': f"Ao ritmo atual, vais gastar cerca de {ctx['previsao_mensal']}€ este mês.",
-                'valor': ctx['previsao_mensal'],
-            })
-        if ctx['total_subscricoes'] > 0:
-            custo_anual = ctx['total_subscricoes'] * 12
-            insights.append({
-                'tipo': 'alerta',
-                'texto': f"As tuas subscrições custam {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano. "
-                         f"O Latte Factor de David Bach mostra como pequenos gastos recorrentes têm grande impacto a longo prazo.",
-                'valor': ctx['total_subscricoes'],
-            })
-        if ctx['variacao_pct'] is not None and ctx['variacao_pct'] < 0:
-            insights.append({
-                'tipo': 'positivo',
-                'texto': f"Gastaste {abs(ctx['variacao_pct'])}% menos que o mês anterior. Excelente progresso!",
-                'valor': None,
-            })
-        return insights[:5]
-
-
-# Alias para as tasks Celery
-_gerar_insights_com_llm = _gerar_insights_llm
-
-
-# ── GET /api/v1/insights ──────────────────────────────────────────────────────
-
-@api_bp.route('/insights', methods=['GET'])
-@jwt_required()
-def get_insights():
-    """
-    Gera insights personalizados com IA.
-    - Se existir cache Redis: serve imediatamente (200)
-    - Se não existir: dispara task Celery em background e retorna 202
-    - O cliente deve fazer retry em 10s
-    """
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
-
-    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
-
-    cache_key = f'insights:{user_id}'
-    cached = cache.get(cache_key)
-    if cached:
-        return jsonify(cached)
-
-    # Cache miss — disparar task Celery em background
-    try:
-        from app.tasks.ai_insights import gerar_insights_task
-        gerar_insights_task.delay(user_id)
-        return jsonify({
-            'success': False,
-            'status': 'a_calcular',
-            'message': 'Os insights estão a ser calculados. Tenta novamente em 10 segundos.',
-            'retry_in': 10,
-        }), 202
-    except Exception:
-        pass
-
-    # Fallback síncrono se Celery não estiver disponível
-    ctx = _build_context(user_id)
-    insights = _gerar_insights_llm(ctx, personalidade)
-
-    result = {
-        'success': True,
-        'insights': insights,
-        'resumo': {
-            'total_gasto':         ctx['total_gasto_mes'],
-            'num_faturas':         ctx['num_faturas_mes'],
-            'variacao_pct':        ctx['variacao_pct'],
-            'variacao_subiu':      (ctx['variacao_pct'] or 0) > 0,
-            'orcamento_mensal':    ctx['orcamento_mensal'],
-            'rendimento_mensal':   ctx['rendimento_mensal'],
-            'pct_orcamento':       round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
-                                   if ctx['orcamento_mensal'] > 0 else None,
-            'pct_rendimento':      round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
-                                   if ctx['rendimento_mensal'] > 0 else None,
-            'top_categorias':      ctx['top_categorias'],
-            'metas':               ctx['metas'],
-            'previsao_mensal':     ctx['previsao_mensal'],
-            'subscricoes':         ctx['subscricoes_detetadas'],
-            'total_subscricoes':   ctx['total_subscricoes'],
-            'historico_mensal':    ctx['historico_mensal'],
-            'regra_5030_20':       ctx['regra_5030_20'],
-            'itens_por_categoria': ctx['itens_por_categoria'],
-        },
-        'personalidade': personalidade,
-        'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
-    }
-    return jsonify(result)
-
-
-# ── GET /api/v1/poupanca ──────────────────────────────────────────────────────
-
-@api_bp.route('/poupanca', methods=['GET'])
-@jwt_required()
-def get_poupanca():
-    """
-    Gera um plano de poupança personalizado e concreto com base nos dados reais.
-    """
-    user_id = int(get_jwt_identity())
-    user = User.query.get(user_id)
-    if not user:
-        return jsonify({'success': False, 'error': 'Utilizador não encontrado.'}), 404
-
-    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
-    ctx = _build_context(user_id)
-
-    if ctx['total_gasto_mes'] == 0 and ctx['num_faturas_mes'] == 0:
-        return jsonify({
-            'success': True,
-            'sem_dados': True,
-            'poupanca_possivel': None,
-            'sugestao': None,
-            'breakdown': [],
-        })
-
-    orcamento    = ctx['orcamento_mensal']
-    rendimento   = ctx['rendimento_mensal']
-    gasto_atual  = ctx['total_gasto_mes']
-    subscricoes  = ctx['total_subscricoes']
-    previsao     = ctx['previsao_mensal'] or gasto_atual
-    top_cats     = ctx['top_categorias']
-
-    if orcamento > 0:
-        poupanca_possivel = max(0, orcamento - previsao)
-    elif rendimento > 0:
-        poupanca_possivel = max(0, rendimento * 0.20)
-    else:
-        poupanca_possivel = None
-
-    categorias_cortaveis = {'lazer', 'restaurantes', 'vestuário', 'takeaway',
-                             'entretenimento', 'outros', 'compras'}
-    breakdown = []
-    for cat_item in top_cats[:4]:
-        cat   = cat_item['categoria']
-        valor = cat_item['valor']
-        pct_corte = 0.20 if cat.lower() in categorias_cortaveis else 0.10
-        economia = round(valor * pct_corte, 2)
-        if economia > 0:
-            breakdown.append({
-                'categoria': cat,
-                'gasto_atual': round(valor, 2),
-                'corte_sugerido_pct': int(pct_corte * 100),
-                'economia_mensal': economia,
-                'economia_anual': round(economia * 12, 2),
-            })
-
-    top_cats_txt  = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
-    historico_txt = ', '.join([f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']])
-
-    subscricoes_txt = ''
-    if ctx['subscricoes_detetadas']:
-        subs = ', '.join([f"{s['nome']} ({s['valor_mensal']}€/mês)" for s in ctx['subscricoes_detetadas']])
-        subscricoes_txt = f"\nSubscrições recorrentes detetadas: {subs} = {subscricoes}€/mês = {subscricoes*12:.0f}€/ano"
-
-    metas_txt = ''
-    if ctx['metas']:
-        metas_ultrapassadas = [m for m in ctx['metas'] if m['ultrapassou']]
-        if metas_ultrapassadas:
-            metas_txt = '\nMetas ultrapassadas: ' + ', '.join([
-                f"{m['categoria']} ({m['gasto']}€/{m['limite']}€)" for m in metas_ultrapassadas
-            ])
-
-    regra_txt = ''
-    if ctx['regra_5030_20']:
-        r = ctx['regra_5030_20']
-        regra_txt = (
-            f"\nRegra 50/30/20 aplicada (rendimento {rendimento}€):"
-            f" necessidades ideal {r['necessidades_ideal']}€,"
-            f" desejos ideal {r['desejos_ideal']}€,"
-            f" poupança ideal {r['poupanca_ideal']}€."
-            f" Atualmente a gastar {r['pct_rendimento']}% do rendimento."
-        )
-
-    PERSONALITY_TONE = {
-        'savage':    'Tom direto e cortante. Diz exatamente onde o dinheiro está a ser desperdiçado.',
-        'sarcastic': 'Tom irónico mas construtivo. Usa ironia inteligente sobre os padrões de gasto.',
-        'calm':      'Tom empático e motivador. Foca no progresso possível.',
-        'pro':       'Tom analítico e rigoroso. Usa linguagem financeira precisa.',
-    }
-    tone = PERSONALITY_TONE.get(personalidade, PERSONALITY_TONE['calm'])
-
-    prompt = f"""És a Verly, uma IA financeira pessoal com acesso aos dados reais do utilizador.
-
-DADOS REAIS DO UTILIZADOR:
-- Gasto este mês: {gasto_atual}€ em {ctx['num_faturas_mes']} faturas
-- Previsão fim do mês: {previsao}€
-- Orçamento definido: {orcamento}€ {'(ULTRAPASSADO)' if orcamento > 0 and previsao > orcamento else ''}
-- Rendimento mensal: {rendimento}€
-- Histórico últimos 6 meses: {historico_txt}
-{regra_txt}
-
-Top categorias de gasto este mês:
-{top_cats_txt}{subscricoes_txt}{metas_txt}
-
-{'Variação vs mês anterior: ' + ('+' if (ctx['variacao_pct'] or 0) > 0 else '') + str(ctx['variacao_pct']) + '%' if ctx['variacao_pct'] is not None else ''}
-
-TAREFA: Cria um plano de poupança CONCRETO e ACIONÁVEL para este utilizador.
-- Usa os dados reais (não inventes valores)
-- Identifica os 2-3 maiores desperdícios com valores específicos
-- Dá uma sugestão principal clara e acionável
-- Menciona o impacto anual se cortar nessas categorias
-- Se tiver subscrições, calcula o impacto de cancelar as menos usadas
-- Cita 1 princípio financeiro real se fizer sentido (regra 50/30/20, Latte Factor, etc.)
-- {tone}
-- Máximo 3-4 frases. Direto ao ponto. Português de Portugal.
-
-Responde APENAS com JSON válido:
-{{
-  "sugestao": "texto principal da sugestão (3-4 frases, concreto, com valores reais)",
-  "poupanca_estimada_mensal": número (quanto pode poupar por mês realisticamente),
-  "poupanca_estimada_anual": número (impacto anual),
-  "foco_principal": "nome da categoria onde deve cortar mais"
-}}"""
-
-    try:
-        import os
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
-        response = client.chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[{'role': 'user', 'content': prompt}],
-            max_tokens=400,
-            temperature=0.65,
-        )
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r'```json|```', '', raw).strip()
-        resultado = json.loads(raw)
-    except Exception as e:
-        logger.error(f'Erro poupanca LLM: {e}')
-        foco = top_cats[0]['categoria'] if top_cats else 'geral'
-        economia_mensal = round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0
-        resultado = {
-            'sugestao': (
-                f"Com base nos teus padrões, podes poupar cortando 20% em {foco} "
-                f"({economia_mensal}€/mês). "
-                f"{'As tuas subscrições custam ' + str(subscricoes) + '€/mês = ' + str(round(subscricoes*12)) + '€/ano — vale a pena rever.' if subscricoes > 0 else ''}"
-            ).strip(),
-            'poupanca_estimada_mensal': economia_mensal,
-            'poupanca_estimada_anual': round(economia_mensal * 12, 2),
-            'foco_principal': foco,
-        }
-
-    return jsonify({
-        'success': True,
-        'sem_dados': False,
-        'poupanca_possivel': poupanca_possivel,
-        'sugestao': resultado.get('sugestao'),
-        'poupanca_estimada_mensal': resultado.get('poupanca_estimada_mensal'),
-        'poupanca_estimada_anual': resultado.get('poupanca_estimada_anual'),
-        'foco_principal': resultado.get('foco_principal'),
-        'breakdown': breakdown,
-        'contexto': {
-            'gasto_atual': gasto_atual,
-            'previsao': previsao,
-            'orcamento': orcamento,
-            'rendimento': rendimento,
-            'total_subscricoes': subscricoes,
-        },
-    })
-</file>
-
 <file path="app/auth.py">
 """
 auth.py — Autenticação com rate limiting e segurança reforçada
@@ -24127,8 +23459,290 @@ def dashboard():
     )
 </file>
 
-<file path="Procfile">
-web: python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+<file path="README.md">
+# Verly 💜
+
+**O teu guardião financeiro inteligente.**
+
+Verly é uma aplicação móvel + web que ajuda utilizadores portugueses a gerir as suas despesas, detetar desperdício financeiro e tomar decisões de compra mais inteligentes — com a personalidade irreverente de uma IA que conhece os teus hábitos melhor do que tu.
+
+---
+
+## ✨ Funcionalidades
+
+### 📱 App Mobile (React Native / Expo)
+- **Dashboard** — visão geral do mês: gastos, faturas, alertas e tendência vs. mês anterior
+- **Faturas** — upload via câmara, galeria ou PDF; extração automática por OCR + IA em background
+- **Ask Verly** — chat com IA contextualizado com os teus dados financeiros pessoais
+- **Insights** — análise inteligente com cache Redis; gerados em background via Celery com fallback síncrono
+- **Poupança** — plano de poupança personalizado com breakdown por categoria
+- **Perfil** — personalidade da IA (Savage / Sarcástico / Calmo / Pro), avatar, configurações
+
+### 🗂️ Menu Lateral
+- **Metas** — define limites de gasto por categoria e acompanha o progresso em tempo real
+- **Amigos** — partilha e compara hábitos financeiros com amigos
+- **Playlists de compras** — listas colaborativas de produtos
+- **Estatísticas** — gráficos detalhados de consumo por categoria e histórico mensal
+- **Relatório** — relatório mensal com estimativa de desperdício e análise de tendências
+- **Histórico** — todas as faturas ordenadas por data com filtros
+- **Score de compra** — analisa se uma compra vale a pena antes de a fazer
+- **Subscrições** — deteta serviços recorrentes automaticamente e alerta para os que não usas
+- **Garantias** — alertas de garantias e prazos de devolução
+- **Notificações** — push notifications via FCM
+- **Gmail** — importação automática de faturas por email
+
+### 🌐 Web (Flask + Jinja2)
+- Interface completa de gestão de faturas e relatórios
+- Exportação PDF de relatórios mensais
+- Sistema de personalidade da IA
+- Módulo Impulse Control — análise custo-benefício antes de comprar
+- Dashboard com gráficos e métricas financeiras
+
+---
+
+## 🛠️ Stack Tecnológico
+
+### Mobile
+| Camada | Tecnologia |
+|---|---|
+| Framework | React Native 0.81 + Expo 54 |
+| Linguagem | JavaScript (ES2022) |
+| Navegação | React Navigation 6 (Stack + Bottom Tabs + Drawer) |
+| Animações | React Native Reanimated 4 + Moti |
+| Ícones | Lucide React Native + SVG customizados |
+| SVG | react-native-svg 15 |
+| Storage local | AsyncStorage |
+| Autenticação | Firebase Auth (email, Google, Apple) |
+| Compras in-app | RevenueCat |
+| Push Notifications | Firebase Cloud Messaging (FCM) |
+| Câmara / Galeria | expo-image-picker |
+| Ficheiros | expo-document-picker |
+| HTTP | fetch nativo (via `src/services/api.js`) |
+
+### Backend
+| Camada | Tecnologia |
+|---|---|
+| Linguagem | Python 3.13 |
+| Framework | Flask 3.1 + Flask-Login + SQLAlchemy 2.0 |
+| Base de dados | PostgreSQL (produção) / SQLite (desenvolvimento) |
+| Cache | Redis + Flask-Caching (dashboard 5min, insights 15min) |
+| Tasks em background | Celery 5.4 + Redis broker (OCR, insights IA, emails, indexação) |
+| Rate limiting | Flask-Limiter + Redis (multi-worker safe) |
+| IA / LLM | Meta Llama 3.3 70B via Groq API |
+| Orquestração IA | LlamaIndex 0.14 |
+| Vector Search | Qdrant (RAG por utilizador) |
+| Embeddings | HuggingFace BGE Small + sentence-transformers |
+| OCR / Extração | LlamaIndex + Groq multimodal |
+| Storage ficheiros | Cloudflare R2 (S3-compatible) |
+| Autenticação API | JWT (access 15min + refresh 30 dias) com blacklist Redis |
+| Email | Resend API |
+| Exportação PDF | ReportLab |
+| Deploy | Railway (Flask + Celery worker separados) |
+
+### Frontend Web
+| Camada | Tecnologia |
+|---|---|
+| Templates | Jinja2 |
+| CSS | CSS puro com variáveis (dark mode) |
+| Tipografia | Sora + Inter |
+
+---
+
+## 📁 Estrutura do Projeto
+
+```
+verly/
+├── app/                        # Backend Flask
+│   ├── api/                    # Endpoints REST para mobile (JWT)
+│   │   ├── __init__.py         # Blueprint da API
+│   │   ├── auth.py             # Login, registo, Firebase, refresh tokens
+│   │   ├── chat.py             # Chat IA contextualizado
+│   │   ├── dashboard.py        # Dados do dashboard (cache Redis)
+│   │   ├── faturas.py          # Upload R2 + OCR async via Celery
+│   │   ├── insights.py         # Insights IA (cache + Celery dispatch)
+│   │   ├── metas.py            # Metas financeiras
+│   │   ├── mobile_extras.py    # Score, impulse, relatório, lojas
+│   │   ├── subscricoes.py      # Subscrições + RevenueCat
+│   │   ├── amizades.py         # Sistema social
+│   │   ├── playlists.py        # Playlists colaborativas
+│   │   ├── gmail.py            # Importação Gmail
+│   │   └── push_notifications.py # FCM push notifications
+│   ├── tasks/                  # Tasks Celery em background
+│   │   ├── ocr.py              # Processamento OCR assíncrono
+│   │   ├── ai_insights.py      # Geração de insights IA
+│   │   ├── emails.py           # Envio de emails via Resend
+│   │   └── qdrant_task.py      # Indexação vectorial no Qdrant
+│   ├── models.py               # Modelos SQLAlchemy (User, Fatura, Meta, etc.)
+│   ├── extensions.py           # Cache, Limiter, Redis client, R2 client
+│   ├── celery_app.py           # Factory Celery com contexto Flask
+│   ├── r2_service.py           # Upload/download/signed URLs Cloudflare R2
+│   ├── qdrant_service.py       # Integração LlamaIndex + Qdrant (RAG)
+│   ├── ai.py                   # Integração LlamaIndex + Groq
+│   ├── email_service.py        # Serviço de email
+│   └── ...                     # Outros módulos (scoring, impulse, etc.)
+│
+├── verly-mobile/               # App React Native / Expo
+│   ├── src/
+│   │   ├── screens/            # Ecrãs da app
+│   │   │   ├── DashboardScreen.js
+│   │   │   ├── ChatScreen.js
+│   │   │   ├── InsightsScreen.js
+│   │   │   ├── FaturasScreen.js
+│   │   │   ├── PerfilScreen.js
+│   │   │   ├── MetasScreen.js
+│   │   │   ├── ScoreScreen.js
+│   │   │   ├── GarantiasScreen.js
+│   │   │   ├── GmailScreen.js
+│   │   │   └── ...
+│   │   ├── navigation/
+│   │   │   └── AppNavigator.js # Stack + Tabs + Drawer
+│   │   ├── services/
+│   │   │   └── api.js          # Comunicação com backend Flask
+│   │   ├── context/
+│   │   │   ├── AuthContext.js  # JWT + refresh tokens
+│   │   │   └── RevenueCatContext.js
+│   │   ├── components/
+│   │   │   ├── UI.js           # Componentes reutilizáveis
+│   │   │   ├── DonutCategorias.js
+│   │   │   └── DraggableDashboard.js
+│   │   └── constants/
+│   │       └── theme.js        # COLORS, FONT, SPACE, RADIUS
+│   └── android/                # Build nativo Android
+│
+├── templates/                  # Templates Jinja2 (web)
+├── static/                     # CSS e assets estáticos
+├── dados_utilizadores/         # Ficheiros por utilizador (PDFs, imagens)
+├── config.py                   # Configuração por ambiente
+├── run.py                      # Entry point Flask + Celery
+└── requirements.txt
+```
+
+---
+
+## 🚀 Instalação e Setup
+
+### Backend
+
+```bash
+git clone https://github.com/your-username/verly.git
+cd verly
+
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Cria um ficheiro `.env` na raiz:
+
+```env
+# Core
+FLASK_ENV=development
+SECRET_KEY=your_secret_key
+JWT_SECRET_KEY=your_jwt_secret
+
+# Base de dados
+DATABASE_URL=sqlite:///shopping_police.db  # ou postgresql://...
+
+# IA
+GROQ_API_KEY=your_groq_api_key
+
+# Redis (obrigatório para cache, rate limiting e Celery)
+REDIS_URL=redis://localhost:6379/0
+
+# Qdrant (vector search)
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+QDRANT_COLLECTION=verly_docs
+
+# Cloudflare R2 (opcional — sem isto os uploads ficam locais)
+R2_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=verly-docs
+
+# Email
+RESEND_API_KEY=your_resend_key
+EMAIL_FROM=Verly <alertas@verly.app>
+
+# Google OAuth
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# RevenueCat
+REVENUECAT_SECRET_KEY=
+```
+
+Inicia o Redis e o Qdrant (requer Docker):
+
+```bash
+docker run -d -p 6379:6379 redis:7-alpine
+docker run -d -p 6333:6333 qdrant/qdrant
+```
+
+Inicia o servidor Flask:
+
+```bash
+python run.py
+```
+
+Inicia o Celery worker (noutra janela):
+
+```bash
+celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails -c 2
+```
+
+### Mobile
+
+```bash
+cd verly-mobile
+npm install
+```
+
+Em `src/services/api.js`, atualiza o URL base:
+
+```js
+const BASE_URL = 'http://192.168.1.X:5000/api/v1';  // desenvolvimento local
+// ou
+const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';  // produção
+```
+
+Inicia a app:
+
+```bash
+npx expo start
+```
+
+---
+
+## 🚢 Deploy (Railway)
+
+O projeto usa dois serviços no Railway:
+
+| Serviço | Start Command |
+|---|---|
+| Verly-app (Flask) | `python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120` |
+| Celery worker | `celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails -c 2` |
+
+Serviços de infraestrutura no Railway: **PostgreSQL**, **Redis**, **Qdrant**.
+
+---
+
+## 🎨 Design System
+
+A app usa um sistema de design consistente definido em `src/constants/theme.js`:
+
+- **Cor primária:** `#7C6FE0` (roxo Verly)
+- **Background:** `#080810` (dark profundo)
+- **Surface:** `#0F0F1A` / `#161624`
+- **Tipografia:** FONT.xs / sm / md / lg / xl / h1
+- **Espaçamento:** SPACE.sm / md / lg
+- **Raios:** RADIUS.sm / md / lg
+
+---
+
+## 📄 Licença
+
+Projeto privado — todos os direitos reservados.
 </file>
 
 <file path="static/css/style.css">
@@ -25888,6 +25502,643 @@ const s = StyleSheet.create({
   link:     { alignItems: 'center', marginTop: 18 },
   linkText: { color: C.textMid, fontSize: FONT.sm },
 });
+</file>
+
+<file path="app/api/insights.py">
+"""
+app/api/insights.py — Insights da Verly com IA real + princípios financeiros
+
+GET /api/v1/insights
+GET /api/v1/poupanca
+"""
+
+import json
+import re
+import logging
+from collections import defaultdict
+from datetime import datetime
+from flask import jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.api import api_bp
+from app.models import Fatura, User, Meta
+from app.extensions import cache
+
+logger = logging.getLogger(__name__)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ['%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y']:
+        try:
+            return datetime.strptime(str(date_str).strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _get_data_obj(f):
+    d = _parse_date(f.data_compra)
+    if d:
+        return d
+    if f.data_upload:
+        return f.data_upload if not hasattr(f.data_upload, 'date') else datetime.combine(
+            f.data_upload.date(), datetime.min.time()
+        )
+    return None
+
+
+def _build_context(user_id: int) -> dict:
+    """Recolhe todos os dados financeiros do utilizador para contexto do LLM."""
+    hoje = datetime.utcnow()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+    dia_atual = hoje.day
+
+    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    metas = Meta.query.filter_by(user_id=user_id).all()
+    user = User.query.get(user_id)
+
+    gastos_mes = defaultdict(float)
+    gastos_mes_anterior = defaultdict(float)
+    total_mes = 0.0
+    total_mes_anterior = 0.0
+    faturas_mes = []
+    historico_mensal = defaultdict(float)
+
+    for f in faturas:
+        data = _get_data_obj(f)
+        if not data:
+            continue
+        valor = f.total or 0
+        cat = (f.categoria or 'outros').lower()
+
+        if data.month == mes_atual and data.year == ano_atual:
+            gastos_mes[cat] += valor
+            total_mes += valor
+            faturas_mes.append({
+                'loja': f.loja or f.nome_ficheiro or 'Desconhecida',
+                'categoria': cat,
+                'valor': round(valor, 2),
+                'data': data.strftime('%d/%m/%Y'),
+            })
+
+        mes_ant = mes_atual - 1 if mes_atual > 1 else 12
+        ano_ant = ano_atual if mes_atual > 1 else ano_atual - 1
+        if data.month == mes_ant and data.year == ano_ant:
+            gastos_mes_anterior[cat] += valor
+            total_mes_anterior += valor
+
+        chave = f"{data.year}-{data.month:02d}"
+        historico_mensal[chave] += valor
+
+    top_cats = sorted(gastos_mes.items(), key=lambda x: x[1], reverse=True)[:6]
+
+    metas_info = []
+    for m in metas:
+        cat_lower = (m.categoria or '').lower()
+        gasto = gastos_mes.get(cat_lower, 0)
+        pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
+        metas_info.append({
+            'categoria': m.categoria,
+            'limite': round(m.valor_limite, 2),
+            'gasto': round(gasto, 2),
+            'pct': round(pct, 1),
+            'ultrapassou': gasto > m.valor_limite,
+        })
+
+    variacao_pct = None
+    if total_mes_anterior > 0:
+        variacao_pct = round(((total_mes - total_mes_anterior) / total_mes_anterior) * 100, 1)
+
+    dias_no_mes = 31
+    previsao_mensal = None
+    if dia_atual > 0 and total_mes > 0:
+        taxa_diaria = total_mes / dia_atual
+        previsao_mensal = round(taxa_diaria * dias_no_mes, 2)
+
+    lojas_por_mes = defaultdict(set)
+    for f in faturas:
+        data = _get_data_obj(f)
+        if not data or not f.loja:
+            continue
+        chave_mes = f"{data.year}-{data.month:02d}"
+        lojas_por_mes[f.loja.lower()].add(chave_mes)
+
+    subscricoes_detetadas = []
+    for loja, meses in lojas_por_mes.items():
+        if len(meses) >= 2:
+            valores = [f.total or 0 for f in faturas if f.loja and f.loja.lower() == loja]
+            valor_medio = sum(valores) / len(valores) if valores else 0
+            if valor_medio > 0:
+                subscricoes_detetadas.append({
+                    'nome': loja.title(),
+                    'valor_mensal': round(valor_medio, 2),
+                    'meses_detetados': len(meses),
+                })
+
+    subscricoes_detetadas = sorted(subscricoes_detetadas, key=lambda x: x['valor_mensal'], reverse=True)[:5]
+    total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
+
+    meses_pt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+    historico_lista = []
+    for i in range(5, -1, -1):
+        mes = mes_atual - i
+        ano = ano_atual
+        if mes <= 0:
+            mes += 12
+            ano -= 1
+        chave = f"{ano}-{mes:02d}"
+        historico_lista.append({
+            'mes': meses_pt[mes - 1],
+            'valor': round(historico_mensal.get(chave, 0), 2),
+        })
+
+    rendimento = getattr(user, 'rendimento_mensal', None) or 0
+    orcamento = getattr(user, 'orcamento_mensal', None) or 0
+    nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
+    objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    regra_5030_20 = None
+    if rendimento > 0:
+        necessidades_ideal = rendimento * 0.50
+        desejos_ideal = rendimento * 0.30
+        poupanca_ideal = rendimento * 0.20
+        regra_5030_20 = {
+            'necessidades_ideal': round(necessidades_ideal, 2),
+            'desejos_ideal': round(desejos_ideal, 2),
+            'poupanca_ideal': round(poupanca_ideal, 2),
+            'gasto_atual': round(total_mes, 2),
+            'pct_rendimento': round((total_mes / rendimento) * 100, 1),
+        }
+
+    risco_concentracao = None
+    if top_cats and total_mes > 0:
+        top_cat_nome, top_cat_val = top_cats[0]
+        top_cat_pct = round((top_cat_val / total_mes) * 100, 1)
+        if top_cat_pct > 40:
+            risco_concentracao = {
+                'categoria': top_cat_nome,
+                'pct': top_cat_pct,
+                'valor': round(top_cat_val, 2),
+            }
+
+    itens_por_categoria = {}
+    for fatura in faturas_mes:
+        cat = fatura['categoria']
+        if cat not in itens_por_categoria:
+            itens_por_categoria[cat] = []
+        itens_por_categoria[cat].append({
+            'loja': fatura['loja'],
+            'valor': fatura['valor'],
+            'data': fatura['data'],
+        })
+    for cat in itens_por_categoria:
+        itens_por_categoria[cat].sort(key=lambda x: x['valor'], reverse=True)
+
+    return {
+        'nome': nome.split()[0] if nome else 'utilizador',
+        'personalidade': personalidade,
+        'objetivo': objetivo,
+        'rendimento_mensal': round(rendimento, 2),
+        'orcamento_mensal': round(orcamento, 2),
+        'total_gasto_mes': round(total_mes, 2),
+        'total_gasto_mes_anterior': round(total_mes_anterior, 2),
+        'variacao_pct': variacao_pct,
+        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
+        'metas': metas_info,
+        'num_faturas_mes': len(faturas_mes),
+        'faturas_recentes': faturas_mes[-5:],
+        'previsao_mensal': previsao_mensal,
+        'subscricoes_detetadas': subscricoes_detetadas,
+        'total_subscricoes': round(total_subscricoes, 2),
+        'historico_mensal': historico_lista,
+        'dia_atual': dia_atual,
+        'regra_5030_20': regra_5030_20,
+        'risco_concentracao': risco_concentracao,
+        'itens_por_categoria': itens_por_categoria,
+    }
+
+
+def _gerar_insights_llm(ctx: dict, personalidade: str = None) -> list:
+    """Chama o LLM para gerar insights personalizados com princípios financeiros reais."""
+    if personalidade is None:
+        personalidade = ctx.get('personalidade', 'calm')
+
+    SYSTEM_PROMPTS = {
+        'savage': """És a Verly, uma assistente financeira BRUTAL e sem filtros.
+Analisa os dados financeiros e dá insights cortantes mas verdadeiros.
+Cita estudos e princípios financeiros reais (regra 50/30/20, Latte Factor, Lei de Parkinson, etc.)
+quando relevante para fundamentar as tuas observações.""",
+
+        'sarcastic': """És a Verly, uma assistente financeira SARCÁSTICA e irónica.
+Analisa os dados com ironia inteligente mas construtiva.
+Usa referências a estudos financeiros reais com um toque irónico.""",
+
+        'calm': """És a Verly, uma coach financeira certificada, empática e construtiva.
+Analisa os dados financeiros com tom equilibrado.
+Cita princípios financeiros reconhecidos (Warren Buffett, regra 50/30/20, Latte Factor, etc.)
+de forma natural quando adicionam valor ao conselho.""",
+
+        'pro': """És a Verly, um CFO pessoal analítico e rigoroso.
+Analisa os dados com linguagem de negócio e rigor técnico.
+Cita estudos académicos e frameworks financeiros reconhecidos (CFPB, Fed Reserve, etc.).""",
+    }
+
+    system = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
+
+    metas_txt = ''
+    if ctx['metas']:
+        linhas = []
+        for m in ctx['metas']:
+            status = 'ULTRAPASSOU' if m['ultrapassou'] else f"{m['pct']}% usado"
+            linhas.append(f"  - {m['categoria']}: limite {m['limite']}€, gasto {m['gasto']}€ ({status})")
+        metas_txt = '\nMetas:\n' + '\n'.join(linhas)
+
+    variacao_txt = ''
+    if ctx['variacao_pct'] is not None:
+        sinal = '+' if ctx['variacao_pct'] > 0 else ''
+        variacao_txt = f"\nVariação vs mês anterior: {sinal}{ctx['variacao_pct']}%"
+
+    rendimento_txt = ''
+    regra_txt = ''
+    if ctx['rendimento_mensal'] > 0:
+        pct_rendimento = round((ctx['total_gasto_mes'] / ctx['rendimento_mensal']) * 100, 1)
+        rendimento_txt = f"\nRendimento mensal: {ctx['rendimento_mensal']}€ (gastou {pct_rendimento}% do rendimento)"
+        if ctx['regra_5030_20']:
+            r = ctx['regra_5030_20']
+            regra_txt = (
+                f"\nRegra 50/30/20 aplicada ao rendimento de {ctx['rendimento_mensal']}€:"
+                f"\n  - Necessidades (50%): ideal {r['necessidades_ideal']}€/mês"
+                f"\n  - Desejos (30%): ideal {r['desejos_ideal']}€/mês"
+                f"\n  - Poupança (20%): ideal {r['poupanca_ideal']}€/mês"
+                f"\n  - Gasto atual: {r['gasto_atual']}€ = {r['pct_rendimento']}% do rendimento"
+            )
+
+    orcamento_txt = ''
+    if ctx['orcamento_mensal'] > 0:
+        pct_orc = round((ctx['total_gasto_mes'] / ctx['orcamento_mensal']) * 100, 1)
+        orcamento_txt = f"\nOrçamento mensal definido: {ctx['orcamento_mensal']}€ ({pct_orc}% usado)"
+
+    previsao_txt = ''
+    if ctx['previsao_mensal']:
+        previsao_txt = f"\nPrevisão de gasto até fim do mês: {ctx['previsao_mensal']}€ (baseado nos primeiros {ctx['dia_atual']} dias)"
+
+    subscricoes_txt = ''
+    if ctx['subscricoes_detetadas']:
+        custo_anual = ctx['total_subscricoes'] * 12
+        linhas = [f"  - {s['nome']}: ~{s['valor_mensal']}€/mês" for s in ctx['subscricoes_detetadas']]
+        subscricoes_txt = (
+            f"\nSubscrições detetadas (total: {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano):\n"
+            + '\n'.join(linhas)
+        )
+
+    concentracao_txt = ''
+    if ctx['risco_concentracao']:
+        r = ctx['risco_concentracao']
+        concentracao_txt = f"\nALERTA: {r['pct']}% dos gastos concentrados em '{r['categoria']}' ({r['valor']}€)"
+
+    top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
+
+    user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
+
+Total gasto: {ctx['total_gasto_mes']}€
+Número de faturas: {ctx['num_faturas_mes']}
+Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}{regra_txt}
+
+Top categorias de gasto:
+{top_cats_txt}{metas_txt}{subscricoes_txt}{concentracao_txt}
+
+Gera exatamente 5 insights personalizados e muito relevantes com base nestes dados reais.
+Tipos: alerta, tendencia, positivo, dica, previsao.
+
+Regras IMPORTANTES:
+- Usa os valores reais dos dados (não inventes números)
+- Sé específico — menciona categorias, valores, percentagens reais
+- Para pelo menos 2 dos 5 insights, menciona um princípio financeiro real de forma natural
+  (exemplos: regra 50/30/20 de Elizabeth Warren, Latte Factor de David Bach, Lei de Parkinson,
+  fundo de emergência de 3-6 meses, efeito do juro composto, etc.)
+- Se houver subscrições, calcula o impacto anual e comenta
+- Se houver previsão de ultrapassar o orçamento, cria um insight de "alerta" específico
+- Adapta o tom à personalidade: {personalidade}
+- Se o gasto total for baixo/controlado, cria pelo menos 1 insight "positivo" genuíno
+- Máximo 2-3 frases por insight, linguagem natural, não robótica
+
+Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
+[
+  {{
+    "tipo": "alerta|tendencia|positivo|dica|previsao",
+    "texto": "frase do insight (2-3 frases, tom adaptado, pode citar princípio financeiro)",
+    "valor": null ou número relevante
+  }},
+  ...
+]"""
+
+    try:
+        import os
+        from groq import Groq
+        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[
+                {'role': 'system', 'content': system},
+                {'role': 'user',   'content': user_prompt},
+            ],
+            max_tokens=1000,
+            temperature=0.72,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r'```json|```', '', raw).strip()
+        insights = json.loads(raw)
+        if isinstance(insights, list):
+            return insights[:6]
+        return []
+    except Exception as e:
+        logger.error(f'Erro ao gerar insights LLM: {e}')
+        insights = []
+        if ctx['total_gasto_mes'] > 0:
+            insights.append({
+                'tipo': 'dica',
+                'texto': f"Gastaste {ctx['total_gasto_mes']}€ este mês em {ctx['num_faturas_mes']} compras. "
+                         f"A regra 50/30/20 sugere destinar 20% do rendimento a poupança.",
+                'valor': ctx['total_gasto_mes'],
+            })
+        if ctx['orcamento_mensal'] > 0 and ctx['total_gasto_mes'] > ctx['orcamento_mensal']:
+            excesso = ctx['total_gasto_mes'] - ctx['orcamento_mensal']
+            insights.append({
+                'tipo': 'alerta',
+                'texto': f"Ultrapassaste o teu orçamento de {ctx['orcamento_mensal']}€ em {excesso:.2f}€. "
+                         f"A Lei de Parkinson diz que os gastos tendem a expandir para o rendimento disponível — um orçamento mais rígido pode ajudar.",
+                'valor': excesso,
+            })
+        if ctx['previsao_mensal']:
+            insights.append({
+                'tipo': 'previsao',
+                'texto': f"Ao ritmo atual, vais gastar cerca de {ctx['previsao_mensal']}€ este mês.",
+                'valor': ctx['previsao_mensal'],
+            })
+        if ctx['total_subscricoes'] > 0:
+            custo_anual = ctx['total_subscricoes'] * 12
+            insights.append({
+                'tipo': 'alerta',
+                'texto': f"As tuas subscrições custam {ctx['total_subscricoes']}€/mês = {custo_anual:.0f}€/ano. "
+                         f"O Latte Factor de David Bach mostra como pequenos gastos recorrentes têm grande impacto a longo prazo.",
+                'valor': ctx['total_subscricoes'],
+            })
+        if ctx['variacao_pct'] is not None and ctx['variacao_pct'] < 0:
+            insights.append({
+                'tipo': 'positivo',
+                'texto': f"Gastaste {abs(ctx['variacao_pct'])}% menos que o mês anterior. Excelente progresso!",
+                'valor': None,
+            })
+        return insights[:5]
+
+
+# Alias para as tasks Celery
+_gerar_insights_com_llm = _gerar_insights_llm
+
+
+# ── GET /api/v1/insights ──────────────────────────────────────────────────────
+
+@api_bp.route('/insights', methods=['GET'])
+@jwt_required()
+def get_insights():
+    """
+    Gera insights personalizados com IA.
+    - Se existir cache Redis: serve imediatamente (200)
+    - Se não existir: dispara task Celery em background e retorna 202
+    - O cliente deve fazer retry em 10s
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'message': 'Utilizador não encontrado.'}), 404
+
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    cache_key = f'insights:{user_id}'
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+
+    # Cache miss — disparar task Celery em background
+    try:
+        from app.tasks.ai_insights import gerar_insights_task
+        gerar_insights_task.delay(user_id)
+        return jsonify({
+            'success': False,
+            'status': 'a_calcular',
+            'message': 'Os insights estão a ser calculados. Tenta novamente em 10 segundos.',
+            'retry_in': 10,
+        }), 202
+    except Exception:
+        pass
+
+    # Fallback síncrono se Celery não estiver disponível
+    ctx = _build_context(user_id)
+    insights = _gerar_insights_llm(ctx, personalidade)
+
+    result = {
+        'success': True,
+        'insights': insights,
+        'resumo': {
+            'total_gasto':         ctx['total_gasto_mes'],
+            'num_faturas':         ctx['num_faturas_mes'],
+            'variacao_pct':        ctx['variacao_pct'],
+            'variacao_subiu':      (ctx['variacao_pct'] or 0) > 0,
+            'orcamento_mensal':    ctx['orcamento_mensal'],
+            'rendimento_mensal':   ctx['rendimento_mensal'],
+            'pct_orcamento':       round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
+                                   if ctx['orcamento_mensal'] > 0 else None,
+            'pct_rendimento':      round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
+                                   if ctx['rendimento_mensal'] > 0 else None,
+            'top_categorias':      ctx['top_categorias'],
+            'metas':               ctx['metas'],
+            'previsao_mensal':     ctx['previsao_mensal'],
+            'subscricoes':         ctx['subscricoes_detetadas'],
+            'total_subscricoes':   ctx['total_subscricoes'],
+            'historico_mensal':    ctx['historico_mensal'],
+            'regra_5030_20':       ctx['regra_5030_20'],
+            'itens_por_categoria': ctx['itens_por_categoria'],
+        },
+        'personalidade': personalidade,
+        'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
+    }
+    return jsonify(result)
+
+
+# ── GET /api/v1/poupanca ──────────────────────────────────────────────────────
+
+@api_bp.route('/poupanca', methods=['GET'])
+@jwt_required()
+def get_poupanca():
+    """
+    Gera um plano de poupança personalizado e concreto com base nos dados reais.
+    """
+    user_id = int(get_jwt_identity())
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'success': False, 'error': 'Utilizador não encontrado.'}), 404
+
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+    ctx = _build_context(user_id)
+
+    if ctx['total_gasto_mes'] == 0 and ctx['num_faturas_mes'] == 0:
+        return jsonify({
+            'success': True,
+            'sem_dados': True,
+            'poupanca_possivel': None,
+            'sugestao': None,
+            'breakdown': [],
+        })
+
+    orcamento    = ctx['orcamento_mensal']
+    rendimento   = ctx['rendimento_mensal']
+    gasto_atual  = ctx['total_gasto_mes']
+    subscricoes  = ctx['total_subscricoes']
+    previsao     = ctx['previsao_mensal'] or gasto_atual
+    top_cats     = ctx['top_categorias']
+
+    if orcamento > 0:
+        poupanca_possivel = max(0, orcamento - previsao)
+    elif rendimento > 0:
+        poupanca_possivel = max(0, rendimento * 0.20)
+    else:
+        poupanca_possivel = None
+
+    categorias_cortaveis = {'lazer', 'restaurantes', 'vestuário', 'takeaway',
+                             'entretenimento', 'outros', 'compras'}
+    breakdown = []
+    for cat_item in top_cats[:4]:
+        cat   = cat_item['categoria']
+        valor = cat_item['valor']
+        pct_corte = 0.20 if cat.lower() in categorias_cortaveis else 0.10
+        economia = round(valor * pct_corte, 2)
+        if economia > 0:
+            breakdown.append({
+                'categoria': cat,
+                'gasto_atual': round(valor, 2),
+                'corte_sugerido_pct': int(pct_corte * 100),
+                'economia_mensal': economia,
+                'economia_anual': round(economia * 12, 2),
+            })
+
+    top_cats_txt  = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in top_cats])
+    historico_txt = ', '.join([f"{h['mes']}: {h['valor']}€" for h in ctx['historico_mensal']])
+
+    subscricoes_txt = ''
+    if ctx['subscricoes_detetadas']:
+        subs = ', '.join([f"{s['nome']} ({s['valor_mensal']}€/mês)" for s in ctx['subscricoes_detetadas']])
+        subscricoes_txt = f"\nSubscrições recorrentes detetadas: {subs} = {subscricoes}€/mês = {subscricoes*12:.0f}€/ano"
+
+    metas_txt = ''
+    if ctx['metas']:
+        metas_ultrapassadas = [m for m in ctx['metas'] if m['ultrapassou']]
+        if metas_ultrapassadas:
+            metas_txt = '\nMetas ultrapassadas: ' + ', '.join([
+                f"{m['categoria']} ({m['gasto']}€/{m['limite']}€)" for m in metas_ultrapassadas
+            ])
+
+    regra_txt = ''
+    if ctx['regra_5030_20']:
+        r = ctx['regra_5030_20']
+        regra_txt = (
+            f"\nRegra 50/30/20 aplicada (rendimento {rendimento}€):"
+            f" necessidades ideal {r['necessidades_ideal']}€,"
+            f" desejos ideal {r['desejos_ideal']}€,"
+            f" poupança ideal {r['poupanca_ideal']}€."
+            f" Atualmente a gastar {r['pct_rendimento']}% do rendimento."
+        )
+
+    PERSONALITY_TONE = {
+        'savage':    'Tom direto e cortante. Diz exatamente onde o dinheiro está a ser desperdiçado.',
+        'sarcastic': 'Tom irónico mas construtivo. Usa ironia inteligente sobre os padrões de gasto.',
+        'calm':      'Tom empático e motivador. Foca no progresso possível.',
+        'pro':       'Tom analítico e rigoroso. Usa linguagem financeira precisa.',
+    }
+    tone = PERSONALITY_TONE.get(personalidade, PERSONALITY_TONE['calm'])
+
+    prompt = f"""És a Verly, uma IA financeira pessoal com acesso aos dados reais do utilizador.
+
+DADOS REAIS DO UTILIZADOR:
+- Gasto este mês: {gasto_atual}€ em {ctx['num_faturas_mes']} faturas
+- Previsão fim do mês: {previsao}€
+- Orçamento definido: {orcamento}€ {'(ULTRAPASSADO)' if orcamento > 0 and previsao > orcamento else ''}
+- Rendimento mensal: {rendimento}€
+- Histórico últimos 6 meses: {historico_txt}
+{regra_txt}
+
+Top categorias de gasto este mês:
+{top_cats_txt}{subscricoes_txt}{metas_txt}
+
+{'Variação vs mês anterior: ' + ('+' if (ctx['variacao_pct'] or 0) > 0 else '') + str(ctx['variacao_pct']) + '%' if ctx['variacao_pct'] is not None else ''}
+
+TAREFA: Cria um plano de poupança CONCRETO e ACIONÁVEL para este utilizador.
+- Usa os dados reais (não inventes valores)
+- Identifica os 2-3 maiores desperdícios com valores específicos
+- Dá uma sugestão principal clara e acionável
+- Menciona o impacto anual se cortar nessas categorias
+- Se tiver subscrições, calcula o impacto de cancelar as menos usadas
+- Cita 1 princípio financeiro real se fizer sentido (regra 50/30/20, Latte Factor, etc.)
+- {tone}
+- Máximo 3-4 frases. Direto ao ponto. Português de Portugal.
+
+Responde APENAS com JSON válido:
+{{
+  "sugestao": "texto principal da sugestão (3-4 frases, concreto, com valores reais)",
+  "poupanca_estimada_mensal": número (quanto pode poupar por mês realisticamente),
+  "poupanca_estimada_anual": número (impacto anual),
+  "foco_principal": "nome da categoria onde deve cortar mais"
+}}"""
+
+    try:
+        import os
+        from groq import Groq
+        client = Groq(api_key=os.getenv('GROQ_API_KEY', ''))
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=[{'role': 'user', 'content': prompt}],
+            max_tokens=400,
+            temperature=0.65,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r'```json|```', '', raw).strip()
+        resultado = json.loads(raw)
+    except Exception as e:
+        logger.error(f'Erro poupanca LLM: {e}')
+        foco = top_cats[0]['categoria'] if top_cats else 'geral'
+        economia_mensal = round(top_cats[0]['valor'] * 0.20, 2) if top_cats else 0
+        resultado = {
+            'sugestao': (
+                f"Com base nos teus padrões, podes poupar cortando 20% em {foco} "
+                f"({economia_mensal}€/mês). "
+                f"{'As tuas subscrições custam ' + str(subscricoes) + '€/mês = ' + str(round(subscricoes*12)) + '€/ano — vale a pena rever.' if subscricoes > 0 else ''}"
+            ).strip(),
+            'poupanca_estimada_mensal': economia_mensal,
+            'poupanca_estimada_anual': round(economia_mensal * 12, 2),
+            'foco_principal': foco,
+        }
+
+    return jsonify({
+        'success': True,
+        'sem_dados': False,
+        'poupanca_possivel': poupanca_possivel,
+        'sugestao': resultado.get('sugestao'),
+        'poupanca_estimada_mensal': resultado.get('poupanca_estimada_mensal'),
+        'poupanca_estimada_anual': resultado.get('poupanca_estimada_anual'),
+        'foco_principal': resultado.get('foco_principal'),
+        'breakdown': breakdown,
+        'contexto': {
+            'gasto_atual': gasto_atual,
+            'previsao': previsao,
+            'orcamento': orcamento,
+            'rendimento': rendimento,
+            'total_subscricoes': subscricoes,
+        },
+    })
 </file>
 
 <file path="app/faturas.py">
@@ -28715,6 +28966,222 @@ def extract_invoice_info(file_path, filename):
         return _fallback_result(filename)
 </file>
 
+<file path="app/chat.py">
+from flask import Blueprint, render_template, request, jsonify, Response, stream_with_context
+from flask_login import login_required, current_user
+from app import db
+from app.models import Conversa, Fatura, User, Meta
+from app.ai import SYSTEM_PROMPTS, DEFAULT_SYSTEM_PROMPT, _build_faturas_context
+import os
+import json
+import requests
+
+chat_bp = Blueprint('chat', __name__)
+
+# ── #6 FIX: normalizar personalidades legacy antes de qualquer lookup ──────────
+_PERSONALITY_ALIASES = {
+    'strict':   'pro',
+    'friendly': 'calm',
+    'rebel':    'savage',
+}
+_VALID_PERSONALITIES = {'savage', 'sarcastic', 'calm', 'pro'}
+
+def _normalise_personality(p):
+    p = (p or 'calm').strip().lower()
+    p = _PERSONALITY_ALIASES.get(p, p)
+    return p if p in _VALID_PERSONALITIES else 'calm'
+
+
+def get_personalidade():
+    user = User.query.get(current_user.id)
+    raw  = (user.personalidade or 'calm') if user else 'calm'
+    return _normalise_personality(raw)
+
+
+def get_historico_recente(user_id, limite=20):
+    """
+    Retorna o histórico real das últimas N conversas para injetar como contexto.
+    As conversas são retornadas por ordem cronológica (mais antigas primeiro),
+    para que o modelo entenda a sequência da conversa.
+    """
+    conversas = (
+        Conversa.query
+        .filter_by(user_id=user_id)
+        .order_by(Conversa.timestamp.desc())
+        .limit(limite)
+        .all()
+    )
+
+    historico = []
+    for c in reversed(conversas):  # inverter para ordem cronológica
+        historico.append({"role": "user", "content": c.pergunta})
+        historico.append({"role": "assistant", "content": c.resposta})
+    return historico
+
+
+def _build_metas_context(user_id):
+    """Constrói contexto das metas do utilizador para injetar no prompt."""
+    from datetime import datetime
+    from app.metas import get_gastos_mes_atual
+
+    metas = Meta.query.filter_by(user_id=user_id).all()
+    if not metas:
+        return ""
+
+    gastos = get_gastos_mes_atual(user_id)
+    linhas = ["\n--- METAS MENSAIS ---"]
+    for m in metas:
+        gasto = gastos.get(m.categoria, 0)
+        pct = round((gasto / m.valor_limite) * 100) if m.valor_limite > 0 else 0
+        estado = "✅ OK" if pct < 80 else ("⚠️ QUASE NO LIMITE" if pct < 100 else "🔴 ULTRAPASSADO")
+        linhas.append(
+            f"• {m.categoria}: {gasto:.2f}€ de {m.valor_limite:.2f}€ ({pct}%) — {estado}"
+        )
+    return "\n".join(linhas)
+
+
+@chat_bp.route('/chat')
+@login_required
+def chat():
+    conversas = Conversa.query.filter_by(user_id=current_user.id).order_by(Conversa.timestamp.asc()).all()
+
+    num_faturas = Fatura.query.filter_by(user_id=current_user.id).count()
+    num_metas = Meta.query.filter_by(user_id=current_user.id).count()
+
+    if num_faturas == 0:
+        sugestoes = [
+            "Como funciona a Verly?",
+            "Como faço upload de uma fatura?",
+        ]
+    else:
+        sugestoes = [
+            "Quanto gastei este mês?",
+            "Qual a minha categoria mais cara?",
+            "Tenho garantias a expirar?",
+            "Estou a cumprir as minhas metas?",
+        ] if num_metas > 0 else [
+            "Quanto gastei este mês?",
+            "Qual a minha categoria mais cara?",
+            "Tenho garantias a expirar?",
+        ]
+
+    return render_template(
+        'chat.html',
+        conversas=conversas,
+        sugestoes=sugestoes
+    )
+
+
+# 🔥 STREAMING REAL
+@chat_bp.route('/chat/stream', methods=['POST'])
+@login_required
+def stream():
+    user_msg = request.json.get('message', '').strip()
+
+    if not user_msg:
+        return jsonify({'response': 'Mensagem vazia.'})
+
+    faturas = Fatura.query.filter_by(user_id=current_user.id).all()
+    personalidade = get_personalidade()   # já normalizada
+
+    # Memória real: histórico das últimas 20 trocas
+    historico = get_historico_recente(current_user.id, limite=20)
+
+    def generate():
+        api_key = os.getenv("GROQ_API_KEY")
+
+        if not api_key:
+            yield "data: ⚠️ Chave GROQ_API_KEY não configurada no servidor.\n\n"
+            return
+
+        system_prompt = SYSTEM_PROMPTS.get(personalidade, DEFAULT_SYSTEM_PROMPT)
+        faturas_context = _build_faturas_context(faturas)
+        metas_context = _build_metas_context(current_user.id)
+
+        # System prompt enriquecido: inclui faturas + metas + instruções de memória
+        system_content = (
+            f"{system_prompt}\n\n"
+            f"DADOS REAIS DO UTILIZADOR:\n{faturas_context}"
+            f"{metas_context}\n\n"
+            "MEMÓRIA: Tens acesso ao histórico desta conversa. Usa-o para dar respostas "
+            "coerentes e contextualizar respostas com o que foi dito antes. "
+            "Não te apresentes de novo se já te apresentaste antes."
+        )
+
+        messages = [
+            {"role": "system", "content": system_content}
+        ] + historico + [
+            {"role": "user", "content": user_msg}
+        ]
+
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "temperature": 0.7,
+            "stream": True,
+            "max_tokens": 512,
+        }
+
+        full_response = ""
+
+        try:
+            with requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                stream=True,
+                timeout=30,
+            ) as resp:
+                for line in resp.iter_lines():
+                    if line:
+                        line = line.decode("utf-8")
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(data_str)
+                                delta = data["choices"][0]["delta"].get("content", "")
+                                if delta:
+                                    full_response += delta
+                                    yield f"data: {json.dumps({'delta': delta})}\n\n"
+                            except (json.JSONDecodeError, KeyError):
+                                continue
+
+        except requests.exceptions.Timeout:
+            yield "data: ⚠️ Tempo limite excedido. Tenta novamente.\n\n"
+            return
+        except Exception as e:
+            yield f"data: ⚠️ Erro ao contactar a IA: {str(e)}\n\n"
+            return
+
+        # Guardar na BD
+        if full_response:
+            conversa = Conversa(
+                user_id=current_user.id,
+                pergunta=user_msg,
+                resposta=full_response
+            )
+            db.session.add(conversa)
+            db.session.commit()
+
+        yield "data: [DONE]\n\n"
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream")
+
+
+@chat_bp.route('/chat/limpar', methods=['POST'])
+@login_required
+def limpar_chat():
+    """Permite ao utilizador limpar o histórico do chat."""
+    Conversa.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    return jsonify({'success': True})
+</file>
+
 <file path="app/api/auth.py">
 """
 app/api/auth.py — Endpoints de autenticação para o mobile
@@ -29159,220 +29626,8 @@ def delete_account():
         return jsonify({'success': False, 'message': 'Erro ao apagar conta.'}), 500
 </file>
 
-<file path="app/chat.py">
-from flask import Blueprint, render_template, request, jsonify, Response, stream_with_context
-from flask_login import login_required, current_user
-from app import db
-from app.models import Conversa, Fatura, User, Meta
-from app.ai import SYSTEM_PROMPTS, DEFAULT_SYSTEM_PROMPT, _build_faturas_context
-import os
-import json
-import requests
-
-chat_bp = Blueprint('chat', __name__)
-
-# ── #6 FIX: normalizar personalidades legacy antes de qualquer lookup ──────────
-_PERSONALITY_ALIASES = {
-    'strict':   'pro',
-    'friendly': 'calm',
-    'rebel':    'savage',
-}
-_VALID_PERSONALITIES = {'savage', 'sarcastic', 'calm', 'pro'}
-
-def _normalise_personality(p):
-    p = (p or 'calm').strip().lower()
-    p = _PERSONALITY_ALIASES.get(p, p)
-    return p if p in _VALID_PERSONALITIES else 'calm'
-
-
-def get_personalidade():
-    user = User.query.get(current_user.id)
-    raw  = (user.personalidade or 'calm') if user else 'calm'
-    return _normalise_personality(raw)
-
-
-def get_historico_recente(user_id, limite=20):
-    """
-    Retorna o histórico real das últimas N conversas para injetar como contexto.
-    As conversas são retornadas por ordem cronológica (mais antigas primeiro),
-    para que o modelo entenda a sequência da conversa.
-    """
-    conversas = (
-        Conversa.query
-        .filter_by(user_id=user_id)
-        .order_by(Conversa.timestamp.desc())
-        .limit(limite)
-        .all()
-    )
-
-    historico = []
-    for c in reversed(conversas):  # inverter para ordem cronológica
-        historico.append({"role": "user", "content": c.pergunta})
-        historico.append({"role": "assistant", "content": c.resposta})
-    return historico
-
-
-def _build_metas_context(user_id):
-    """Constrói contexto das metas do utilizador para injetar no prompt."""
-    from datetime import datetime
-    from app.metas import get_gastos_mes_atual
-
-    metas = Meta.query.filter_by(user_id=user_id).all()
-    if not metas:
-        return ""
-
-    gastos = get_gastos_mes_atual(user_id)
-    linhas = ["\n--- METAS MENSAIS ---"]
-    for m in metas:
-        gasto = gastos.get(m.categoria, 0)
-        pct = round((gasto / m.valor_limite) * 100) if m.valor_limite > 0 else 0
-        estado = "✅ OK" if pct < 80 else ("⚠️ QUASE NO LIMITE" if pct < 100 else "🔴 ULTRAPASSADO")
-        linhas.append(
-            f"• {m.categoria}: {gasto:.2f}€ de {m.valor_limite:.2f}€ ({pct}%) — {estado}"
-        )
-    return "\n".join(linhas)
-
-
-@chat_bp.route('/chat')
-@login_required
-def chat():
-    conversas = Conversa.query.filter_by(user_id=current_user.id).order_by(Conversa.timestamp.asc()).all()
-
-    num_faturas = Fatura.query.filter_by(user_id=current_user.id).count()
-    num_metas = Meta.query.filter_by(user_id=current_user.id).count()
-
-    if num_faturas == 0:
-        sugestoes = [
-            "Como funciona a Verly?",
-            "Como faço upload de uma fatura?",
-        ]
-    else:
-        sugestoes = [
-            "Quanto gastei este mês?",
-            "Qual a minha categoria mais cara?",
-            "Tenho garantias a expirar?",
-            "Estou a cumprir as minhas metas?",
-        ] if num_metas > 0 else [
-            "Quanto gastei este mês?",
-            "Qual a minha categoria mais cara?",
-            "Tenho garantias a expirar?",
-        ]
-
-    return render_template(
-        'chat.html',
-        conversas=conversas,
-        sugestoes=sugestoes
-    )
-
-
-# 🔥 STREAMING REAL
-@chat_bp.route('/chat/stream', methods=['POST'])
-@login_required
-def stream():
-    user_msg = request.json.get('message', '').strip()
-
-    if not user_msg:
-        return jsonify({'response': 'Mensagem vazia.'})
-
-    faturas = Fatura.query.filter_by(user_id=current_user.id).all()
-    personalidade = get_personalidade()   # já normalizada
-
-    # Memória real: histórico das últimas 20 trocas
-    historico = get_historico_recente(current_user.id, limite=20)
-
-    def generate():
-        api_key = os.getenv("GROQ_API_KEY")
-
-        if not api_key:
-            yield "data: ⚠️ Chave GROQ_API_KEY não configurada no servidor.\n\n"
-            return
-
-        system_prompt = SYSTEM_PROMPTS.get(personalidade, DEFAULT_SYSTEM_PROMPT)
-        faturas_context = _build_faturas_context(faturas)
-        metas_context = _build_metas_context(current_user.id)
-
-        # System prompt enriquecido: inclui faturas + metas + instruções de memória
-        system_content = (
-            f"{system_prompt}\n\n"
-            f"DADOS REAIS DO UTILIZADOR:\n{faturas_context}"
-            f"{metas_context}\n\n"
-            "MEMÓRIA: Tens acesso ao histórico desta conversa. Usa-o para dar respostas "
-            "coerentes e contextualizar respostas com o que foi dito antes. "
-            "Não te apresentes de novo se já te apresentaste antes."
-        )
-
-        messages = [
-            {"role": "system", "content": system_content}
-        ] + historico + [
-            {"role": "user", "content": user_msg}
-        ]
-
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": messages,
-            "temperature": 0.7,
-            "stream": True,
-            "max_tokens": 512,
-        }
-
-        full_response = ""
-
-        try:
-            with requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                stream=True,
-                timeout=30,
-            ) as resp:
-                for line in resp.iter_lines():
-                    if line:
-                        line = line.decode("utf-8")
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                data = json.loads(data_str)
-                                delta = data["choices"][0]["delta"].get("content", "")
-                                if delta:
-                                    full_response += delta
-                                    yield f"data: {json.dumps({'delta': delta})}\n\n"
-                            except (json.JSONDecodeError, KeyError):
-                                continue
-
-        except requests.exceptions.Timeout:
-            yield "data: ⚠️ Tempo limite excedido. Tenta novamente.\n\n"
-            return
-        except Exception as e:
-            yield f"data: ⚠️ Erro ao contactar a IA: {str(e)}\n\n"
-            return
-
-        # Guardar na BD
-        if full_response:
-            conversa = Conversa(
-                user_id=current_user.id,
-                pergunta=user_msg,
-                resposta=full_response
-            )
-            db.session.add(conversa)
-            db.session.commit()
-
-        yield "data: [DONE]\n\n"
-
-    return Response(stream_with_context(generate()), mimetype="text/event-stream")
-
-
-@chat_bp.route('/chat/limpar', methods=['POST'])
-@login_required
-def limpar_chat():
-    """Permite ao utilizador limpar o histórico do chat."""
-    Conversa.query.filter_by(user_id=current_user.id).delete()
-    db.session.commit()
-    return jsonify({'success': True})
+<file path="Procfile">
+web: python migrate_prod.py && gunicorn run:flask_app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
 </file>
 
 <file path="storage_utilizadores/1/default__vector_store.json">
@@ -32888,130 +33143,6 @@ def _migrate_db():
                 db.session.rollback()
 </file>
 
-<file path="requirements.txt">
-aiohappyeyeballs==2.6.1
-aiohttp==3.13.5
-aiosignal==1.4.0
-aiosqlite==0.22.1
-annotated-doc==0.0.4
-annotated-types==0.7.0
-anyio==4.13.0
-attrs==26.1.0
-banks==2.4.2
-blinker==1.9.0
-certifi==2026.4.22
-cffi==2.0.0
-charset-normalizer==3.4.7
-click==8.3.3
-colorama==0.4.6
-cryptography==48.0.0
-dataclasses-json==0.6.7
-Deprecated==1.3.1
-dirtyjson==1.0.8
-distro==1.9.0
-filelock==3.29.0
-filetype==1.2.0
-Flask==3.1.3
-Flask-Cors==6.0.2
-Flask-JWT-Extended==4.7.3
-Flask-Limiter==4.1.1
-Flask-Login==0.6.3
-Flask-SQLAlchemy==3.1.1
-Flask-WTF==1.3.0
-frozenlist==1.8.0
-fsspec==2026.4.0
-greenlet==3.5.0
-griffe==2.0.2
-griffecli==2.0.2
-griffelib==2.0.2
-groq==1.2.0
-h11==0.16.0
-httpcore==1.0.9
-httpx==0.28.1
-huggingface_hub==0.30.0
-idna==3.13
-itsdangerous==2.2.0
-Jinja2==3.1.6
-jiter==0.14.0
-joblib==1.5.3
-llama-index-core==0.14.21
-llama-index-embeddings-huggingface==0.7.0
-llama-index-instrumentation==0.5.0
-llama-index-llms-groq==0.5.0
-llama-index-llms-openai==0.6.26
-llama-index-llms-openai-like==0.5.3
-llama-index-workflows==2.20.0
-markdown-it-py==4.2.0
-MarkupSafe==3.0.3
-marshmallow==3.26.2
-mdurl==0.1.2
-mpmath==1.3.0
-multidict==6.7.1
-mypy_extensions==1.1.0
-nest-asyncio==1.6.0
-networkx==3.6.1
-nltk==3.9.4
-numpy==2.4.4
-openai==2.36.0
-packaging==26.2
-pillow==12.2.0
-platformdirs==4.9.6
-propcache==0.5.2
-psycopg2-binary==2.9.12
-pycparser==3.0
-pydantic==2.13.4
-pydantic_core==2.46.4
-Pygments==2.20.0
-PyJWT==2.12.1
-python-dotenv==1.2.2
-PyYAML==6.0.3
-regex==2026.4.4
-reportlab==4.5.0
-requests==2.33.1
-resend==2.30.0
-rich==15.0.0
-safetensors==0.7.0
-scikit-learn==1.8.0
-scipy==1.17.1
-sentence-transformers==5.4.1
-setuptools==80.9.0
-shellingham==1.5.4
-sniffio==1.3.1
-SQLAlchemy==2.0.49
-sympy==1.14.0
-tenacity==9.1.4
-threadpoolctl==3.6.0
-tiktoken==0.12.0
-tinytag==2.2.1
-tokenizers==0.21.0
-torch==2.11.0
-tqdm==4.67.3
-transformers==4.51.3
-typer==0.25.1
-typing-inspect==0.9.0
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-werkzeug==3.1.8
-wrapt==2.1.2
-wtforms==3.2.2
-pdfplumber==0.11.4
-PyMuPDF==1.25.5
-firebase-admin>=6.0.0
-google-auth==2.53.0
-google-auth-oauthlib==1.4.0
-google-api-python-client==2.196.0
-gunicorn
-python-dateutil==2.9.0
-redis==5.0.3
-flask-caching==2.3.0
-celery==5.4.0
-flower==2.0.1
-flask-limiter==3.7.0
-boto3==1.34.0
-qdrant-client==1.9.1
-llama-index-vector-stores-qdrant==0.2.8
-</file>
-
 <file path="verly-mobile/src/services/api.js">
 /**
  * src/services/api.js
@@ -33338,6 +33469,129 @@ export const pushAPI = {
 export const poupancaAPI = {
   get: () => apiFetch('/poupanca'),
 };
+</file>
+
+<file path="requirements.txt">
+aiohappyeyeballs==2.6.1
+aiohttp==3.13.5
+aiosignal==1.4.0
+aiosqlite==0.22.1
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+attrs==26.1.0
+banks==2.4.2
+blinker==1.9.0
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.3.3
+colorama==0.4.6
+cryptography==48.0.0
+dataclasses-json==0.6.7
+Deprecated==1.3.1
+dirtyjson==1.0.8
+distro==1.9.0
+filelock==3.29.0
+filetype==1.2.0
+Flask==3.1.3
+Flask-Cors==6.0.2
+Flask-JWT-Extended==4.7.3
+Flask-Limiter==4.1.1
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+Flask-WTF==1.3.0
+frozenlist==1.8.0
+fsspec==2026.4.0
+greenlet==3.5.0
+griffe==2.0.2
+griffecli==2.0.2
+griffelib==2.0.2
+groq==1.2.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+huggingface_hub==0.30.0
+idna==3.13
+itsdangerous==2.2.0
+Jinja2==3.1.6
+jiter==0.14.0
+joblib==1.5.3
+llama-index-core==0.14.21
+llama-index-embeddings-huggingface==0.7.0
+llama-index-instrumentation==0.5.0
+llama-index-llms-groq==0.5.0
+llama-index-llms-openai==0.6.26
+llama-index-llms-openai-like==0.5.3
+llama-index-workflows==2.20.0
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+marshmallow==3.26.2
+mdurl==0.1.2
+mpmath==1.3.0
+multidict==6.7.1
+mypy_extensions==1.1.0
+nest-asyncio==1.6.0
+networkx==3.6.1
+nltk==3.9.4
+numpy==2.4.4
+openai==2.36.0
+packaging==26.2
+pillow==12.2.0
+platformdirs==4.9.6
+propcache==0.5.2
+psycopg2-binary==2.9.12
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+Pygments==2.20.0
+PyJWT==2.12.1
+python-dotenv==1.2.2
+PyYAML==6.0.3
+regex==2026.4.4
+reportlab==4.5.0
+requests==2.33.1
+resend==2.30.0
+rich==15.0.0
+safetensors==0.7.0
+scikit-learn==1.8.0
+scipy==1.17.1
+sentence-transformers==5.4.1
+setuptools==80.9.0
+shellingham==1.5.4
+sniffio==1.3.1
+SQLAlchemy==2.0.49
+sympy==1.14.0
+tenacity==9.1.4
+threadpoolctl==3.6.0
+tiktoken==0.12.0
+tinytag==2.2.1
+tokenizers==0.21.0
+torch==2.11.0
+tqdm==4.67.3
+transformers==4.51.3
+typer==0.25.1
+typing-inspect==0.9.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+werkzeug==3.1.8
+wrapt==2.1.2
+wtforms==3.2.2
+pdfplumber==0.11.4
+PyMuPDF==1.25.5
+firebase-admin>=6.0.0
+google-auth==2.53.0
+google-auth-oauthlib==1.4.0
+google-api-python-client==2.196.0
+gunicorn
+python-dateutil==2.9.0
+redis==5.0.3
+flask-caching==2.3.0
+celery==5.4.0
+flower==2.0.1
+boto3==1.34.0
+qdrant-client==1.18.0
+llama-index-vector-stores-qdrant==0.10.1
 </file>
 
 </files>
