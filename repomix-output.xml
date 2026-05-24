@@ -60,6 +60,7 @@ app/api/onboarding_mobile.py
 app/api/perfil_mobile.py
 app/api/playlists.py
 app/api/push_notifications.py
+app/api/social.py
 app/api/subscricoes.py
 app/auth.py
 app/celery_app.py
@@ -77,6 +78,7 @@ app/historico.py
 app/impulse.py
 app/metas.py
 app/migration_subscricoes.py
+app/models_social.py
 app/models.py
 app/notificacoes.py
 app/onboarding.py
@@ -199,6 +201,7 @@ verly-mobile/android/app/src/main/res/values-night/colors.xml
 verly-mobile/android/app/src/main/res/values/colors.xml
 verly-mobile/android/app/src/main/res/values/strings.xml
 verly-mobile/android/app/src/main/res/values/styles.xml
+verly-mobile/android/build-log.txt
 verly-mobile/android/build.gradle
 verly-mobile/android/gradle.properties
 verly-mobile/android/gradle/wrapper/gradle-wrapper.jar
@@ -237,18 +240,24 @@ verly-mobile/src/screens/ChatScreen.js
 verly-mobile/src/screens/ConfiguracoesScreen.js
 verly-mobile/src/screens/CriarEmScreen.js
 verly-mobile/src/screens/DashboardScreen.js
+verly-mobile/src/screens/DesafioDetalheScreen.js
 verly-mobile/src/screens/EstatisticasScreen.js
 verly-mobile/src/screens/FaturaDetalheScreen.js
 verly-mobile/src/screens/FaturasScreen.js
+verly-mobile/src/screens/FinancialGraphScreen.js
 verly-mobile/src/screens/GarantiasScreen.js
 verly-mobile/src/screens/GmailScreen.js
+verly-mobile/src/screens/GrupoDetalheScreen.js
+verly-mobile/src/screens/GruposScreen.js
 verly-mobile/src/screens/HistoricoScreen.js
 verly-mobile/src/screens/InsightsScreen.js
+verly-mobile/src/screens/IntelligenceFeedScreen.js
 verly-mobile/src/screens/MetasScreen.js
 verly-mobile/src/screens/MinhasSubscricoesScreen.js
 verly-mobile/src/screens/NotificacoesScreen.js
 verly-mobile/src/screens/OnboardingScreen.js
 verly-mobile/src/screens/PerfilScreen.js
+verly-mobile/src/screens/RecompensasScreen.js
 verly-mobile/src/screens/RelatorioScreen.js
 verly-mobile/src/screens/RetrospetivaMensalScreen.js
 verly-mobile/src/screens/ScoreScreen.js
@@ -260,6 +269,2351 @@ verly-mobile/src/utils/haptics.js
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="app/api/social.py">
+# app/api/social.py — Rotas API para Grupos, Desafios e Recompensas
+
+from datetime import datetime, timedelta
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+
+from app.api  import api_bp
+from app      import db
+from app.models import User
+from app.models_social import (
+    Grupo, grupo_membro, Desafio, DesafioParticipante, Recompensa
+)
+
+
+def _current_user():
+    return User.query.get(int(get_jwt_identity()))
+
+
+# ── Grupos ─────────────────────────────────────────────────────────────────────
+
+@api_bp.route('/grupos', methods=['GET'])
+@jwt_required()
+def listar_grupos():
+    user = _current_user()
+    grupos = (
+        Grupo.query
+        .join(grupo_membro, Grupo.id == grupo_membro.c.grupo_id)
+        .filter(grupo_membro.c.user_id == user.id, Grupo.ativo == True)
+        .all()
+    )
+    return jsonify([g.to_dict(user.id) for g in grupos])
+
+
+@api_bp.route('/grupos', methods=['POST'])
+@jwt_required()
+def criar_grupo():
+    user = _current_user()
+    data = request.get_json() or {}
+
+    nome = (data.get('nome') or '').strip()
+    if not nome:
+        return jsonify({'error': 'Nome obrigatório'}), 400
+
+    grupo = Grupo(
+        nome=nome,
+        descricao=data.get('descricao', ''),
+        emoji=data.get('emoji', '👥'),
+        criador_id=user.id,
+    )
+    db.session.add(grupo)
+    db.session.flush()
+
+    # Adicionar criador como admin
+    db.session.execute(
+        grupo_membro.insert().values(grupo_id=grupo.id, user_id=user.id, role='admin')
+    )
+
+    # Convidar amigos passados
+    for amigo_id in data.get('amigos_ids', []):
+        amigo = User.query.get(amigo_id)
+        if amigo:
+            db.session.execute(
+                grupo_membro.insert().values(grupo_id=grupo.id, user_id=amigo_id, role='membro')
+            )
+
+    db.session.commit()
+
+    # Recompensa por criar primeiro grupo
+    _dar_recompensa_se_nao_existe(user.id, 'primeiro_grupo',
+        titulo='Fundador!', descricao='Criaste o teu primeiro grupo', icone='🏅', xp=50)
+
+    return jsonify(grupo.to_dict(user.id)), 201
+
+
+@api_bp.route('/grupos/<int:grupo_id>', methods=['GET'])
+@jwt_required()
+def detalhe_grupo(grupo_id):
+    user   = _current_user()
+    grupo  = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+    return jsonify(grupo.to_dict(user.id))
+
+
+@api_bp.route('/grupos/<int:grupo_id>/convidar', methods=['POST'])
+@jwt_required()
+def convidar_para_grupo(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    data     = request.get_json() or {}
+    amigo_id = data.get('user_id')
+    amigo    = User.query.get(amigo_id) if amigo_id else None
+    if not amigo:
+        return jsonify({'error': 'Utilizador não encontrado'}), 404
+
+    exists = db.session.execute(
+        grupo_membro.select().where(
+            grupo_membro.c.grupo_id == grupo_id,
+            grupo_membro.c.user_id  == amigo_id,
+        )
+    ).fetchone()
+    if exists:
+        return jsonify({'error': 'Já é membro'}), 400
+
+    db.session.execute(
+        grupo_membro.insert().values(grupo_id=grupo_id, user_id=amigo_id, role='membro')
+    )
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+@api_bp.route('/grupos/<int:grupo_id>/sair', methods=['POST'])
+@jwt_required()
+def sair_grupo(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    db.session.execute(
+        grupo_membro.delete().where(
+            grupo_membro.c.grupo_id == grupo_id,
+            grupo_membro.c.user_id  == user.id,
+        )
+    )
+    db.session.commit()
+    return jsonify({'ok': True})
+
+
+# ── Desafios ───────────────────────────────────────────────────────────────────
+
+@api_bp.route('/grupos/<int:grupo_id>/desafios', methods=['GET'])
+@jwt_required()
+def listar_desafios(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    desafios = grupo.desafios.order_by(Desafio.criado_em.desc()).all()
+    return jsonify([d.to_dict(user.id) for d in desafios])
+
+
+@api_bp.route('/grupos/<int:grupo_id>/desafios', methods=['POST'])
+@jwt_required()
+def criar_desafio(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    data = request.get_json() or {}
+
+    titulo = (data.get('titulo') or '').strip()
+    if not titulo:
+        return jsonify({'error': 'Título obrigatório'}), 400
+
+    # Datas
+    try:
+        inicio = datetime.fromisoformat(data['inicio']) if data.get('inicio') else datetime.utcnow()
+        fim    = datetime.fromisoformat(data['fim'])    if data.get('fim')    else inicio + timedelta(days=30)
+    except Exception:
+        return jsonify({'error': 'Datas inválidas'}), 400
+
+    desafio = Desafio(
+        grupo_id   = grupo_id,
+        criador_id = user.id,
+        titulo     = titulo,
+        descricao  = data.get('descricao', ''),
+        tipo       = data.get('tipo', 'gastar_menos'),
+        categoria  = data.get('categoria'),
+        valor_alvo = data.get('valor_alvo'),
+        inicio     = inicio,
+        fim        = fim,
+        recompensa = data.get('recompensa', '🏆 Vencedor do desafio'),
+    )
+    db.session.add(desafio)
+    db.session.flush()
+
+    # Criador entra automaticamente
+    _entrar_desafio(desafio.id, user.id)
+
+    # Todos os membros do grupo são convidados automaticamente
+    for membro in grupo.membros.all():
+        if membro.id != user.id:
+            _entrar_desafio(desafio.id, membro.id)
+
+    db.session.commit()
+    return jsonify(desafio.to_dict(user.id)), 201
+
+
+@api_bp.route('/desafios/<int:desafio_id>', methods=['GET'])
+@jwt_required()
+def detalhe_desafio(desafio_id):
+    user    = _current_user()
+    desafio = Desafio.query.get_or_404(desafio_id)
+    grupo   = Grupo.query.get(desafio.grupo_id)
+    _assert_membro(grupo, user.id)
+    return jsonify(desafio.to_dict(user.id))
+
+
+@api_bp.route('/desafios/<int:desafio_id>/progresso', methods=['POST'])
+@jwt_required()
+def atualizar_progresso(desafio_id):
+    """Atualiza o progresso baseado nas faturas reais do utilizador."""
+    user    = _current_user()
+    desafio = Desafio.query.get_or_404(desafio_id)
+
+    parte = DesafioParticipante.query.filter_by(
+        desafio_id=desafio_id, user_id=user.id
+    ).first()
+    if not parte:
+        return jsonify({'error': 'Não és participante'}), 403
+
+    progresso = _calcular_progresso(desafio, user)
+    parte.progresso    = progresso
+    parte.atualizado_em = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({'progresso': progresso})
+
+
+@api_bp.route('/desafios/<int:desafio_id>/terminar', methods=['POST'])
+@jwt_required()
+def terminar_desafio(desafio_id):
+    """Termina o desafio, calcula vencedor e atribui recompensas."""
+    user    = _current_user()
+    desafio = Desafio.query.get_or_404(desafio_id)
+
+    if desafio.criador_id != user.id:
+        return jsonify({'error': 'Só o criador pode terminar o desafio'}), 403
+
+    # Atualizar progresso de todos
+    for parte in desafio.participantes.all():
+        parte.progresso = _calcular_progresso(desafio, parte.user)
+
+    # Ordenar por progresso (maior = melhor)
+    ranking = sorted(desafio.participantes.all(), key=lambda p: p.progresso, reverse=True)
+
+    if ranking:
+        vencedor = ranking[0]
+        vencedor.ganhou = True
+        _dar_recompensa_se_nao_existe(
+            vencedor.user_id,
+            'vencedor_desafio',
+            titulo=f'🏆 Vencedor: {desafio.titulo}',
+            descricao=desafio.recompensa or 'Ganhaste o desafio!',
+            icone='🏆',
+            xp=100,
+            desafio_id=desafio_id,
+        )
+
+    desafio.estado = 'terminado'
+    db.session.commit()
+
+    return jsonify({
+        'ok': True,
+        'vencedor': {
+            'user_id': ranking[0].user_id,
+            'nome': ranking[0].user.nome,
+            'progresso': ranking[0].progresso,
+        } if ranking else None,
+        'ranking': [{'user_id': p.user_id, 'nome': p.user.nome, 'progresso': p.progresso, 'ganhou': p.ganhou} for p in ranking],
+    })
+
+
+# ── Recompensas ────────────────────────────────────────────────────────────────
+
+@api_bp.route('/recompensas', methods=['GET'])
+@jwt_required()
+def listar_recompensas():
+    user = _current_user()
+    recompensas = (
+        Recompensa.query
+        .filter_by(user_id=user.id)
+        .order_by(Recompensa.ganhou_em.desc())
+        .all()
+    )
+    # Marcar como vistas
+    Recompensa.query.filter_by(user_id=user.id, vista=False).update({'vista': True})
+    db.session.commit()
+
+    total_xp = sum(r.xp for r in recompensas)
+    return jsonify({
+        'recompensas': [r.to_dict() for r in recompensas],
+        'total_xp': total_xp,
+        'nivel': _xp_to_nivel(total_xp),
+    })
+
+
+@api_bp.route('/recompensas/novas', methods=['GET'])
+@jwt_required()
+def recompensas_novas():
+    user  = _current_user()
+    count = Recompensa.query.filter_by(user_id=user.id, vista=False).count()
+    return jsonify({'count': count})
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _assert_membro(grupo, user_id):
+    row = db.session.execute(
+        grupo_membro.select().where(
+            grupo_membro.c.grupo_id == grupo.id,
+            grupo_membro.c.user_id  == user_id,
+        )
+    ).fetchone()
+    if not row:
+        from flask import abort
+        abort(403)
+
+
+def _entrar_desafio(desafio_id, user_id):
+    exists = DesafioParticipante.query.filter_by(
+        desafio_id=desafio_id, user_id=user_id
+    ).first()
+    if not exists:
+        db.session.add(DesafioParticipante(desafio_id=desafio_id, user_id=user_id))
+
+
+def _calcular_progresso(desafio, user):
+    """Calcula progresso real baseado nas faturas do utilizador no período do desafio."""
+    from app.models import Fatura
+
+    faturas = Fatura.query.filter(
+        Fatura.user_id == user.id,
+        Fatura.data >= desafio.inicio,
+        Fatura.data <= desafio.fim,
+    ).all()
+
+    if desafio.tipo == 'gastar_menos':
+        # Progresso = quanto poupou vs valor_alvo (menor gasto = melhor)
+        total_gasto = sum(f.valor for f in faturas if f.valor > 0)
+        alvo = desafio.valor_alvo or 500
+        # Score invertido: quanto menos gastou, maior o score
+        return max(0, alvo - total_gasto)
+
+    elif desafio.tipo == 'categoria_limite':
+        cat = (desafio.categoria or '').lower()
+        total_cat = sum(
+            f.valor for f in faturas
+            if f.valor > 0 and (f.categoria or '').lower() == cat
+        )
+        alvo = desafio.valor_alvo or 100
+        return max(0, alvo - total_cat)
+
+    elif desafio.tipo == 'poupar_valor':
+        # Progresso = diferença entre orçamento e gasto (poupança real)
+        total_gasto = sum(f.valor for f in faturas if f.valor > 0)
+        orcamento   = user.orcamento_mensal or 0
+        return max(0, orcamento - total_gasto)
+
+    elif desafio.tipo == 'streak_dias':
+        return float(user.streak_dias or 0)
+
+    return 0.0
+
+
+def _dar_recompensa_se_nao_existe(user_id, tipo, titulo, descricao, icone, xp, desafio_id=None):
+    exists = Recompensa.query.filter_by(user_id=user_id, tipo=tipo, desafio_id=desafio_id).first()
+    if not exists:
+        db.session.add(Recompensa(
+            user_id=user_id,
+            desafio_id=desafio_id,
+            tipo=tipo,
+            titulo=titulo,
+            descricao=descricao,
+            icone=icone,
+            xp=xp,
+        ))
+        db.session.flush()
+
+
+def _xp_to_nivel(xp):
+    if xp < 100:   return {'nivel': 1, 'titulo': 'Iniciante',    'icone': '🌱'}
+    if xp < 300:   return {'nivel': 2, 'titulo': 'Poupador',     'icone': '💰'}
+    if xp < 600:   return {'nivel': 3, 'titulo': 'Estrategista', 'icone': '📊'}
+    if xp < 1000:  return {'nivel': 4, 'titulo': 'Expert',       'icone': '🎯'}
+    return             {'nivel': 5, 'titulo': 'Mestre',       'icone': '🏆'}
+</file>
+
+<file path="app/models_social.py">
+# app/models_social.py — Modelos para Grupos, Desafios e Recompensas
+
+from datetime import datetime
+from app import db
+
+
+# ── Grupos ─────────────────────────────────────────────────────────────────────
+
+grupo_membro = db.Table('grupo_membros',
+    db.Column('grupo_id', db.Integer, db.ForeignKey('grupos.id'), primary_key=True),
+    db.Column('user_id',  db.Integer, db.ForeignKey('users.id'),  primary_key=True),
+    db.Column('role',     db.String(20), default='membro'),   # 'admin' | 'membro'
+    db.Column('joined_em', db.DateTime, default=datetime.utcnow),
+)
+
+
+class Grupo(db.Model):
+    __tablename__ = 'grupos'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    nome         = db.Column(db.String(100), nullable=False)
+    descricao    = db.Column(db.String(300))
+    emoji        = db.Column(db.String(10), default='👥')
+    criador_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    criado_em    = db.Column(db.DateTime, default=datetime.utcnow)
+    ativo        = db.Column(db.Boolean, default=True)
+
+    criador = db.relationship('User', foreign_keys=[criador_id])
+    membros = db.relationship('User', secondary=grupo_membro, lazy='dynamic')
+    desafios = db.relationship('Desafio', backref='grupo', lazy='dynamic')
+
+    def to_dict(self, user_id=None):
+        membros_list = []
+        for m in self.membros.all():
+            membros_list.append({
+                'id': m.id,
+                'nome': m.nome,
+                'avatar': m.avatar,
+            })
+        return {
+            'id': self.id,
+            'nome': self.nome,
+            'descricao': self.descricao,
+            'emoji': self.emoji,
+            'criador_id': self.criador_id,
+            'membros': membros_list,
+            'total_membros': len(membros_list),
+            'criado_em': self.criado_em.isoformat(),
+            'sou_admin': user_id == self.criador_id,
+        }
+
+
+# ── Desafios ───────────────────────────────────────────────────────────────────
+
+class Desafio(db.Model):
+    __tablename__ = 'desafios'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    grupo_id     = db.Column(db.Integer, db.ForeignKey('grupos.id'), nullable=False)
+    criador_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    titulo       = db.Column(db.String(150), nullable=False)
+    descricao    = db.Column(db.String(500))
+    tipo         = db.Column(db.String(30), default='gastar_menos')
+    # tipos: 'gastar_menos' | 'poupar_valor' | 'categoria_limite' | 'streak_dias'
+    categoria    = db.Column(db.String(100))   # só para tipo 'categoria_limite'
+    valor_alvo   = db.Column(db.Float)         # ex: poupar 200€ ou gastar < 100€ em delivery
+    inicio       = db.Column(db.DateTime, nullable=False)
+    fim          = db.Column(db.DateTime, nullable=False)
+    estado       = db.Column(db.String(20), default='ativo')  # 'ativo' | 'terminado' | 'cancelado'
+    recompensa   = db.Column(db.String(200))   # descrição da recompensa
+    criado_em    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    criador      = db.relationship('User', foreign_keys=[criador_id])
+    participantes = db.relationship('DesafioParticipante', backref='desafio', lazy='dynamic')
+
+    def to_dict(self, user_id=None):
+        participantes = self.participantes.all()
+        minha_parte = next((p for p in participantes if p.user_id == user_id), None)
+        ranking = sorted(participantes, key=lambda p: p.progresso, reverse=True)
+        return {
+            'id': self.id,
+            'grupo_id': self.grupo_id,
+            'titulo': self.titulo,
+            'descricao': self.descricao,
+            'tipo': self.tipo,
+            'categoria': self.categoria,
+            'valor_alvo': self.valor_alvo,
+            'inicio': self.inicio.isoformat(),
+            'fim': self.fim.isoformat(),
+            'estado': self.estado,
+            'recompensa': self.recompensa,
+            'total_participantes': len(participantes),
+            'meu_progresso': minha_parte.progresso if minha_parte else 0,
+            'minha_posicao': next((i+1 for i, p in enumerate(ranking) if p.user_id == user_id), None),
+            'ranking': [
+                {
+                    'user_id': p.user_id,
+                    'nome': p.user.nome,
+                    'avatar': p.user.avatar,
+                    'progresso': p.progresso,
+                    'ganhou': p.ganhou,
+                }
+                for p in ranking
+            ],
+        }
+
+
+class DesafioParticipante(db.Model):
+    __tablename__ = 'desafio_participantes'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    desafio_id   = db.Column(db.Integer, db.ForeignKey('desafios.id'), nullable=False)
+    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    progresso    = db.Column(db.Float, default=0)   # valor calculado (ex: € poupados)
+    ganhou       = db.Column(db.Boolean, default=False)
+    joined_em    = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (db.UniqueConstraint('desafio_id', 'user_id'),)
+
+
+# ── Recompensas ────────────────────────────────────────────────────────────────
+
+class Recompensa(db.Model):
+    __tablename__ = 'recompensas'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    user_id      = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    desafio_id   = db.Column(db.Integer, db.ForeignKey('desafios.id'), nullable=True)
+    tipo         = db.Column(db.String(50), nullable=False)
+    # tipos: 'vencedor_desafio' | 'streak_7' | 'streak_30' | 'meta_atingida' | 'primeiro_grupo'
+    titulo       = db.Column(db.String(150), nullable=False)
+    descricao    = db.Column(db.String(300))
+    icone        = db.Column(db.String(10), default='🏆')
+    xp           = db.Column(db.Integer, default=0)   # XP ganho
+    vista        = db.Column(db.Boolean, default=False)
+    ganhou_em    = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user    = db.relationship('User', foreign_keys=[user_id])
+    desafio = db.relationship('Desafio', foreign_keys=[desafio_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'tipo': self.tipo,
+            'titulo': self.titulo,
+            'descricao': self.descricao,
+            'icone': self.icone,
+            'xp': self.xp,
+            'vista': self.vista,
+            'ganhou_em': self.ganhou_em.isoformat(),
+            'desafio_id': self.desafio_id,
+        }
+</file>
+
+<file path="verly-mobile/src/screens/DesafioDetalheScreen.js">
+// src/screens/DesafioDetalheScreen.js — Verly Social: Detalhe do Desafio
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  ActivityIndicator, StyleSheet, RefreshControl, Alert,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { desafiosAPI } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+
+const C   = COLORS;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const initials = (n = '') =>
+  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+
+function Avatar({ nome, size = 38, color = C.brand }) {
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size * 0.3,
+      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
+      justifyContent: 'center', alignItems: 'center',
+    }}>
+      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>{initials(nome)}</Text>
+    </View>
+  );
+}
+
+function ProgressBar({ value, max, color = C.brand }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden', marginTop: 4 }}>
+      <View style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: 3 }} />
+    </View>
+  );
+}
+
+const TIPO_INFO = {
+  gastar_menos:     { label: 'Quem gastar menos',        emoji: '💸', desc: 'Ganha quem tiver o menor gasto total no período' },
+  categoria_limite: { label: 'Limite numa categoria',    emoji: '🛒', desc: 'Ganha quem gastar menos nessa categoria' },
+  poupar_valor:     { label: 'Poupar o máximo',          emoji: '💰', desc: 'Ganha quem poupar mais vs o seu orçamento' },
+  streak_dias:      { label: 'Streak de dias',           emoji: '🔥', desc: 'Ganha quem tiver mais dias consecutivos sem gastar' },
+};
+
+export default function DesafioDetalheScreen({ route, navigation }) {
+  const { desafioId } = route.params;
+  const [desafio,    setDesafio]    = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [refresh,    setRefresh]    = useState(false);
+  const [atualizando, setAtualizando] = useState(false);
+  const [terminando,  setTerminando]  = useState(false);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
+    try {
+      const d = await desafiosAPI.detalhe(desafioId);
+      setDesafio(d);
+    } catch (e) {
+      console.log('desafio err', e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  }, [desafioId]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const atualizarProgresso = async () => {
+    setAtualizando(true);
+    try {
+      await desafiosAPI.progresso(desafioId);
+      await load(true);
+    } catch {
+      Alert.alert('Erro', 'Não foi possível atualizar');
+    } finally {
+      setAtualizando(false);
+    }
+  };
+
+  const terminarDesafio = async () => {
+    Alert.alert('Terminar desafio', 'Isto vai calcular o vencedor e atribuir a recompensa. Tens a certeza?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Terminar', style: 'destructive',
+        onPress: async () => {
+          setTerminando(true);
+          try {
+            const result = await desafiosAPI.terminar(desafioId);
+            await load(true);
+            if (result.vencedor) {
+              Alert.alert('🏆 Desafio terminado!', `Vencedor: ${result.vencedor.nome}\n\n${desafio?.recompensa || ''}`);
+            }
+          } catch {
+            Alert.alert('Erro', 'Não foi possível terminar o desafio');
+          } finally {
+            setTerminando(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  if (loading) return (
+    <View style={styles.center}><ActivityIndicator color={C.brand} size="large" /></View>
+  );
+  if (!desafio) return null;
+
+  const hoje        = new Date();
+  const fim         = new Date(desafio.fim);
+  const inicio      = new Date(desafio.inicio);
+  const ativo       = desafio.estado === 'ativo' && fim > hoje;
+  const terminado   = desafio.estado === 'terminado';
+  const diasRestantes = Math.max(0, Math.ceil((fim - hoje) / 86400000));
+  const duracaoTotal  = Math.ceil((fim - inicio) / 86400000);
+  const progTempo     = Math.min(100, ((hoje - inicio) / (fim - inicio)) * 100);
+  const tipoInfo      = TIPO_INFO[desafio.tipo] || TIPO_INFO.gastar_menos;
+  const maxProgresso  = Math.max(...(desafio.ranking || []).map(r => r.progresso), 1);
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backTxt}>←</Text>
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle} numberOfLines={2}>{desafio.titulo}</Text>
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
+      >
+        {/* Status card */}
+        <Animated.View entering={FadeIn} style={[styles.statusCard, terminado && styles.statusCardTerminado]}>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusBadge, { backgroundColor: ativo ? C.brandDim : terminado ? C.yellowDim : C.surface3 }]}>
+              <Text style={[styles.statusBadgeTxt, { color: ativo ? C.brand : terminado ? C.yellow : C.textSub }]}>
+                {ativo ? '⚡ Ativo' : terminado ? '✅ Terminado' : '❌ Cancelado'}
+              </Text>
+            </View>
+            <Text style={styles.statusDias}>
+              {ativo ? `${diasRestantes} dias restantes` : `${duracaoTotal} dias`}
+            </Text>
+          </View>
+
+          {ativo && (
+            <>
+              <Text style={styles.statusProgLabel}>Tempo decorrido</Text>
+              <ProgressBar value={progTempo} max={100} color={C.brand} />
+            </>
+          )}
+
+          {/* Tipo */}
+          <View style={styles.tipoRow}>
+            <Text style={styles.tipoEmoji}>{tipoInfo.emoji}</Text>
+            <View>
+              <Text style={styles.tipoLabel}>{tipoInfo.label}</Text>
+              <Text style={styles.tipoDesc}>{tipoInfo.desc}</Text>
+              {desafio.categoria && <Text style={styles.tipoCategoria}>Categoria: {desafio.categoria}</Text>}
+              {desafio.valor_alvo && <Text style={styles.tipoCategoria}>Alvo: {fmt(desafio.valor_alvo)}€</Text>}
+            </View>
+          </View>
+
+          {/* Recompensa */}
+          {desafio.recompensa && (
+            <View style={styles.recompensaRow}>
+              <Text style={styles.recompensaLabel}>🎁 Recompensa</Text>
+              <Text style={styles.recompensaTxt}>{desafio.recompensa}</Text>
+            </View>
+          )}
+        </Animated.View>
+
+        {/* A minha posição */}
+        {desafio.minha_posicao && (
+          <Animated.View entering={FadeInDown.delay(100)} style={styles.minhaCard}>
+            <Text style={styles.minhaLabel}>A TUA POSIÇÃO</Text>
+            <View style={styles.minhaRow}>
+              <Text style={styles.minhaMedal}>
+                {desafio.minha_posicao === 1 ? '🥇' : desafio.minha_posicao === 2 ? '🥈' : desafio.minha_posicao === 3 ? '🥉' : `#${desafio.minha_posicao}`}
+              </Text>
+              <View>
+                <Text style={styles.minhaPosicao}>#{desafio.minha_posicao} de {desafio.total_participantes}</Text>
+                <Text style={styles.minhaProgresso}>Progresso: {fmt(desafio.meu_progresso)}€</Text>
+              </View>
+              {ativo && (
+                <Pressable onPress={atualizarProgresso} disabled={atualizando} style={styles.atualizarBtn}>
+                  {atualizando ? <ActivityIndicator color={C.brand} size="small" /> : <Text style={styles.atualizarTxt}>↻ Atualizar</Text>}
+                </Pressable>
+              )}
+            </View>
+          </Animated.View>
+        )}
+
+        {/* Ranking */}
+        <Animated.View entering={FadeInDown.delay(200)} style={styles.rankingCard}>
+          <Text style={styles.rankingTitle}>🏆 RANKING</Text>
+          {(desafio.ranking || []).map((p, i) => {
+            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+            return (
+              <View key={p.user_id} style={[styles.rankRow, i === 0 && styles.rankRowFirst]}>
+                <Text style={styles.rankMedal}>{medal}</Text>
+                <Avatar nome={p.nome} size={34} color={p.ganhou ? C.yellow : i === 0 ? C.brand : C.textMid} />
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={[styles.rankNome, i === 0 && { color: C.brand }]}>{p.nome}</Text>
+                    <Text style={[styles.rankProg, i === 0 && { color: C.brand }]}>{fmt(p.progresso)}€</Text>
+                  </View>
+                  <ProgressBar value={p.progresso} max={maxProgresso} color={i === 0 ? C.brand : C.textSub} />
+                </View>
+                {p.ganhou && <Text style={{ fontSize: 18, marginLeft: 6 }}>🏆</Text>}
+              </View>
+            );
+          })}
+        </Animated.View>
+
+        {/* Ações admin */}
+        {ativo && (
+          <Pressable onPress={terminarDesafio} disabled={terminando} style={[styles.terminarBtn, terminando && { opacity: 0.5 }]}>
+            {terminando ? <ActivityIndicator color={C.red} size="small" /> : <Text style={styles.terminarTxt}>Terminar e declarar vencedor</Text>}
+          </Pressable>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:               { flex: 1, backgroundColor: C.bg },
+  center:             { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  header:             { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
+  backBtn:            { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
+  backTxt:            { fontSize: 18, color: C.text },
+  headerTitle:        { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  scroll:             { padding: SPACE.lg, paddingBottom: 100 },
+  // Status
+  statusCard:         { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
+  statusCardTerminado:{ borderColor: C.yellow + '40' },
+  statusRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  statusBadge:        { paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
+  statusBadgeTxt:     { fontSize: FONT.xs, fontWeight: '700' },
+  statusDias:         { fontSize: FONT.xs, color: C.textMid },
+  statusProgLabel:    { fontSize: FONT.xs, color: C.textMid, marginTop: 4 },
+  tipoRow:            { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: C.surface2, borderRadius: RADIUS.sm, padding: 10 },
+  tipoEmoji:          { fontSize: 24 },
+  tipoLabel:          { fontSize: FONT.sm, fontWeight: '700', color: C.text, marginBottom: 2 },
+  tipoDesc:           { fontSize: FONT.xs, color: C.textMid, lineHeight: 16 },
+  tipoCategoria:      { fontSize: FONT.xs, color: C.brand, fontWeight: '600', marginTop: 2 },
+  recompensaRow:      { backgroundColor: C.yellowDim, borderRadius: RADIUS.sm, padding: 10, gap: 3 },
+  recompensaLabel:    { fontSize: FONT.xs, fontWeight: '700', color: C.yellow },
+  recompensaTxt:      { fontSize: FONT.sm, color: C.text },
+  // Minha posição
+  minhaCard:          { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.brand + '30', padding: SPACE.md, marginBottom: SPACE.sm },
+  minhaLabel:         { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 10 },
+  minhaRow:           { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  minhaMedal:         { fontSize: 32 },
+  minhaPosicao:       { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  minhaProgresso:     { fontSize: FONT.sm, color: C.textMid },
+  atualizarBtn:       { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.brandDim, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: C.brand },
+  atualizarTxt:       { fontSize: FONT.xs, color: C.brand, fontWeight: '700' },
+  // Ranking
+  rankingCard:        { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
+  rankingTitle:       { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1, marginBottom: 12 },
+  rankRow:            { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
+  rankRowFirst:       { backgroundColor: C.brandDim, borderRadius: RADIUS.sm, paddingHorizontal: 8, borderBottomWidth: 0 },
+  rankMedal:          { fontSize: 20, width: 30, textAlign: 'center' },
+  rankNome:           { fontSize: FONT.sm, fontWeight: '600', color: C.text },
+  rankProg:           { fontSize: FONT.sm, fontWeight: '700', color: C.textMid },
+  // Terminar
+  terminarBtn:        { borderWidth: 1, borderColor: C.red + '40', borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 8 },
+  terminarTxt:        { fontSize: FONT.sm, color: C.red, fontWeight: '700' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/FinancialGraphScreen.js">
+// src/screens/FinancialGraphScreen.js — Verly Fase 5B: Financial Graph
+// Visualização de padrões comportamentais do utilizador
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable, StyleSheet,
+  Dimensions, ActivityIndicator,
+} from 'react-native';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  BarChart2, TrendingUp, TrendingDown, Calendar,
+  ShoppingBag, Clock, Target, Zap, Brain,
+} from 'lucide-react-native';
+import { dashboardAPI, insightsAPI } from '../services/api';
+import { AIStateBanner } from '../components/DynamicDashboardEngine';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const { width: W } = Dimensions.get('window');
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const CHART_COLORS = ['#7C6FE0', '#FF4D6D', '#FFB300', '#00D68F', '#22D4FD', '#FF7340'];
+
+// ─── Gráfico de barras por categoria ─────────────────────────────────────────
+function CategoriasBars({ categorias = [] }) {
+  const [selected, setSelected] = useState(null);
+  if (!categorias.length) return null;
+  const maxVal = Math.max(...categorias.map(c => c.total || 0), 1);
+  const BAR_W = W - SPACE.lg * 2 - 32;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(50).duration(400).springify()} style={styles.card}>
+      <View style={styles.cardHeader}>
+        <ShoppingBag size={14} color={C.brand} />
+        <Text style={styles.cardTitle}>Gastos por categoria</Text>
+      </View>
+      <View style={{ gap: 8, marginTop: 8 }}>
+        {categorias.slice(0, 6).map((cat, i) => {
+          const pct = (cat.total / maxVal) * 100;
+          const cor = CHART_COLORS[i % CHART_COLORS.length];
+          const isSel = selected === i;
+          return (
+            <Pressable key={i} onPress={() => setSelected(isSel ? null : i)}>
+              <View style={[styles.barRow, isSel && { backgroundColor: cor + '10', borderRadius: RADIUS.xs, padding: 6, margin: -6 }]}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={[styles.barLabel, isSel && { color: C.text, fontWeight: '800' }]}>
+                      {cat.nome || cat.categoria}
+                    </Text>
+                    <Text style={[styles.barVal, { color: cor }]}>{fmt(cat.total)}€</Text>
+                  </View>
+                  <View style={styles.barBg}>
+                    <MotiView
+                      from={{ width: '0%' }}
+                      animate={{ width: `${pct}%` }}
+                      transition={{ type: 'timing', duration: 600, delay: i * 80 }}
+                      style={[styles.barFill, { backgroundColor: cor, height: isSel ? 8 : 5 }]}
+                    />
+                  </View>
+                  {isSel && (
+                    <Animated.View entering={FadeIn.duration(200)}>
+                      <Text style={[styles.barPct, { color: cor }]}>
+                        {Math.round(pct)}% do maior gasto
+                      </Text>
+                    </Animated.View>
+                  )}
+                </View>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Gráfico de evolução mensal ───────────────────────────────────────────────
+function EvolucaoMensal({ evolucao }) {
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  if (!evolucao?.labels?.length) return null;
+
+  const labels = evolucao.labels.slice(-6);
+  const values = evolucao.values.slice(-6);
+  const maxVal = Math.max(...values, 1);
+  const CHART_H = 80;
+  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(100).duration(400).springify()} style={styles.card}>
+      <View style={styles.cardHeader}>
+        <TrendingUp size={14} color={C.brand} />
+        <Text style={styles.cardTitle}>Evolução mensal</Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6, marginTop: 16, height: CHART_H + 40 }}>
+        {labels.map((label, i) => {
+          const val = values[i] || 0;
+          const h = Math.max((val / maxVal) * CHART_H, 4);
+          const m = parseInt(label.split('-')[1], 10) - 1;
+          const labelStr = meses[m] ?? label.slice(-2);
+          const isSel = selectedIdx === i;
+          const cor = isSel ? C.brand : C.brand + '55';
+
+          return (
+            <Pressable
+              key={i}
+              style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 40 }}
+              onPress={() => setSelectedIdx(isSel ? null : i)}
+            >
+              {isSel && (
+                <Animated.View entering={FadeIn.duration(150)}>
+                  <Text style={{ fontSize: 9, color: C.brand, fontWeight: '800', marginBottom: 3 }}>
+                    {val >= 1000 ? `${(val / 1000).toFixed(1)}k` : fmt(val)}€
+                  </Text>
+                </Animated.View>
+              )}
+              <MotiView
+                from={{ height: 0 }}
+                animate={{ height: h }}
+                transition={{ type: 'timing', duration: 500, delay: i * 60 }}
+                style={{ width: '80%', backgroundColor: cor, borderRadius: 4, marginBottom: 6 }}
+              />
+              <Text style={{ fontSize: 10, fontWeight: isSel ? '800' : '600', color: isSel ? C.text : C.textMid }}>
+                {labelStr}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Padrões comportamentais ──────────────────────────────────────────────────
+function PadroesComportamentais({ data, resumo }) {
+  const faturas = data?.ultimas_faturas || [];
+  const cats = data?.categorias || [];
+  const comparacao = data?.comparacao || {};
+  const totalSubs = data?.subscricoes?.total_mensal || 0;
+
+  const padroes = [];
+
+  // Padrão de dia da semana (simulado a partir das últimas faturas)
+  if (faturas.length >= 3) {
+    padroes.push({
+      icon: Clock,
+      titulo: 'Frequência de compras',
+      descricao: `${faturas.length} compras registadas`,
+      cor: C.brand,
+      valor: `${faturas.length} faturas`,
+    });
+  }
+
+  // Padrão de categoria dominante
+  if (cats.length > 0) {
+    const top = cats[0];
+    const total = cats.reduce((s, c) => s + (c.total || 0), 0);
+    const pct = total > 0 ? Math.round((top.total / total) * 100) : 0;
+    padroes.push({
+      icon: ShoppingBag,
+      titulo: 'Categoria dominante',
+      descricao: `${top.nome || top.categoria} representa ${pct}% dos teus gastos`,
+      cor: '#FF4D6D',
+      valor: `${pct}%`,
+    });
+  }
+
+  // Padrão de subscrições
+  if (totalSubs > 0) {
+    padroes.push({
+      icon: Zap,
+      titulo: 'Custo de subscrições',
+      descricao: `${fmt(totalSubs)}€/mês = ${fmt(totalSubs * 12)}€/ano em serviços recorrentes`,
+      cor: C.orange,
+      valor: `${fmt(totalSubs)}€/mês`,
+    });
+  }
+
+  // Tendência
+  if (comparacao.variacao_pct != null) {
+    const subiu = comparacao.subiu;
+    padroes.push({
+      icon: subiu ? TrendingUp : TrendingDown,
+      titulo: 'Tendência de gastos',
+      descricao: subiu
+        ? `Gastos subiram ${comparacao.variacao_pct}% vs mês passado`
+        : `Gastos desceram ${Math.abs(comparacao.variacao_pct)}% vs mês passado`,
+      cor: subiu ? C.red : '#00D68F',
+      valor: `${subiu ? '+' : ''}${comparacao.variacao_pct}%`,
+    });
+  }
+
+  if (!padroes.length) return null;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(150).duration(400).springify()} style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Brain size={14} color={C.brand} />
+        <Text style={styles.cardTitle}>Padrões detetados</Text>
+      </View>
+      <View style={{ gap: 10, marginTop: 8 }}>
+        {padroes.map((p, i) => {
+          const Icon = p.icon;
+          return (
+            <View key={i} style={[styles.padraoRow, { borderLeftColor: p.cor }]}>
+              <View style={[styles.padraoIcon, { backgroundColor: p.cor + '20' }]}>
+                <Icon size={14} color={p.cor} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={styles.padraoTitulo}>{p.titulo}</Text>
+                  <Text style={[styles.padraoValor, { color: p.cor }]}>{p.valor}</Text>
+                </View>
+                <Text style={styles.padraoDesc}>{p.descricao}</Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Score de saúde financeira ────────────────────────────────────────────────
+function HealthScore({ data, resumo }) {
+  const gasto = data?.total_gasto || 0;
+  const orcamento = data?.orcamento || 0;
+  const subs = data?.subscricoes?.total_mensal || 0;
+  const streak = data?.streak || 0;
+
+  // Score simples de 0-100
+  let score = 70;
+  if (orcamento > 0) {
+    const pct = gasto / orcamento;
+    if (pct > 1.2) score -= 30;
+    else if (pct > 1) score -= 15;
+    else if (pct < 0.7) score += 15;
+  }
+  if (subs > 100) score -= 10;
+  if (streak > 7) score += 10;
+  score = Math.min(100, Math.max(0, score));
+
+  const cor = score >= 75 ? '#00D68F' : score >= 50 ? C.yellow : C.red;
+  const label = score >= 75 ? 'Excelente' : score >= 50 ? 'Razoável' : 'Atenção necessária';
+
+  return (
+    <Animated.View entering={FadeInDown.delay(200).duration(400).springify()} style={styles.card}>
+      <View style={styles.cardHeader}>
+        <Target size={14} color={C.brand} />
+        <Text style={styles.cardTitle}>Score de saúde financeira</Text>
+      </View>
+      <View style={{ alignItems: 'center', paddingVertical: 16 }}>
+        <Text style={[styles.scoreNum, { color: cor }]}>{score}</Text>
+        <Text style={[styles.scoreLabel, { color: cor }]}>{label}</Text>
+        <View style={[styles.scoreBarBg, { marginTop: 12 }]}>
+          <MotiView
+            from={{ width: '0%' }}
+            animate={{ width: `${score}%` }}
+            transition={{ type: 'timing', duration: 900 }}
+            style={[styles.scoreBarFill, { backgroundColor: cor }]}
+          />
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 4 }}>
+          <Text style={{ fontSize: 9, color: C.textMid }}>0</Text>
+          <Text style={{ fontSize: 9, color: C.textMid }}>100</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ─── Ecrã principal ───────────────────────────────────────────────────────────
+export default function FinancialGraphScreen({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(null);
+  const [resumo, setResumo] = useState(null);
+
+  useFocusEffect(useCallback(() => { load(); }, []));
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [dashData, insightsData] = await Promise.all([
+        dashboardAPI.get(),
+        insightsAPI.get(),
+      ]);
+      setData(dashData);
+      if (insightsData?.resumo) setResumo(insightsData.resumo);
+    } catch (e) {}
+    finally { setLoading(false); }
+  };
+
+  if (loading) return (
+    <View style={styles.loadingWrap}>
+      <ActivityIndicator size="large" color={C.brand} />
+      <Text style={styles.loadingText}>A mapear os teus padrões...</Text>
+    </View>
+  );
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>Padrões Financeiros</Text>
+          <Text style={styles.headerSub}>Visualização do teu comportamento</Text>
+        </View>
+        <View style={[styles.headerBadge, { backgroundColor: C.brand + '20' }]}>
+          <BarChart2 size={18} color={C.brand} />
+        </View>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingHorizontal: SPACE.lg, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <AIStateBanner resumo={resumo} />
+        <HealthScore data={data} resumo={resumo} />
+        <EvolucaoMensal evolucao={data?.evolucao} />
+        <CategoriasBars categorias={data?.categorias} />
+        <PadroesComportamentais data={data} resumo={resumo} />
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg, gap: 12 },
+  loadingText: { color: C.textMid, fontSize: FONT.sm },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACE.lg, paddingTop: SPACE.xl, paddingBottom: SPACE.md },
+  headerTitle: { fontSize: FONT.xxl, fontWeight: '800', color: C.text },
+  headerSub: { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+  headerBadge: { width: 44, height: 44, borderRadius: RADIUS.md, justifyContent: 'center', alignItems: 'center' },
+  card: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cardTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  barRow: { gap: 4 },
+  barLabel: { fontSize: FONT.xs, color: C.textMid, fontWeight: '600' },
+  barVal: { fontSize: FONT.xs, fontWeight: '800' },
+  barBg: { height: 5, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' },
+  barFill: { borderRadius: 3 },
+  barPct: { fontSize: 10, marginTop: 3, fontWeight: '600' },
+  padraoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingLeft: 8, borderLeftWidth: 2, paddingVertical: 4 },
+  padraoIcon: { width: 30, height: 30, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center' },
+  padraoTitulo: { fontSize: FONT.xs, fontWeight: '700', color: C.text },
+  padraoValor: { fontSize: FONT.xs, fontWeight: '800' },
+  padraoDesc: { fontSize: 10, color: C.textMid, marginTop: 2, lineHeight: 14 },
+  scoreNum: { fontSize: 56, fontWeight: '900' },
+  scoreLabel: { fontSize: FONT.sm, fontWeight: '700', marginTop: -4 },
+  scoreBarBg: { width: '100%', height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden' },
+  scoreBarFill: { height: '100%', borderRadius: 3 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/GrupoDetalheScreen.js">
+// src/screens/GrupoDetalheScreen.js — Verly Social: Detalhe de Grupo
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable, TextInput,
+  Alert, ActivityIndicator, StyleSheet, RefreshControl, Modal,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { gruposAPI, desafiosAPI, amigosAPI } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+
+const C   = COLORS;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+const initials = (n = '') =>
+  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+
+function Avatar({ nome, size = 38, color = C.brand }) {
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size * 0.3,
+      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
+      justifyContent: 'center', alignItems: 'center',
+    }}>
+      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>{initials(nome)}</Text>
+    </View>
+  );
+}
+
+const TIPOS_DESAFIO = [
+  { key: 'gastar_menos',      label: 'Gastar menos no total',        emoji: '💸' },
+  { key: 'categoria_limite',  label: 'Limite numa categoria',        emoji: '🛒' },
+  { key: 'poupar_valor',      label: 'Poupar o máximo possível',     emoji: '💰' },
+  { key: 'streak_dias',       label: 'Streak de dias sem gastar',    emoji: '🔥' },
+];
+
+function RankingRow({ posicao, participante }) {
+  const medal = posicao === 1 ? '🥇' : posicao === 2 ? '🥈' : posicao === 3 ? '🥉' : `#${posicao}`;
+  return (
+    <View style={styles.rankRow}>
+      <Text style={styles.rankMedal}>{medal}</Text>
+      <Avatar nome={participante.nome} size={32} color={participante.ganhou ? C.yellow : C.brand} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rankNome}>{participante.nome}</Text>
+        <Text style={styles.rankProg}>{fmt(participante.progresso)}€</Text>
+      </View>
+      {participante.ganhou && <Text style={styles.rankTrophy}>🏆</Text>}
+    </View>
+  );
+}
+
+function DesafioCard({ desafio, navigation }) {
+  const hoje   = new Date();
+  const fim    = new Date(desafio.fim);
+  const ativo  = desafio.estado === 'ativo' && fim > hoje;
+  const diasRestantes = Math.max(0, Math.ceil((fim - hoje) / 86400000));
+
+  return (
+    <Pressable
+      style={[styles.desafioCard, !ativo && styles.desafioCardInativo]}
+      onPress={() => navigation.navigate('DesafioDetalhe', { desafioId: desafio.id })}
+    >
+      <View style={styles.desafioTop}>
+        <View style={[styles.desafioBadge, { backgroundColor: ativo ? C.brandDim : C.surface3 }]}>
+          <Text style={[styles.desafioBadgeTxt, { color: ativo ? C.brand : C.textSub }]}>
+            {ativo ? `${diasRestantes}d restantes` : desafio.estado === 'terminado' ? 'Terminado' : 'Cancelado'}
+          </Text>
+        </View>
+        {desafio.minha_posicao && (
+          <Text style={styles.desafioPos}>
+            {desafio.minha_posicao === 1 ? '🥇' : desafio.minha_posicao === 2 ? '🥈' : desafio.minha_posicao === 3 ? '🥉' : `#${desafio.minha_posicao}`}
+          </Text>
+        )}
+      </View>
+      <Text style={styles.desafioTitulo}>{desafio.titulo}</Text>
+      {desafio.recompensa ? <Text style={styles.desafioRecompensa}>🎁 {desafio.recompensa}</Text> : null}
+      <View style={styles.desafioMeta}>
+        <Text style={styles.desafioMetaTxt}>{desafio.total_participantes} participantes</Text>
+        <Text style={styles.desafioMetaTxt}>Progresso: {fmt(desafio.meu_progresso)}€</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+export default function GrupoDetalheScreen({ route, navigation }) {
+  const { grupoId } = route.params;
+  const [grupo,    setGrupo]    = useState(null);
+  const [desafios, setDesafios] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [refresh,  setRefresh]  = useState(false);
+  const [modal,    setModal]    = useState(false);
+  const [amigos,   setAmigos]   = useState([]);
+
+  // Form criar desafio
+  const [titulo,      setTitulo]     = useState('');
+  const [descricao,   setDescricao]  = useState('');
+  const [tipo,        setTipo]       = useState('gastar_menos');
+  const [categoria,   setCategoria]  = useState('');
+  const [valorAlvo,   setValorAlvo]  = useState('');
+  const [recompensa,  setRecompensa] = useState('');
+  const [duracao,     setDuracao]    = useState('30'); // dias
+  const [criando,     setCriando]    = useState(false);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
+    try {
+      const [g, d] = await Promise.all([
+        gruposAPI.detalhe(grupoId),
+        desafiosAPI.listar(grupoId),
+      ]);
+      setGrupo(g);
+      setDesafios(Array.isArray(d) ? d : []);
+    } catch (e) {
+      console.log('grupo detalhe err', e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  }, [grupoId]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const abrirModalDesafio = async () => {
+    try {
+      const data = await amigosAPI.listar();
+      setAmigos(Array.isArray(data?.amigos) ? data.amigos : []);
+    } catch {}
+    setModal(true);
+  };
+
+  const criarDesafio = async () => {
+    if (!titulo.trim()) return Alert.alert('Ops', 'Dá um título ao desafio');
+    setCriando(true);
+    try {
+      const inicio = new Date().toISOString();
+      const fim    = new Date(Date.now() + parseInt(duracao || 30) * 86400000).toISOString();
+      await desafiosAPI.criar(grupoId, {
+        titulo:     titulo.trim(),
+        descricao:  descricao.trim(),
+        tipo,
+        categoria:  categoria.trim() || undefined,
+        valor_alvo: valorAlvo ? parseFloat(valorAlvo) : undefined,
+        recompensa: recompensa.trim() || '🏆 Vencedor do desafio',
+        inicio, fim,
+      });
+      setModal(false);
+      setTitulo(''); setDescricao(''); setTipo('gastar_menos');
+      setCategoria(''); setValorAlvo(''); setRecompensa(''); setDuracao('30');
+      await load();
+    } catch {
+      Alert.alert('Erro', 'Não foi possível criar o desafio');
+    } finally {
+      setCriando(false);
+    }
+  };
+
+  const convidarAmigo = async (amigoId) => {
+    try {
+      await gruposAPI.convidar(grupoId, amigoId);
+      Alert.alert('✅', 'Amigo adicionado ao grupo!');
+      await load();
+    } catch {
+      Alert.alert('Erro', 'Não foi possível convidar');
+    }
+  };
+
+  if (loading) return (
+    <View style={styles.center}>
+      <ActivityIndicator color={C.brand} size="large" />
+    </View>
+  );
+
+  if (!grupo) return null;
+
+  const membrosIds = grupo.membros.map(m => m.id);
+  const amigosForaDoGrupo = amigos.filter(a => !membrosIds.includes(a.id));
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backTxt}>←</Text>
+        </Pressable>
+        <View style={styles.headerEmoji}>
+          <Text style={{ fontSize: 28 }}>{grupo.emoji}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>{grupo.nome}</Text>
+          {grupo.descricao ? <Text style={styles.headerSub} numberOfLines={1}>{grupo.descricao}</Text> : null}
+        </View>
+        {grupo.sou_admin && (
+          <Pressable onPress={abrirModalDesafio} style={styles.addBtn}>
+            <Text style={styles.addTxt}>+ Desafio</Text>
+          </Pressable>
+        )}
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
+      >
+        {/* Membros */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>MEMBROS ({grupo.total_membros})</Text>
+          <View style={styles.membrosRow}>
+            {grupo.membros.map(m => (
+              <View key={m.id} style={styles.membroItem}>
+                <Avatar nome={m.nome} size={44} color={m.id === grupo.criador_id ? C.yellow : C.brand} />
+                <Text style={styles.membroNome} numberOfLines={1}>{m.nome.split(' ')[0]}</Text>
+                {m.id === grupo.criador_id && <Text style={styles.adminTag}>admin</Text>}
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* Convidar amigos */}
+        {grupo.sou_admin && amigosForaDoGrupo.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>CONVIDAR AMIGOS</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {amigosForaDoGrupo.map(a => (
+                <Pressable key={a.id} onPress={() => convidarAmigo(a.id)} style={styles.convidarChip}>
+                  <Avatar nome={a.nome} size={28} />
+                  <Text style={styles.convidarNome}>{a.nome.split(' ')[0]}</Text>
+                  <Text style={styles.convidarPlus}>+</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* Desafios */}
+        <View style={styles.section}>
+          <View style={styles.sectionRow}>
+            <Text style={styles.sectionTitle}>DESAFIOS</Text>
+            {grupo.sou_admin && (
+              <Pressable onPress={abrirModalDesafio}>
+                <Text style={styles.sectionLink}>+ Criar</Text>
+              </Pressable>
+            )}
+          </View>
+          {desafios.length === 0 ? (
+            <View style={styles.emptyDesafios}>
+              <Text style={{ fontSize: 32, marginBottom: 8 }}>🎯</Text>
+              <Text style={styles.emptyDesafiosTxt}>Ainda sem desafios. {grupo.sou_admin ? 'Cria o primeiro!' : 'O admin pode criar desafios.'}</Text>
+            </View>
+          ) : (
+            desafios.map((d, i) => (
+              <Animated.View key={d.id} entering={FadeInDown.delay(i * 60)}>
+                <DesafioCard desafio={d} navigation={navigation} />
+              </Animated.View>
+            ))
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Modal criar desafio */}
+      <Modal visible={modal} transparent animationType="slide" onRequestClose={() => setModal(false)}>
+        <View style={styles.overlay}>
+          <Pressable style={styles.overlayBg} onPress={() => setModal(false)} />
+          <ScrollView style={styles.sheet} keyboardShouldPersistTaps="handled">
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Novo Desafio</Text>
+
+            <TextInput style={styles.input} placeholder="Título do desafio" placeholderTextColor={C.textSub} value={titulo} onChangeText={setTitulo} />
+            <TextInput style={[styles.input, { height: 60 }]} placeholder="Descrição (opcional)" placeholderTextColor={C.textSub} value={descricao} onChangeText={setDescricao} multiline />
+
+            <Text style={styles.sheetLabel}>TIPO DE DESAFIO</Text>
+            {TIPOS_DESAFIO.map(t => (
+              <Pressable key={t.key} onPress={() => setTipo(t.key)} style={[styles.tipoBtn, tipo === t.key && styles.tipoBtnActive]}>
+                <Text style={styles.tipoEmoji}>{t.emoji}</Text>
+                <Text style={[styles.tipoLabel, tipo === t.key && { color: C.brand }]}>{t.label}</Text>
+              </Pressable>
+            ))}
+
+            {tipo === 'categoria_limite' && (
+              <TextInput style={styles.input} placeholder="Categoria (ex: delivery, lazer)" placeholderTextColor={C.textSub} value={categoria} onChangeText={setCategoria} />
+            )}
+
+            {(tipo !== 'streak_dias') && (
+              <TextInput style={styles.input} placeholder="Valor alvo em € (ex: 200)" placeholderTextColor={C.textSub} value={valorAlvo} onChangeText={setValorAlvo} keyboardType="numeric" />
+            )}
+
+            <TextInput style={styles.input} placeholder="Duração em dias (ex: 30)" placeholderTextColor={C.textSub} value={duracao} onChangeText={setDuracao} keyboardType="numeric" />
+            <TextInput style={styles.input} placeholder="Recompensa (ex: 🍕 Pizza para o vencedor)" placeholderTextColor={C.textSub} value={recompensa} onChangeText={setRecompensa} />
+
+            <Pressable onPress={criarDesafio} disabled={criando} style={[styles.criarBtn, criando && { opacity: 0.5 }]}>
+              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Lançar Desafio 🚀</Text>}
+            </Pressable>
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:             { flex: 1, backgroundColor: C.bg },
+  center:           { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  header:           { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 10 },
+  backBtn:          { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
+  backTxt:          { fontSize: 18, color: C.text },
+  headerEmoji:      { width: 48, height: 48, borderRadius: 14, backgroundColor: C.brandDim, justifyContent: 'center', alignItems: 'center' },
+  headerTitle:      { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  headerSub:        { fontSize: FONT.xs, color: C.textMid },
+  addBtn:           { paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
+  addTxt:           { fontSize: FONT.xs, fontWeight: '800', color: '#fff' },
+  scroll:           { padding: SPACE.lg, paddingBottom: 100 },
+  section:          { marginBottom: SPACE.lg },
+  sectionRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  sectionTitle:     { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1.2, marginBottom: 10 },
+  sectionLink:      { fontSize: FONT.sm, color: C.brand, fontWeight: '700' },
+  membrosRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  membroItem:       { alignItems: 'center', gap: 4, width: 56 },
+  membroNome:       { fontSize: FONT.xs, color: C.textMid, textAlign: 'center' },
+  adminTag:         { fontSize: 9, color: C.yellow, fontWeight: '700' },
+  convidarChip:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.surface, borderRadius: RADIUS.pill, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8, borderWidth: 1, borderColor: C.border },
+  convidarNome:     { fontSize: FONT.xs, color: C.text, fontWeight: '600' },
+  convidarPlus:     { fontSize: 14, color: C.brand, fontWeight: '800' },
+  // Desafio card
+  desafioCard:      { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
+  desafioCardInativo:{ opacity: 0.6 },
+  desafioTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  desafioBadge:     { paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
+  desafioBadgeTxt:  { fontSize: FONT.xs, fontWeight: '700' },
+  desafioPos:       { fontSize: 20 },
+  desafioTitulo:    { fontSize: FONT.md, fontWeight: '700', color: C.text, marginBottom: 4 },
+  desafioRecompensa:{ fontSize: FONT.xs, color: C.yellow, marginBottom: 8 },
+  desafioMeta:      { flexDirection: 'row', justifyContent: 'space-between' },
+  desafioMetaTxt:   { fontSize: FONT.xs, color: C.textSub },
+  emptyDesafios:    { alignItems: 'center', paddingVertical: 32 },
+  emptyDesafiosTxt: { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20 },
+  // Modal
+  overlay:          { flex: 1, justifyContent: 'flex-end' },
+  overlayBg:        { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet:            { backgroundColor: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, maxHeight: '90%' },
+  sheetHandle:      { width: 40, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 16 },
+  sheetTitle:       { fontSize: FONT.xl, fontWeight: '800', color: C.text, marginBottom: 16 },
+  sheetLabel:       { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 8, marginTop: 4 },
+  tipoBtn:          { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: RADIUS.sm, marginBottom: 6, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border },
+  tipoBtnActive:    { borderColor: C.brand, backgroundColor: C.brandDim },
+  tipoEmoji:        { fontSize: 18 },
+  tipoLabel:        { fontSize: FONT.sm, color: C.textMid, fontWeight: '600' },
+  input:            { backgroundColor: C.surface2, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, padding: 12, color: C.text, fontSize: FONT.md, marginBottom: 10 },
+  criarBtn:         { backgroundColor: C.brand, borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 12 },
+  criarBtnTxt:      { fontSize: FONT.md, fontWeight: '800', color: '#fff' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/GruposScreen.js">
+// src/screens/GruposScreen.js — Verly Social: Grupos
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable, TextInput,
+  Alert, ActivityIndicator, StyleSheet, RefreshControl, Modal,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { gruposAPI, amigosAPI } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+
+const C   = COLORS;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const initials = (n = '') =>
+  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+
+function Avatar({ nome, size = 38, color = C.brand }) {
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: size * 0.3,
+      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
+      justifyContent: 'center', alignItems: 'center',
+    }}>
+      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>
+        {initials(nome)}
+      </Text>
+    </View>
+  );
+}
+
+function MembrosRow({ membros = [] }) {
+  const shown = membros.slice(0, 4);
+  const extra = membros.length - shown.length;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      {shown.map((m, i) => (
+        <View key={m.id} style={{ marginLeft: i === 0 ? 0 : -10, zIndex: shown.length - i }}>
+          <Avatar nome={m.nome} size={28} />
+        </View>
+      ))}
+      {extra > 0 && (
+        <View style={{
+          marginLeft: -10, width: 28, height: 28, borderRadius: 8,
+          backgroundColor: C.surface3, justifyContent: 'center', alignItems: 'center',
+        }}>
+          <Text style={{ fontSize: 9, fontWeight: '800', color: C.textMid }}>+{extra}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const EMOJIS = ['👥', '💰', '🎯', '🏆', '🚀', '💪', '🌟', '🎮', '🔥', '✨'];
+
+export default function GruposScreen({ navigation }) {
+  const [grupos,   setGrupos]   = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [refresh,  setRefresh]  = useState(false);
+  const [modal,    setModal]    = useState(false);
+  const [amigos,   setAmigos]   = useState([]);
+
+  // Form criar grupo
+  const [nome,        setNome]       = useState('');
+  const [descricao,   setDescricao]  = useState('');
+  const [emoji,       setEmoji]      = useState('👥');
+  const [convidados,  setConvidados] = useState([]);
+  const [criando,     setCriando]    = useState(false);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
+    try {
+      const data = await gruposAPI.listar();
+      setGrupos(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.log('grupos err', e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  }, []);
+
+  const loadAmigos = async () => {
+    try {
+      const data = await amigosAPI.listar();
+      setAmigos(Array.isArray(data?.amigos) ? data.amigos : []);
+    } catch {}
+  };
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const abrirModal = async () => {
+    await loadAmigos();
+    setModal(true);
+  };
+
+  const toggleConvidado = (id) => {
+    setConvidados(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const criar = async () => {
+    if (!nome.trim()) return Alert.alert('Ops', 'Dá um nome ao grupo');
+    setCriando(true);
+    try {
+      const grupo = await gruposAPI.criar({
+        nome: nome.trim(),
+        descricao: descricao.trim(),
+        emoji,
+        amigos_ids: convidados,
+      });
+      setModal(false);
+      setNome(''); setDescricao(''); setEmoji('👥'); setConvidados([]);
+      await load();
+      navigation.navigate('GrupoDetalhe', { grupoId: grupo.id });
+    } catch (e) {
+      Alert.alert('Erro', 'Não foi possível criar o grupo');
+    } finally {
+      setCriando(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={C.brand} size="large" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backTxt}>←</Text>
+        </Pressable>
+        <View>
+          <Text style={styles.headerTitle}>Grupos</Text>
+          <Text style={styles.headerSub}>Desafios com os teus amigos</Text>
+        </View>
+        <Pressable onPress={abrirModal} style={styles.addBtn}>
+          <Text style={styles.addTxt}>+ Novo</Text>
+        </Pressable>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
+      >
+        {grupos.length === 0 ? (
+          <Animated.View entering={FadeIn} style={styles.empty}>
+            <Text style={styles.emptyEmoji}>👥</Text>
+            <Text style={styles.emptyTitle}>Ainda sem grupos</Text>
+            <Text style={styles.emptySub}>Cria um grupo com os teus amigos e lança desafios financeiros</Text>
+            <Pressable onPress={abrirModal} style={styles.emptyBtn}>
+              <Text style={styles.emptyBtnTxt}>Criar primeiro grupo</Text>
+            </Pressable>
+          </Animated.View>
+        ) : (
+          grupos.map((g, i) => (
+            <Animated.View key={g.id} entering={FadeInDown.delay(i * 60)}>
+              <Pressable
+                style={styles.card}
+                onPress={() => navigation.navigate('GrupoDetalhe', { grupoId: g.id })}
+              >
+                <View style={styles.cardLeft}>
+                  <Text style={styles.cardEmoji}>{g.emoji}</Text>
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={styles.cardNome}>{g.nome}</Text>
+                  {g.descricao ? <Text style={styles.cardDesc} numberOfLines={1}>{g.descricao}</Text> : null}
+                  <View style={styles.cardMeta}>
+                    <MembrosRow membros={g.membros} />
+                    <Text style={styles.cardMetaTxt}>{g.total_membros} membro{g.total_membros !== 1 ? 's' : ''}</Text>
+                  </View>
+                </View>
+                <Text style={styles.cardArrow}>›</Text>
+              </Pressable>
+            </Animated.View>
+          ))
+        )}
+      </ScrollView>
+
+      {/* Modal criar grupo */}
+      <Modal visible={modal} transparent animationType="slide" onRequestClose={() => setModal(false)}>
+        <View style={styles.overlay}>
+          <Pressable style={styles.overlayBg} onPress={() => setModal(false)} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Novo Grupo</Text>
+
+            {/* Emoji picker */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.emojiRow}>
+              {EMOJIS.map(e => (
+                <Pressable key={e} onPress={() => setEmoji(e)} style={[styles.emojiBtn, emoji === e && styles.emojiBtnActive]}>
+                  <Text style={styles.emojiTxt}>{e}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <TextInput
+              style={styles.input}
+              placeholder="Nome do grupo"
+              placeholderTextColor={C.textSub}
+              value={nome}
+              onChangeText={setNome}
+              maxLength={60}
+            />
+            <TextInput
+              style={[styles.input, { height: 70 }]}
+              placeholder="Descrição (opcional)"
+              placeholderTextColor={C.textSub}
+              value={descricao}
+              onChangeText={setDescricao}
+              multiline
+              maxLength={200}
+            />
+
+            {amigos.length > 0 && (
+              <>
+                <Text style={styles.sheetLabel}>Convidar amigos</Text>
+                <ScrollView style={{ maxHeight: 160 }}>
+                  {amigos.map(a => {
+                    const sel = convidados.includes(a.id);
+                    return (
+                      <Pressable key={a.id} onPress={() => toggleConvidado(a.id)}
+                        style={[styles.amigoRow, sel && styles.amigoRowSel]}>
+                        <Avatar nome={a.nome} size={34} color={sel ? C.green : C.brand} />
+                        <Text style={styles.amigoNome}>{a.nome}</Text>
+                        {sel && <Text style={styles.checkmark}>✓</Text>}
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+              </>
+            )}
+
+            <Pressable onPress={criar} disabled={criando} style={[styles.criarBtn, criando && { opacity: 0.5 }]}>
+              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Criar Grupo</Text>}
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:       { flex: 1, backgroundColor: C.bg },
+  center:     { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  header:     { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
+  backBtn:    { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
+  backTxt:    { fontSize: 18, color: C.text },
+  headerTitle:{ fontSize: FONT.xl, fontWeight: '800', color: C.text },
+  headerSub:  { fontSize: FONT.xs, color: C.textMid, marginTop: 1 },
+  addBtn:     { marginLeft: 'auto', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
+  addTxt:     { fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
+  scroll:     { padding: SPACE.lg, paddingBottom: 100 },
+  // Empty
+  empty:      { alignItems: 'center', paddingTop: 60 },
+  emptyEmoji: { fontSize: 48, marginBottom: 16 },
+  emptyTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text, marginBottom: 8 },
+  emptySub:   { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20, paddingHorizontal: 20, marginBottom: 24 },
+  emptyBtn:   { paddingHorizontal: 24, paddingVertical: 12, backgroundColor: C.brand, borderRadius: RADIUS.pill },
+  emptyBtnTxt:{ fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
+  // Card
+  card:       { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
+  cardLeft:   { width: 48, height: 48, borderRadius: 14, backgroundColor: C.brandDim, justifyContent: 'center', alignItems: 'center' },
+  cardEmoji:  { fontSize: 24 },
+  cardBody:   { flex: 1, gap: 3 },
+  cardNome:   { fontSize: FONT.md, fontWeight: '700', color: C.text },
+  cardDesc:   { fontSize: FONT.xs, color: C.textMid },
+  cardMeta:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  cardMetaTxt:{ fontSize: FONT.xs, color: C.textSub },
+  cardArrow:  { fontSize: 22, color: C.textSub },
+  // Modal
+  overlay:    { flex: 1, justifyContent: 'flex-end' },
+  overlayBg:  { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
+  sheet:      { backgroundColor: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, paddingBottom: 36 },
+  sheetHandle:{ width: 40, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 16 },
+  sheetTitle: { fontSize: FONT.xl, fontWeight: '800', color: C.text, marginBottom: 16 },
+  sheetLabel: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 8, marginTop: 8 },
+  emojiRow:   { marginBottom: 14 },
+  emojiBtn:   { width: 44, height: 44, borderRadius: 12, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  emojiBtnActive: { backgroundColor: C.brandDim, borderWidth: 1.5, borderColor: C.brand },
+  emojiTxt:   { fontSize: 22 },
+  input:      { backgroundColor: C.surface2, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, padding: 12, color: C.text, fontSize: FONT.md, marginBottom: 10 },
+  amigoRow:   { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: RADIUS.sm, marginBottom: 4, gap: 10 },
+  amigoRowSel:{ backgroundColor: C.brandDim },
+  amigoNome:  { flex: 1, fontSize: FONT.md, color: C.text, fontWeight: '600' },
+  checkmark:  { fontSize: 16, color: C.green, fontWeight: '800' },
+  criarBtn:   { backgroundColor: C.brand, borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 16 },
+  criarBtnTxt:{ fontSize: FONT.md, fontWeight: '800', color: '#fff' },
+});
+</file>
+
+<file path="verly-mobile/src/screens/IntelligenceFeedScreen.js">
+// src/screens/IntelligenceFeedScreen.js — Verly Fase 5B: Feed de Inteligência
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable, StyleSheet,
+  Dimensions, RefreshControl, ActivityIndicator,
+} from 'react-native';
+import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
+import { MotiView } from 'moti';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  Zap, TrendingUp, TrendingDown, AlertTriangle,
+  CheckCircle, Target, Calendar, BarChart2,
+  ChevronRight, RefreshCw, Brain, Flame, ArrowUpRight,
+} from 'lucide-react-native';
+import { dashboardAPI, insightsAPI } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
+
+const FEED_TIPOS = {
+  alerta:    { cor: C.red,     icon: AlertTriangle, bg: '#FF4D6D15' },
+  positivo:  { cor: '#00D68F', icon: CheckCircle,   bg: '#00D68F15' },
+  tendencia: { cor: C.yellow,  icon: TrendingUp,    bg: '#FFB30015' },
+  dica:      { cor: C.brand,   icon: Zap,           bg: C.brand + '15' },
+  previsao:  { cor: '#22D4FD', icon: Calendar,      bg: '#22D4FD15' },
+};
+
+function FeedCard({ item, index, onPress }) {
+  const tipo = FEED_TIPOS[item.tipo] || FEED_TIPOS.dica;
+  const Icon = tipo.icon;
+  const isUrgente = item.tipo === 'alerta';
+
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 60).duration(400).springify()}>
+      <Pressable
+        onPress={onPress}
+        style={[styles.feedCard, {
+          borderLeftColor: tipo.cor,
+          backgroundColor: isUrgente ? tipo.bg : C.surface,
+        }]}
+      >
+        <View style={[styles.feedIconWrap, { backgroundColor: tipo.cor + '20' }]}>
+          <Icon size={16} color={tipo.cor} />
+        </View>
+        <View style={{ flex: 1 }}>
+          {item.icone && <Text style={styles.feedEmoji}>{item.icone}</Text>}
+          <Text style={[styles.feedTexto, isUrgente && { color: C.text, fontWeight: '700' }]}>
+            {item.texto}
+          </Text>
+          {item.valor != null && (
+            <Text style={[styles.feedValor, { color: tipo.cor }]}>{fmt(item.valor)}€</Text>
+          )}
+        </View>
+        {onPress && <ChevronRight size={14} color={C.textMid} />}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+function CockpitHeader({ data, resumo }) {
+  const gasto = data?.total_gasto || 0;
+  const orcamento = data?.orcamento || 0;
+  const pct = orcamento > 0 ? Math.round((gasto / orcamento) * 100) : 0;
+  const cor = pct > 100 ? C.red : pct > 80 ? C.yellow : '#00D68F';
+  const mood = data?.mood;
+
+  return (
+    <Animated.View entering={FadeIn.duration(500)} style={styles.cockpit}>
+      <View style={styles.cockpitTop}>
+        <View>
+          <Text style={styles.cockpitLabel}>COCKPIT FINANCEIRO</Text>
+          <Text style={[styles.cockpitGasto, { color: cor }]}>{fmt(gasto)}€</Text>
+          {orcamento > 0 && (
+            <Text style={styles.cockpitSub}>{pct}% do orçamento de {fmt(orcamento)}€</Text>
+          )}
+        </View>
+        <View style={[styles.cockpitBadge, { backgroundColor: cor + '20', borderColor: cor + '40' }]}>
+          <Text style={[styles.cockpitPct, { color: cor }]}>{pct}%</Text>
+          {pct > 100 ? <TrendingUp size={14} color={cor} /> : <TrendingDown size={14} color={cor} />}
+        </View>
+      </View>
+      <View style={styles.cockpitBarBg}>
+        <MotiView
+          from={{ width: '0%' }}
+          animate={{ width: `${Math.min(pct, 100)}%` }}
+          transition={{ type: 'timing', duration: 800 }}
+          style={[styles.cockpitBarFill, { backgroundColor: cor }]}
+        />
+      </View>
+      {mood?.frase && (
+        <View style={styles.cockpitMood}>
+          <Brain size={12} color={C.brand} />
+          <Text style={styles.cockpitMoodText} numberOfLines={2}>{mood.frase}</Text>
+        </View>
+      )}
+    </Animated.View>
+  );
+}
+
+function QuickMetrics({ data, resumo }) {
+  const comparacao = data?.comparacao || {};
+  const variacao = comparacao.variacao_pct;
+  const subiu = comparacao.subiu;
+  const streak = data?.streak || 0;
+  const previsao = resumo?.previsao_mensal;
+
+  const metricas = [
+    { label: 'vs. mês anterior', valor: variacao != null ? `${subiu ? '+' : ''}${variacao}%` : '—', cor: subiu ? C.red : '#00D68F', icon: subiu ? TrendingUp : TrendingDown },
+    { label: 'streak', valor: `${streak}d`, cor: '#FF7340', icon: Flame },
+    { label: 'previsão fim mês', valor: previsao ? `${fmt(previsao)}€` : '—', cor: C.brand, icon: Calendar },
+  ];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(100).duration(400).springify()} style={styles.metricsRow}>
+      {metricas.map((m, i) => {
+        const Icon = m.icon;
+        return (
+          <View key={i} style={styles.metricCard}>
+            <Icon size={13} color={m.cor} />
+            <Text style={[styles.metricValor, { color: m.cor }]}>{m.valor}</Text>
+            <Text style={styles.metricLabel}>{m.label}</Text>
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+}
+
+function GraphTeaser({ data, navigation }) {
+  const cats = data?.categorias || [];
+  const top = cats.slice(0, 3);
+  if (!top.length) return null;
+  const maxVal = Math.max(...top.map(c => c.total || 0), 1);
+  const cores = ['#7C6FE0', '#FF4D6D', '#FFB300'];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(150).duration(400).springify()} style={styles.graphTeaser}>
+      <Pressable onPress={() => navigation?.navigate?.('FinancialGraph')} style={{ padding: SPACE.md }}>
+        <View style={styles.graphTeaserHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <BarChart2 size={14} color={C.brand} />
+            <Text style={styles.graphTeaserTitle}>Padrões comportamentais</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+            <Text style={{ fontSize: FONT.xs, color: C.brand, fontWeight: '700' }}>Ver gráfico</Text>
+            <ArrowUpRight size={12} color={C.brand} />
+          </View>
+        </View>
+        <View style={{ gap: 8, marginTop: 12 }}>
+          {top.map((cat, i) => (
+            <View key={i} style={styles.miniBarRow}>
+              <Text style={styles.miniBarLabel} numberOfLines={1}>{cat.nome || cat.categoria}</Text>
+              <View style={styles.miniBarBg}>
+                <MotiView
+                  from={{ width: '0%' }}
+                  animate={{ width: `${(cat.total / maxVal) * 100}%` }}
+                  transition={{ type: 'timing', duration: 600, delay: i * 100 }}
+                  style={[styles.miniBarFill, { backgroundColor: cores[i] }]}
+                />
+              </View>
+              <Text style={[styles.miniBarVal, { color: cores[i] }]}>{fmt(cat.total)}€</Text>
+            </View>
+          ))}
+        </View>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+export default function IntelligenceFeedScreen({ navigation }) {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [data, setData] = useState(null);
+  const [resumo, setResumo] = useState(null);
+
+  useFocusEffect(useCallback(() => { load(); }, []));
+
+  const load = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true); else setLoading(true);
+    try {
+      const [dashData, insightsData] = await Promise.all([
+        dashboardAPI.get(),
+        insightsAPI.get(),
+      ]);
+      setData(dashData);
+      if (insightsData?.resumo) setResumo(insightsData.resumo);
+    } catch (e) {}
+    finally { setLoading(false); setRefreshing(false); }
+  };
+
+  const feed = data?.feed || [];
+  const alertas = feed.filter(f => f.tipo === 'alerta');
+  const insights = feed.filter(f => f.tipo !== 'alerta');
+
+  if (loading) return (
+    <View style={styles.loadingWrap}>
+      <ActivityIndicator size="large" color={C.brand} />
+      <Text style={styles.loadingText}>A analisar os teus padrões...</Text>
+    </View>
+  );
+
+  return (
+    <View style={styles.root}>
+      <View style={styles.header}>
+        <View>
+          <Text style={styles.headerTitle}>Feed de Inteligência</Text>
+          <Text style={styles.headerSub}>O teu cockpit financeiro em tempo real</Text>
+        </View>
+        <Pressable onPress={() => load(true)} style={styles.refreshBtn}>
+          <RefreshCw size={16} color={C.brand} />
+        </Pressable>
+      </View>
+
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} colors={[C.brand]} />}
+      >
+        <View style={{ paddingHorizontal: SPACE.lg }}>
+          <CockpitHeader data={data} resumo={resumo} />
+          <QuickMetrics data={data} resumo={resumo} />
+        </View>
+
+        {alertas.length > 0 && (
+          <View style={{ paddingHorizontal: SPACE.lg }}>
+            <View style={styles.sectionHeader}>
+              <AlertTriangle size={14} color={C.red} />
+              <Text style={styles.sectionTitle}>Alertas prioritários</Text>
+              <Text style={[styles.sectionCount, { backgroundColor: C.red + '20', color: C.red }]}>{alertas.length}</Text>
+            </View>
+            {alertas.map((item, i) => (
+              <FeedCard key={i} item={item} index={i} onPress={() => navigation?.navigate?.('Faturas')} />
+            ))}
+          </View>
+        )}
+
+        <View style={{ paddingHorizontal: SPACE.lg }}>
+          <GraphTeaser data={data} navigation={navigation} />
+        </View>
+
+        {insights.length > 0 && (
+          <View style={{ paddingHorizontal: SPACE.lg }}>
+            <View style={styles.sectionHeader}>
+              <Zap size={14} color={C.brand} />
+              <Text style={styles.sectionTitle}>Insights do dia</Text>
+              <Text style={styles.sectionCount}>{insights.length}</Text>
+            </View>
+            {insights.map((item, i) => (
+              <FeedCard key={i} item={item} index={i} onPress={null} />
+            ))}
+          </View>
+        )}
+
+        {!feed.length && (
+          <Animated.View entering={FadeIn.duration(400)} style={styles.emptyWrap}>
+            <Text style={{ fontSize: 48 }}>🧘</Text>
+            <Text style={styles.emptyTitle}>Tudo sob controlo</Text>
+            <Text style={styles.emptySub}>Sem alertas por agora. Adiciona mais faturas para análise.</Text>
+          </Animated.View>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg, gap: 12 },
+  loadingText: { color: C.textMid, fontSize: FONT.sm },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: SPACE.lg, paddingTop: SPACE.xl, paddingBottom: SPACE.md },
+  headerTitle: { fontSize: FONT.xxl, fontWeight: '800', color: C.text },
+  headerSub: { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
+  refreshBtn: { width: 40, height: 40, borderRadius: RADIUS.md, backgroundColor: C.brand + '15', justifyContent: 'center', alignItems: 'center' },
+  cockpit: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
+  cockpitTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
+  cockpitLabel: { fontSize: 9, fontWeight: '800', color: C.brand, letterSpacing: 1.5, marginBottom: 4 },
+  cockpitGasto: { fontSize: 32, fontWeight: '900' },
+  cockpitSub: { fontSize: FONT.xs, color: C.textMid, marginTop: 2 },
+  cockpitBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: RADIUS.pill, borderWidth: 1 },
+  cockpitPct: { fontSize: FONT.md, fontWeight: '800' },
+  cockpitBarBg: { height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden', marginBottom: 10 },
+  cockpitBarFill: { height: '100%', borderRadius: 2 },
+  cockpitMood: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, padding: 8, backgroundColor: C.brandDim, borderRadius: RADIUS.xs },
+  cockpitMoodText: { fontSize: FONT.xs, color: C.textMid, flex: 1, lineHeight: 16, fontStyle: 'italic' },
+  metricsRow: { flexDirection: 'row', gap: 8, marginBottom: SPACE.sm },
+  metricCard: { flex: 1, backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: 10, alignItems: 'center', gap: 4 },
+  metricValor: { fontSize: FONT.md, fontWeight: '800' },
+  metricLabel: { fontSize: 9, color: C.textMid, textAlign: 'center' },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8, marginTop: 4 },
+  sectionTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text, flex: 1 },
+  sectionCount: { fontSize: FONT.xs, color: C.brand, fontWeight: '700', backgroundColor: C.brandDim, paddingHorizontal: 6, paddingVertical: 2, borderRadius: RADIUS.pill },
+  feedCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, borderLeftWidth: 3, marginBottom: 6 },
+  feedIconWrap: { width: 32, height: 32, borderRadius: RADIUS.xs, justifyContent: 'center', alignItems: 'center', marginTop: 1 },
+  feedEmoji: { fontSize: 14, marginBottom: 2 },
+  feedTexto: { fontSize: FONT.sm, color: C.textMid, lineHeight: 18 },
+  feedValor: { fontSize: FONT.md, fontWeight: '800', marginTop: 3 },
+  graphTeaser: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.brand + '30', marginBottom: SPACE.sm },
+  graphTeaserHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  graphTeaserTitle: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  miniBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  miniBarLabel: { fontSize: 10, color: C.textMid, width: 80 },
+  miniBarBg: { flex: 1, height: 4, backgroundColor: C.surface3, borderRadius: 2, overflow: 'hidden' },
+  miniBarFill: { height: '100%', borderRadius: 2 },
+  miniBarVal: { fontSize: 10, fontWeight: '700', width: 60, textAlign: 'right' },
+  emptyWrap: { alignItems: 'center', padding: 40, gap: 10 },
+  emptyTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
+  emptySub: { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20 },
+});
+</file>
+
+<file path="verly-mobile/src/screens/RecompensasScreen.js">
+// src/screens/RecompensasScreen.js — Verly Social: Recompensas & XP
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, Pressable,
+  ActivityIndicator, StyleSheet, RefreshControl,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { recompensasAPI } from '../services/api';
+import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+
+const C = COLORS;
+
+const NIVEIS = [
+  { nivel: 1, titulo: 'Iniciante',    icone: '🌱', xp_min: 0,    xp_max: 99   },
+  { nivel: 2, titulo: 'Poupador',     icone: '💰', xp_min: 100,  xp_max: 299  },
+  { nivel: 3, titulo: 'Estrategista', icone: '📊', xp_min: 300,  xp_max: 599  },
+  { nivel: 4, titulo: 'Expert',       icone: '🎯', xp_min: 600,  xp_max: 999  },
+  { nivel: 5, titulo: 'Mestre',       icone: '🏆', xp_min: 1000, xp_max: 9999 },
+];
+
+function XPBar({ xp, nivel }) {
+  const nivelInfo = NIVEIS.find(n => n.nivel === nivel?.nivel) || NIVEIS[0];
+  const pct = Math.min(100, ((xp - nivelInfo.xp_min) / (nivelInfo.xp_max - nivelInfo.xp_min)) * 100);
+  const xpProximo = nivelInfo.xp_max - xp;
+  const proximo   = NIVEIS.find(n => n.nivel === nivelInfo.nivel + 1);
+
+  return (
+    <View style={styles.xpCard}>
+      <View style={styles.xpTop}>
+        <Text style={styles.xpIcone}>{nivelInfo.icone}</Text>
+        <View>
+          <Text style={styles.xpNivel}>Nível {nivelInfo.nivel} — {nivelInfo.titulo}</Text>
+          <Text style={styles.xpTotal}>{xp} XP total</Text>
+        </View>
+        <View style={styles.xpBadge}>
+          <Text style={styles.xpBadgeTxt}>{Math.round(pct)}%</Text>
+        </View>
+      </View>
+      <View style={styles.xpBarBg}>
+        <Animated.View entering={FadeIn.duration(800)} style={[styles.xpBarFill, { width: `${pct}%` }]} />
+      </View>
+      {proximo && (
+        <Text style={styles.xpProximo}>Faltam {xpProximo} XP para {proximo.icone} {proximo.titulo}</Text>
+      )}
+    </View>
+  );
+}
+
+function RecompensaCard({ r, index }) {
+  const tipoColor = {
+    vencedor_desafio: C.yellow,
+    streak_7:         C.brand,
+    streak_30:        C.orange,
+    meta_atingida:    C.green,
+    primeiro_grupo:   C.brand,
+  }[r.tipo] || C.brand;
+
+  const data = new Date(r.ganhou_em).toLocaleDateString('pt-PT', { day: 'numeric', month: 'short' });
+
+  return (
+    <Animated.View entering={FadeInDown.delay(index * 50)}>
+      <View style={[styles.recompCard, { borderLeftColor: tipoColor, borderLeftWidth: 3 }]}>
+        <View style={[styles.recompIcone, { backgroundColor: tipoColor + '20' }]}>
+          <Text style={{ fontSize: 28 }}>{r.icone}</Text>
+        </View>
+        <View style={styles.recompBody}>
+          <Text style={styles.recompTitulo}>{r.titulo}</Text>
+          {r.descricao && <Text style={styles.recompDesc}>{r.descricao}</Text>}
+          <Text style={styles.recompData}>{data}</Text>
+        </View>
+        <View style={styles.recompXP}>
+          <Text style={styles.recompXPTxt}>+{r.xp}</Text>
+          <Text style={styles.recompXPLabel}>XP</Text>
+        </View>
+      </View>
+    </Animated.View>
+  );
+}
+
+export default function RecompensasScreen({ navigation }) {
+  const [data,    setData]    = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refresh, setRefresh] = useState(false);
+
+  const load = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
+    try {
+      const d = await recompensasAPI.listar();
+      setData(d);
+    } catch (e) {
+      console.log('recompensas err', e);
+    } finally {
+      setLoading(false);
+      setRefresh(false);
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  if (loading) return (
+    <View style={styles.center}><ActivityIndicator color={C.brand} size="large" /></View>
+  );
+
+  const recompensas = data?.recompensas || [];
+  const totalXP     = data?.total_xp || 0;
+  const nivel       = data?.nivel;
+
+  return (
+    <View style={styles.root}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backTxt}>←</Text>
+        </Pressable>
+        <View>
+          <Text style={styles.headerTitle}>Recompensas</Text>
+          <Text style={styles.headerSub}>O teu progresso financeiro</Text>
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
+      >
+        {/* XP Bar */}
+        <XPBar xp={totalXP} nivel={nivel} />
+
+        {/* Como ganhar XP */}
+        <View style={styles.comoCard}>
+          <Text style={styles.comoTitle}>COMO GANHAR XP</Text>
+          {[
+            { icone: '🏆', titulo: 'Ganhar um desafio',     xp: '+100 XP' },
+            { icone: '🎯', titulo: 'Atingir uma meta',      xp: '+50 XP'  },
+            { icone: '👥', titulo: 'Criar um grupo',        xp: '+50 XP'  },
+            { icone: '🔥', titulo: 'Streak de 7 dias',      xp: '+30 XP'  },
+            { icone: '⚡', titulo: 'Streak de 30 dias',     xp: '+100 XP' },
+          ].map((item, i) => (
+            <View key={i} style={styles.comoRow}>
+              <Text style={styles.comoIcone}>{item.icone}</Text>
+              <Text style={styles.comoTxt}>{item.titulo}</Text>
+              <Text style={styles.comoXP}>{item.xp}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Lista de recompensas */}
+        <Text style={styles.sectionTitle}>AS TUAS CONQUISTAS ({recompensas.length})</Text>
+
+        {recompensas.length === 0 ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyEmoji}>🌱</Text>
+            <Text style={styles.emptyTitle}>Ainda sem conquistas</Text>
+            <Text style={styles.emptySub}>Participa em desafios, cria grupos e atinge as tuas metas para ganhar recompensas</Text>
+            <Pressable onPress={() => navigation.navigate('Amigos')} style={styles.emptyBtn}>
+              <Text style={styles.emptyBtnTxt}>Ver Amigos & Grupos</Text>
+            </Pressable>
+          </View>
+        ) : (
+          recompensas.map((r, i) => <RecompensaCard key={r.id} r={r} index={i} />)
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root:         { flex: 1, backgroundColor: C.bg },
+  center:       { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  header:       { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
+  backBtn:      { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
+  backTxt:      { fontSize: 18, color: C.text },
+  headerTitle:  { fontSize: FONT.xl, fontWeight: '800', color: C.text },
+  headerSub:    { fontSize: FONT.xs, color: C.textMid, marginTop: 1 },
+  scroll:       { padding: SPACE.lg, paddingBottom: 100 },
+  sectionTitle: { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1.2, marginBottom: 12, marginTop: 8 },
+  // XP Card
+  xpCard:       { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.brand + '30', padding: SPACE.md, marginBottom: SPACE.sm, gap: 10 },
+  xpTop:        { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  xpIcone:      { fontSize: 36 },
+  xpNivel:      { fontSize: FONT.md, fontWeight: '800', color: C.text },
+  xpTotal:      { fontSize: FONT.sm, color: C.brand, fontWeight: '700', marginTop: 2 },
+  xpBadge:      { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 6, backgroundColor: C.brandDim, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: C.brand },
+  xpBadgeTxt:   { fontSize: FONT.sm, color: C.brand, fontWeight: '800' },
+  xpBarBg:      { height: 8, backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' },
+  xpBarFill:    { height: '100%', backgroundColor: C.brand, borderRadius: 4 },
+  xpProximo:    { fontSize: FONT.xs, color: C.textMid, textAlign: 'center' },
+  // Como ganhar
+  comoCard:     { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.lg },
+  comoTitle:    { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1, marginBottom: 12 },
+  comoRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: C.border },
+  comoIcone:    { fontSize: 18, width: 28 },
+  comoTxt:      { flex: 1, fontSize: FONT.sm, color: C.text },
+  comoXP:       { fontSize: FONT.sm, color: C.green, fontWeight: '800' },
+  // Recompensa card
+  recompCard:   { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
+  recompIcone:  { width: 52, height: 52, borderRadius: RADIUS.sm, justifyContent: 'center', alignItems: 'center' },
+  recompBody:   { flex: 1, gap: 2 },
+  recompTitulo: { fontSize: FONT.sm, fontWeight: '700', color: C.text },
+  recompDesc:   { fontSize: FONT.xs, color: C.textMid, lineHeight: 16 },
+  recompData:   { fontSize: FONT.xs, color: C.textSub, marginTop: 2 },
+  recompXP:     { alignItems: 'center' },
+  recompXPTxt:  { fontSize: FONT.lg, fontWeight: '900', color: C.yellow },
+  recompXPLabel:{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700' },
+  // Empty
+  empty:        { alignItems: 'center', paddingTop: 40 },
+  emptyEmoji:   { fontSize: 48, marginBottom: 16 },
+  emptyTitle:   { fontSize: FONT.lg, fontWeight: '800', color: C.text, marginBottom: 8 },
+  emptySub:     { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20, paddingHorizontal: 20, marginBottom: 24 },
+  emptyBtn:     { paddingHorizontal: 24, paddingVertical: 12, backgroundColor: C.brand, borderRadius: RADIUS.pill },
+  emptyBtnTxt:  { fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
+});
+</file>
 
 <file path="app/api/amizades.py">
 """
@@ -3098,42 +5452,6 @@ def relatorio_api():
 # app/tasks/__init__.py
 </file>
 
-<file path="app/tasks/ai_insights.py">
-"""
-app/tasks/ai_insights.py — Task Celery: gera insights IA e guarda em cache Redis.
-"""
-
-import logging
-from run import celery
-from app.extensions import cache
-
-logger = logging.getLogger(__name__)
-
-
-@celery.task(
-    bind=True,
-    name='tasks.gerar_insights',
-    queue='ai',
-    max_retries=2,
-    default_retry_delay=60,
-)
-def gerar_insights_task(self, user_id: int):
-    try:
-        from app.api.insights import _build_context, _gerar_insights_com_llm
-        ctx = _build_context(user_id)
-        insights = _gerar_insights_com_llm(ctx)
-
-        cache_key = f'insights:{user_id}'
-        cache.set(cache_key, insights, timeout=900)  # 15 min
-
-        logger.info(f'Insights gerados para user {user_id}')
-        return {'status': 'ok', 'user_id': user_id}
-
-    except Exception as exc:
-        logger.exception(f'Insights IA falharam para user {user_id}: {exc}')
-        raise self.retry(exc=exc)
-</file>
-
 <file path="app/tasks/emails.py">
 """
 app/tasks/emails.py — Task Celery: envia emails via Resend em background.
@@ -5498,6 +7816,929 @@ class MainApplication : Application(), ReactApplication {
 <resources/>
 </file>
 
+<file path="verly-mobile/android/build-log.txt">
+> Task :gradle-plugin:settings-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:pluginDescriptors UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:shared:compileKotlin UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:shared:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:compileJava NO-SOURCE
+> Task :gradle-plugin:shared:processResources NO-SOURCE
+> Task :gradle-plugin:shared:classes UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:processResources NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:classes UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin-shared:jar UP-TO-DATE
+> Task :gradle-plugin:shared:jar UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:settings-plugin:classes UP-TO-DATE
+> Task :gradle-plugin:settings-plugin:jar UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:compileKotlin UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:classes UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-settings-plugin:jar UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :gradle-plugin:react-native-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-module-gradle-plugin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-module-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:processResources UP-TO-DATE
+> Task :expo-module-gradle-plugin:processResources UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:compileKotlin UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:compileKotlin UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:compileJava NO-SOURCE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:pluginDescriptors UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:compileJava NO-SOURCE
+> Task :gradle-plugin:react-native-gradle-plugin:pluginDescriptors UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:processResources UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:classes UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:processResources UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:classes UP-TO-DATE
+> Task :expo-gradle-plugin:expo-autolinking-plugin:jar UP-TO-DATE
+> Task :gradle-plugin:react-native-gradle-plugin:jar UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:compileKotlin UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:compileJava NO-SOURCE
+> Task :expo-dev-launcher-gradle-plugin:classes UP-TO-DATE
+> Task :expo-module-gradle-plugin:compileKotlin UP-TO-DATE
+> Task :expo-dev-launcher-gradle-plugin:jar UP-TO-DATE
+> Task :expo-module-gradle-plugin:compileJava NO-SOURCE
+> Task :expo-module-gradle-plugin:classes UP-TO-DATE
+> Task :expo-module-gradle-plugin:jar UP-TO-DATE
+
+> Configure project :app
+ ??  [33mApplying gradle plugin[0m '[32mexpo-dev-launcher-gradle-plugin[0m'
+
+> Configure project :
+[32m[ExpoRootProject][0m Using the following versions:
+  - buildTools:  [32m36.0.0[0m
+  - minSdk:      [32m24[0m
+  - compileSdk:  [32m36[0m
+  - targetSdk:   [32m36[0m
+  - ndk:         [32m27.1.12297006[0m
+  - kotlin:      [32m2.1.20[0m
+  - ksp:         [32m2.1.20-2.0.1[0m
+
+> Configure project :expo
+
+Using expo modules
+  - [32mexpo-constants[0m (18.0.13)
+  - [32mexpo-dev-client[0m (6.0.21)
+  - [32mexpo-dev-launcher[0m (6.0.21)
+  - [32mexpo-dev-menu[0m (7.0.19)
+  - [32mexpo-dev-menu-interface[0m (2.0.0)
+  - [32mexpo-json-utils[0m (0.15.0)
+  - [32mexpo-manifests[0m (1.0.11)
+  - [32mexpo-modules-core[0m (3.0.30)
+  - [32mexpo-updates-interface[0m (2.0.0)
+  - [33m[?][0m [32mexpo-asset[0m (12.0.13)
+  - [33m[?][0m [32mexpo-document-picker[0m (14.0.8)
+  - [33m[?][0m [32mexpo-file-system[0m (19.0.22)
+  - [33m[?][0m [32mexpo-font[0m (14.0.11)
+  - [33m[?][0m [32mexpo-haptics[0m (15.0.8)
+  - [33m[?][0m [32mexpo-image-loader[0m (6.0.0)
+  - [33m[?][0m [32mexpo-image-picker[0m (17.0.11)
+  - [33m[?][0m [32mexpo-keep-awake[0m (15.0.8)
+  - [33m[?][0m [32mexpo-linear-gradient[0m (15.0.8)
+  - [33m[?][0m [32mexpo-location[0m (19.0.8)
+
+
+> Configure project :react-native-firebase_app
+:react-native-firebase_app package.json found at C:\projetos\meu-projeto-ai\verly-mobile\node_modules\@react-native-firebase\app\package.json
+:react-native-firebase_app:firebase.bom using default value: 34.10.0
+:react-native-firebase_app:play.play-services-auth using default value: 21.5.0
+:react-native-firebase_app package.json found at C:\projetos\meu-projeto-ai\verly-mobile\node_modules\@react-native-firebase\app\package.json
+:react-native-firebase_app:version set from package.json: 24.0.0 (24,0,0 - 24000000)
+:react-native-firebase_app:android.compileSdk using custom value: 36
+:react-native-firebase_app:android.targetSdk using custom value: 36
+:react-native-firebase_app:android.minSdk using custom value: 24
+:react-native-firebase_app:reactNativeAndroidDir C:\projetos\meu-projeto-ai\verly-mobile\node_modules\react-native
+
+> Configure project :react-native-firebase_auth
+:react-native-firebase_auth package.json found at C:\projetos\meu-projeto-ai\verly-mobile\node_modules\@react-native-firebase\auth\package.json
+:react-native-firebase_app package.json found at C:\projetos\meu-projeto-ai\verly-mobile\node_modules\@react-native-firebase\app\package.json
+:react-native-firebase_auth:firebase.bom using default value: 34.10.0
+:react-native-firebase_auth package.json found at C:\projetos\meu-projeto-ai\verly-mobile\node_modules\@react-native-firebase\auth\package.json
+:react-native-firebase_auth:version set from package.json: 24.0.0 (24,0,0 - 24000000)
+:react-native-firebase_auth:android.compileSdk using custom value: 36
+:react-native-firebase_auth:android.targetSdk using custom value: 36
+:react-native-firebase_auth:android.minSdk using custom value: 24
+:react-native-firebase_auth:reactNativeAndroidDir C:\projetos\meu-projeto-ai\verly-mobile\node_modules\react-native
+
+> Task :expo-manifests:preBuild UP-TO-DATE
+> Task :expo-dev-menu-interface:preBuild UP-TO-DATE
+> Task :expo-json-utils:preBuild UP-TO-DATE
+> Task :expo-modules-core:preBuild UP-TO-DATE
+> Task :expo-dev-menu:preBuild UP-TO-DATE
+> Task :expo-updates-interface:preBuild UP-TO-DATE
+> Task :expo-dev-launcher:preBuild UP-TO-DATE
+> Task :expo-dev-client:preBuild UP-TO-DATE
+> Task :expo:generatePackagesList UP-TO-DATE
+> Task :react-native-purchases:preBuild UP-TO-DATE
+> Task :react-native-maps:preBuild UP-TO-DATE
+> Task :react-native-firebase_auth:preBuild UP-TO-DATE
+> Task :react-native-firebase_app:preBuild UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-gesture-handler:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :expo:preBuild UP-TO-DATE
+> Task :react-native-safe-area-context:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-screens:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-webview:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-svg:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-gesture-handler:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-gesture-handler:preBuild UP-TO-DATE
+> Task :react-native-async-storage_async-storage:preBuild UP-TO-DATE
+> Task :react-native-purchases-ui:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-safe-area-context:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-google-signin_google-signin:preBuild UP-TO-DATE
+> Task :expo-dev-client:preDebugBuild UP-TO-DATE
+> Task :expo:preDebugBuild UP-TO-DATE
+> Task :react-native-safe-area-context:preBuild UP-TO-DATE
+> Task :react-native-webview:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-screens:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :expo-dev-launcher:preDebugBuild UP-TO-DATE
+> Task :expo:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-svg:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-svg:preBuild UP-TO-DATE
+> Task :expo-dev-menu-interface:preDebugBuild UP-TO-DATE
+> Task :expo-dev-menu:preDebugBuild UP-TO-DATE
+> Task :react-native-webview:preBuild UP-TO-DATE
+> Task :expo-dev-client:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-screens:preBuild UP-TO-DATE
+> Task :expo-json-utils:preDebugBuild UP-TO-DATE
+> Task :expo-manifests:preDebugBuild UP-TO-DATE
+> Task :expo-dev-launcher:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-purchases-ui:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :expo-dev-menu-interface:writeDebugAarMetadata UP-TO-DATE
+> Task :expo-modules-core:preDebugBuild UP-TO-DATE
+> Task :expo-manifests:writeDebugAarMetadata UP-TO-DATE
+> Task :expo-dev-menu:writeDebugAarMetadata UP-TO-DATE
+> Task :expo-updates-interface:preDebugBuild UP-TO-DATE
+> Task :expo-modules-core:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-async-storage_async-storage:preDebugBuild UP-TO-DATE
+> Task :react-native-purchases-ui:preBuild UP-TO-DATE
+> Task :react-native-firebase_auth:preDebugBuild UP-TO-DATE
+> Task :expo-json-utils:writeDebugAarMetadata UP-TO-DATE
+> Task :expo-updates-interface:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-firebase_app:preDebugBuild UP-TO-DATE
+> Task :react-native-google-signin_google-signin:preDebugBuild UP-TO-DATE
+> Task :react-native-gesture-handler:preDebugBuild UP-TO-DATE
+> Task :react-native-async-storage_async-storage:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-maps:preDebugBuild UP-TO-DATE
+> Task :react-native-firebase_auth:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-purchases:preDebugBuild UP-TO-DATE
+> Task :react-native-gesture-handler:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-maps:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-purchases-ui:preDebugBuild UP-TO-DATE
+> Task :react-native-safe-area-context:preDebugBuild UP-TO-DATE
+> Task :react-native-google-signin_google-signin:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-firebase_app:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-screens:preDebugBuild UP-TO-DATE
+> Task :react-native-safe-area-context:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-screens:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-purchases:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-webview:preDebugBuild UP-TO-DATE
+> Task :react-native-purchases-ui:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-webview:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-svg:preDebugBuild UP-TO-DATE
+> Task :expo-dev-menu:generateDebugResValues UP-TO-DATE
+> Task :expo-dev-launcher:generateDebugResValues UP-TO-DATE
+> Task :expo-dev-client:generateDebugResValues UP-TO-DATE
+> Task :expo:generateDebugResValues UP-TO-DATE
+> Task :expo-json-utils:generateDebugResValues UP-TO-DATE
+> Task :expo-dev-menu-interface:generateDebugResValues UP-TO-DATE
+> Task :expo-dev-client:generateDebugResources UP-TO-DATE
+> Task :react-native-svg:writeDebugAarMetadata UP-TO-DATE
+> Task :expo:generateDebugResources UP-TO-DATE
+> Task :expo-dev-menu-interface:generateDebugResources UP-TO-DATE
+> Task :expo-json-utils:generateDebugResources UP-TO-DATE
+> Task :expo-dev-menu:generateDebugResources UP-TO-DATE
+> Task :expo-dev-launcher:generateDebugResources UP-TO-DATE
+> Task :expo-manifests:generateDebugResValues UP-TO-DATE
+> Task :expo-manifests:generateDebugResources UP-TO-DATE
+> Task :expo-dev-client:packageDebugResources UP-TO-DATE
+> Task :expo-dev-menu-interface:packageDebugResources UP-TO-DATE
+> Task :expo-json-utils:packageDebugResources UP-TO-DATE
+> Task :expo:packageDebugResources UP-TO-DATE
+> Task :expo-modules-core:generateDebugResValues UP-TO-DATE
+> Task :expo-updates-interface:generateDebugResValues UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateDebugResValues UP-TO-DATE
+> Task :expo-dev-menu:packageDebugResources UP-TO-DATE
+> Task :expo-modules-core:generateDebugResources UP-TO-DATE
+> Task :expo-updates-interface:generateDebugResources UP-TO-DATE
+> Task :expo-dev-launcher:packageDebugResources UP-TO-DATE
+> Task :react-native-firebase_app:generateDebugResValues UP-TO-DATE
+> Task :expo-manifests:packageDebugResources UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateDebugResources UP-TO-DATE
+> Task :react-native-firebase_auth:generateDebugResValues UP-TO-DATE
+> Task :react-native-firebase_app:generateDebugResources UP-TO-DATE
+> Task :react-native-firebase_auth:generateDebugResources UP-TO-DATE
+> Task :react-native-gesture-handler:generateDebugResValues UP-TO-DATE
+> Task :expo-modules-core:packageDebugResources UP-TO-DATE
+> Task :react-native-gesture-handler:generateDebugResources UP-TO-DATE
+> Task :expo-updates-interface:packageDebugResources UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateDebugResValues UP-TO-DATE
+> Task :react-native-async-storage_async-storage:packageDebugResources UP-TO-DATE
+> Task :react-native-firebase_app:packageDebugResources UP-TO-DATE
+> Task :react-native-maps:generateDebugResValues UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateDebugResources UP-TO-DATE
+> Task :react-native-maps:generateDebugResources UP-TO-DATE
+> Task :react-native-firebase_auth:packageDebugResources UP-TO-DATE
+> Task :react-native-purchases-ui:generateDebugResValues UP-TO-DATE
+> Task :react-native-purchases:generateDebugResValues UP-TO-DATE
+> Task :react-native-gesture-handler:packageDebugResources UP-TO-DATE
+> Task :react-native-safe-area-context:generateDebugResValues UP-TO-DATE
+> Task :react-native-purchases:generateDebugResources UP-TO-DATE
+> Task :react-native-google-signin_google-signin:packageDebugResources UP-TO-DATE
+> Task :react-native-safe-area-context:generateDebugResources UP-TO-DATE
+> Task :react-native-purchases-ui:generateDebugResources UP-TO-DATE
+> Task :react-native-screens:generateDebugResValues UP-TO-DATE
+> Task :react-native-maps:packageDebugResources UP-TO-DATE
+> Task :react-native-purchases:packageDebugResources UP-TO-DATE
+> Task :react-native-screens:generateDebugResources UP-TO-DATE
+> Task :react-native-safe-area-context:packageDebugResources UP-TO-DATE
+> Task :react-native-svg:generateDebugResValues UP-TO-DATE
+> Task :react-native-purchases-ui:packageDebugResources UP-TO-DATE
+> Task :react-native-webview:generateDebugResValues UP-TO-DATE
+> Task :react-native-svg:generateDebugResources UP-TO-DATE
+> Task :expo:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-webview:generateDebugResources UP-TO-DATE
+> Task :expo:processDebugManifest UP-TO-DATE
+> Task :react-native-screens:packageDebugResources UP-TO-DATE
+> Task :react-native-svg:packageDebugResources UP-TO-DATE
+> Task :expo-dev-client:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-dev-launcher:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-dev-menu:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-webview:packageDebugResources UP-TO-DATE
+> Task :expo-dev-menu-interface:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-json-utils:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-dev-client:processDebugManifest UP-TO-DATE
+> Task :expo-dev-launcher:processDebugManifest UP-TO-DATE
+> Task :expo-dev-menu:processDebugManifest UP-TO-DATE
+> Task :expo-dev-menu-interface:processDebugManifest UP-TO-DATE
+> Task :expo-modules-core:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-updates-interface:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-manifests:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-json-utils:processDebugManifest UP-TO-DATE
+> Task :react-native-async-storage_async-storage:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-firebase_app:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-modules-core:processDebugManifest UP-TO-DATE
+> Task :expo-manifests:processDebugManifest UP-TO-DATE
+> Task :expo-updates-interface:processDebugManifest UP-TO-DATE
+> Task :react-native-firebase_auth:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-async-storage_async-storage:processDebugManifest UP-TO-DATE
+> Task :react-native-google-signin_google-signin:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-gesture-handler:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-firebase_app:processDebugManifest UP-TO-DATE
+> Task :react-native-maps:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-purchases:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-firebase_auth:processDebugManifest UP-TO-DATE
+> Task :react-native-gesture-handler:processDebugManifest UP-TO-DATE
+> Task :react-native-purchases-ui:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-google-signin_google-signin:processDebugManifest UP-TO-DATE
+> Task :react-native-maps:processDebugManifest UP-TO-DATE
+> Task :react-native-safe-area-context:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-purchases:processDebugManifest UP-TO-DATE
+> Task :react-native-svg:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-screens:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-webview:extractDeepLinksDebug UP-TO-DATE
+> Task :expo:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-purchases-ui:processDebugManifest UP-TO-DATE
+> Task :react-native-safe-area-context:processDebugManifest UP-TO-DATE
+> Task :react-native-svg:processDebugManifest UP-TO-DATE
+> Task :react-native-webview:processDebugManifest UP-TO-DATE
+> Task :react-native-screens:processDebugManifest UP-TO-DATE
+> Task :expo:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-client:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-dev-menu-interface:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-json-utils:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-dev-launcher:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-dev-menu:compileDebugLibraryResources UP-TO-DATE
+> Task :expo:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-client:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-menu-interface:parseDebugLocalResources UP-TO-DATE
+> Task :expo-manifests:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-json-utils:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-menu:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-launcher:parseDebugLocalResources UP-TO-DATE
+> Task :expo-modules-core:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-dev-menu-interface:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-client:generateDebugRFile UP-TO-DATE
+> Task :expo-json-utils:generateDebugRFile UP-TO-DATE
+> Task :expo-manifests:parseDebugLocalResources UP-TO-DATE
+> Task :expo-updates-interface:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-modules-core:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-menu:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-launcher:generateDebugRFile UP-TO-DATE
+> Task :react-native-async-storage_async-storage:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-firebase_app:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-manifests:generateDebugRFile UP-TO-DATE
+> Task :react-native-firebase_auth:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-gesture-handler:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-async-storage_async-storage:parseDebugLocalResources UP-TO-DATE
+> Task :expo-updates-interface:parseDebugLocalResources UP-TO-DATE
+> Task :expo-modules-core:generateDebugRFile UP-TO-DATE
+> Task :react-native-google-signin_google-signin:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-firebase_app:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-firebase_auth:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-maps:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-gesture-handler:parseDebugLocalResources UP-TO-DATE
+> Task :expo-updates-interface:generateDebugRFile UP-TO-DATE
+> Task :react-native-google-signin_google-signin:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-firebase_app:generateDebugRFile UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateDebugRFile UP-TO-DATE
+> Task :react-native-purchases:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-firebase_auth:generateDebugRFile UP-TO-DATE
+> Task :react-native-maps:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-purchases-ui:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-safe-area-context:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-gesture-handler:generateDebugRFile UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateDebugRFile UP-TO-DATE
+> Task :react-native-safe-area-context:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-purchases-ui:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-maps:generateDebugRFile UP-TO-DATE
+> Task :react-native-webview:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-svg:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-purchases:parseDebugLocalResources UP-TO-DATE
+> Task :expo:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-screens:compileDebugLibraryResources UP-TO-DATE
+> Task :expo:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-purchases-ui:generateDebugRFile UP-TO-DATE
+> Task :react-native-webview:parseDebugLocalResources UP-TO-DATE
+> Task :expo-modules-core:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-safe-area-context:generateDebugRFile UP-TO-DATE
+> Task :react-native-svg:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-purchases:generateDebugRFile UP-TO-DATE
+> Task :react-native-screens:parseDebugLocalResources UP-TO-DATE
+> Task :expo-dev-client:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-launcher:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-webview:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-menu:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-modules-core:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-screens:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-menu-interface:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-svg:generateDebugRFile UP-TO-DATE
+> Task :expo-dev-menu:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-json-utils:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-manifests:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-menu-interface:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-dev-menu:javaPreCompileDebug UP-TO-DATE
+> Task :expo-json-utils:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-updates-interface:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-menu-interface:javaPreCompileDebug UP-TO-DATE
+> Task :expo-manifests:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-json-utils:javaPreCompileDebug UP-TO-DATE
+> Task :expo-manifests:javaPreCompileDebug UP-TO-DATE
+> Task :expo-updates-interface:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-async-storage_async-storage:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-firebase_app:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-updates-interface:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-async-storage_async-storage:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-firebase_auth:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-firebase_app:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-client:dataBindingMergeDependencyArtifactsDebug UP-TO-DATE
+> Task :react-native-firebase_auth:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-gesture-handler:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-gesture-handler:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-svg:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-gesture-handler:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-svg:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-client:dataBindingGenBaseClassesDebug UP-TO-DATE
+> Task :react-native-google-signin_google-signin:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :expo-dev-client:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-google-signin_google-signin:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-dev-client:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-maps:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-maps:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-launcher:dataBindingMergeDependencyArtifactsDebug UP-TO-DATE
+> Task :react-native-async-storage_async-storage:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-firebase_app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-async-storage_async-storage:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-purchases:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-firebase_app:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-purchases-ui:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-purchases:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-purchases-ui:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-dev-launcher:dataBindingGenBaseClassesDebug UP-TO-DATE
+> Task :expo-dev-launcher:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-svg:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-dev-launcher:checkApolloVersions UP-TO-DATE
+> Task :react-native-svg:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-launcher:generateServiceApolloOptions UP-TO-DATE
+> Task :react-native-maps:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-safe-area-context:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-firebase_auth:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-maps:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-firebase_auth:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-screens:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-safe-area-context:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-webview:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-screens:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-webview:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-google-signin_google-signin:compileDebugKotlin UP-TO-DATE
+> Task :react-native-google-signin_google-signin:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-google-signin_google-signin:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-google-signin_google-signin:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-launcher:generateServiceApolloSources UP-TO-DATE
+> Task :expo:mergeDebugShaders UP-TO-DATE
+> Task :expo-dev-launcher:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-client:mergeDebugShaders UP-TO-DATE
+> Task :expo-dev-client:compileDebugShaders NO-SOURCE
+> Task :expo-dev-client:generateDebugAssets UP-TO-DATE
+> Task :expo-dev-client:mergeDebugAssets UP-TO-DATE
+> Task :expo-dev-launcher:mergeDebugShaders UP-TO-DATE
+> Task :expo-dev-launcher:compileDebugShaders NO-SOURCE
+> Task :expo-dev-launcher:generateDebugAssets UP-TO-DATE
+> Task :expo-dev-launcher:mergeDebugAssets UP-TO-DATE
+> Task :expo-dev-menu:mergeDebugShaders UP-TO-DATE
+> Task :expo-dev-menu:compileDebugShaders NO-SOURCE
+> Task :expo-dev-menu:generateDebugAssets UP-TO-DATE
+> Task :expo-dev-menu:mergeDebugAssets UP-TO-DATE
+> Task :expo:compileDebugShaders NO-SOURCE
+> Task :expo:generateDebugAssets UP-TO-DATE
+> Task :expo:mergeDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:compileDebugKotlin UP-TO-DATE
+> Task :expo-dev-menu-interface:mergeDebugShaders UP-TO-DATE
+> Task :expo-json-utils:mergeDebugShaders UP-TO-DATE
+> Task :expo-dev-menu-interface:compileDebugShaders NO-SOURCE
+> Task :expo-json-utils:compileDebugShaders NO-SOURCE
+> Task :expo-dev-menu-interface:generateDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-menu-interface:mergeDebugAssets UP-TO-DATE
+> Task :expo-json-utils:generateDebugAssets UP-TO-DATE
+> Task :expo-json-utils:mergeDebugAssets UP-TO-DATE
+> Task :react-native-safe-area-context:compileDebugKotlin UP-TO-DATE
+> Task :expo-updates-interface:mergeDebugShaders UP-TO-DATE
+> Task :expo-updates-interface:compileDebugShaders NO-SOURCE
+> Task :react-native-safe-area-context:javaPreCompileDebug UP-TO-DATE
+> Task :expo-manifests:mergeDebugShaders UP-TO-DATE
+> Task :expo-updates-interface:generateDebugAssets UP-TO-DATE
+> Task :expo-manifests:compileDebugShaders NO-SOURCE
+> Task :expo-manifests:generateDebugAssets UP-TO-DATE
+> Task :expo-updates-interface:mergeDebugAssets UP-TO-DATE
+> Task :expo-manifests:mergeDebugAssets UP-TO-DATE
+> Task :react-native-async-storage_async-storage:mergeDebugShaders UP-TO-DATE
+> Task :react-native-async-storage_async-storage:compileDebugShaders NO-SOURCE
+> Task :react-native-async-storage_async-storage:generateDebugAssets UP-TO-DATE
+> Task :react-native-async-storage_async-storage:mergeDebugAssets UP-TO-DATE
+> Task :react-native-firebase_app:mergeDebugShaders UP-TO-DATE
+> Task :react-native-purchases-ui:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-purchases-ui:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-safe-area-context:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-purchases:compileDebugKotlin UP-TO-DATE
+> Task :react-native-gesture-handler:mergeDebugShaders UP-TO-DATE
+> Task :react-native-webview:compileDebugKotlin UP-TO-DATE
+> Task :react-native-gesture-handler:compileDebugShaders NO-SOURCE
+> Task :react-native-gesture-handler:generateDebugAssets UP-TO-DATE
+> Task :react-native-safe-area-context:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-purchases:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-gesture-handler:mergeDebugAssets UP-TO-DATE
+> Task :react-native-firebase_auth:mergeDebugShaders UP-TO-DATE
+> Task :react-native-webview:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-firebase_auth:compileDebugShaders NO-SOURCE
+> Task :react-native-firebase_auth:generateDebugAssets UP-TO-DATE
+> Task :react-native-google-signin_google-signin:mergeDebugShaders UP-TO-DATE
+> Task :react-native-google-signin_google-signin:compileDebugShaders NO-SOURCE
+> Task :react-native-google-signin_google-signin:generateDebugAssets UP-TO-DATE
+> Task :react-native-maps:mergeDebugShaders UP-TO-DATE
+> Task :react-native-maps:compileDebugShaders NO-SOURCE
+> Task :react-native-maps:generateDebugAssets UP-TO-DATE
+> Task :react-native-google-signin_google-signin:mergeDebugAssets UP-TO-DATE
+> Task :react-native-firebase_auth:mergeDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:mergeDebugShaders UP-TO-DATE
+> Task :react-native-maps:mergeDebugAssets UP-TO-DATE
+> Task :react-native-screens:compileDebugKotlin UP-TO-DATE
+> Task :react-native-webview:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-purchases-ui:compileDebugShaders NO-SOURCE
+> Task :react-native-purchases-ui:generateDebugAssets UP-TO-DATE
+> Task :react-native-screens:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-svg:mergeDebugShaders UP-TO-DATE
+> Task :react-native-purchases:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-svg:compileDebugShaders NO-SOURCE
+> Task :react-native-webview:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-svg:generateDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:mergeDebugAssets UP-TO-DATE
+> Task :react-native-purchases:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-webview:mergeDebugShaders UP-TO-DATE
+> Task :react-native-svg:mergeDebugAssets UP-TO-DATE
+> Task :react-native-purchases:mergeDebugShaders UP-TO-DATE
+> Task :react-native-google-signin_google-signin:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-webview:compileDebugShaders NO-SOURCE
+> Task :react-native-purchases:compileDebugShaders NO-SOURCE
+> Task :react-native-svg:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-webview:generateDebugAssets UP-TO-DATE
+> Task :react-native-purchases:generateDebugAssets UP-TO-DATE
+> Task :react-native-firebase_app:compileDebugShaders NO-SOURCE
+> Task :react-native-firebase_app:generateDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-purchases:mergeDebugAssets UP-TO-DATE
+> Task :react-native-webview:mergeDebugAssets UP-TO-DATE
+> Task :react-native-firebase_app:mergeDebugAssets UP-TO-DATE
+> Task :react-native-webview:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-firebase_auth:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-firebase_app:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-maps:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-screens:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-purchases:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-screens:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-async-storage_async-storage:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-screens:mergeDebugShaders UP-TO-DATE
+> Task :react-native-screens:compileDebugShaders NO-SOURCE
+> Task :react-native-screens:generateDebugAssets UP-TO-DATE
+> Task :react-native-async-storage_async-storage:processDebugJavaRes NO-SOURCE
+> Task :react-native-firebase_app:processDebugJavaRes NO-SOURCE
+> Task :react-native-screens:mergeDebugAssets UP-TO-DATE
+> Task :react-native-firebase_auth:processDebugJavaRes NO-SOURCE
+> Task :react-native-screens:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-maps:processDebugJavaRes NO-SOURCE
+> Task :react-native-purchases:processDebugJavaRes UP-TO-DATE
+> Task :react-native-google-signin_google-signin:processDebugJavaRes UP-TO-DATE
+> Task :react-native-svg:processDebugJavaRes NO-SOURCE
+> Task :react-native-webview:processDebugJavaRes UP-TO-DATE
+> Task :react-native-purchases-ui:processDebugJavaRes UP-TO-DATE
+> Task :react-native-screens:processDebugJavaRes UP-TO-DATE
+> Task :expo-dev-client:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-dev-launcher:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-dev-client:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-dev-launcher:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-dev-client:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-dev-launcher:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-dev-menu-interface:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-dev-menu:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-json-utils:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-dev-menu-interface:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-dev-menu:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-manifests:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-dev-menu-interface:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-json-utils:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-manifests:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-dev-menu:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-json-utils:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-updates-interface:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-async-storage_async-storage:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-updates-interface:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-firebase_app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-async-storage_async-storage:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-firebase_app:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-updates-interface:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-async-storage_async-storage:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-firebase_app:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-firebase_auth:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-gesture-handler:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-google-signin_google-signin:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-firebase_auth:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-google-signin_google-signin:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-firebase_auth:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-google-signin_google-signin:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-maps:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-purchases:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-maps:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-purchases-ui:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-purchases:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-maps:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-purchases-ui:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-safe-area-context:mergeDebugShaders UP-TO-DATE
+> Task :expo-manifests:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-purchases:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-safe-area-context:compileDebugShaders NO-SOURCE
+> Task :react-native-safe-area-context:generateDebugAssets UP-TO-DATE
+> Task :react-native-purchases-ui:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-svg:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-webview:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-safe-area-context:mergeDebugAssets UP-TO-DATE
+> Task :react-native-webview:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-webview:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-svg:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-safe-area-context:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-svg:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :react-native-safe-area-context:processDebugJavaRes UP-TO-DATE
+> Task :react-native-safe-area-context:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-safe-area-context:mergeDebugNativeLibs NO-SOURCE
+> Task :react-native-safe-area-context:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :expo-modules-core:compileDebugKotlin UP-TO-DATE
+> Task :expo-modules-core:javaPreCompileDebug UP-TO-DATE
+> Task :expo-modules-core:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-modules-core:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-client:compileDebugKotlin NO-SOURCE
+> Task :expo-modules-core:mergeDebugShaders UP-TO-DATE
+> Task :expo-modules-core:compileDebugShaders NO-SOURCE
+> Task :expo-modules-core:generateDebugAssets UP-TO-DATE
+> Task :expo-modules-core:mergeDebugAssets UP-TO-DATE
+> Task :expo-modules-core:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :expo-dev-client:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-dev-client:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-client:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :expo-dev-client:processDebugJavaRes NO-SOURCE
+> Task :expo-modules-core:processDebugJavaRes UP-TO-DATE
+> Task :expo-updates-interface:compileDebugKotlin UP-TO-DATE
+> Task :app:generateAutolinkingNewArchitectureFiles UP-TO-DATE
+> Task :app:generateAutolinkingPackageList UP-TO-DATE
+> Task :app:generateCodegenSchemaFromJavaScript SKIPPED
+> Task :expo-json-utils:compileDebugKotlin UP-TO-DATE
+> Task :expo-updates-interface:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:generateCodegenArtifactsFromSchema SKIPPED
+> Task :react-native-screens:configureCMakeDebug[arm64-v8a]
+> Task :expo-updates-interface:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-updates-interface:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :app:generateReactNativeEntryPoint UP-TO-DATE
+> Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:processDebugGoogleServices UP-TO-DATE
+> Task :expo-updates-interface:processDebugJavaRes UP-TO-DATE
+> Task :expo-json-utils:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-json-utils:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-json-utils:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-reanimated:assertMinimalReactNativeVersionTask
+> Task :react-native-reanimated:assertNewArchitectureEnabledTask SKIPPED
+> Task :expo-dev-menu-interface:compileDebugKotlin UP-TO-DATE
+> Task :expo-json-utils:processDebugJavaRes UP-TO-DATE
+> Task :expo-dev-menu-interface:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-dev-menu-interface:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-menu-interface:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :expo-dev-menu-interface:processDebugJavaRes UP-TO-DATE
+> Task :expo-modules-core:configureCMakeDebug[arm64-v8a]
+> Task :expo-manifests:compileDebugKotlin UP-TO-DATE
+> Task :expo-manifests:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-manifests:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-worklets:assertMinimalReactNativeVersionTask
+> Task :react-native-worklets:assertNewArchitectureEnabledTask SKIPPED
+> Task :expo-manifests:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-worklets:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :expo-manifests:processDebugJavaRes UP-TO-DATE
+> Task :react-native-worklets:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-worklets:prepareWorkletsHeadersForPrefabs UP-TO-DATE
+> Task :react-native-worklets:preBuild
+> Task :react-native-worklets:preDebugBuild
+> Task :react-native-worklets:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-worklets:generateDebugResValues UP-TO-DATE
+> Task :react-native-worklets:generateDebugResources UP-TO-DATE
+> Task :react-native-worklets:packageDebugResources UP-TO-DATE
+> Task :react-native-worklets:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-worklets:processDebugManifest UP-TO-DATE
+> Task :react-native-worklets:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-worklets:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-worklets:generateDebugRFile UP-TO-DATE
+> Task :react-native-worklets:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :react-native-worklets:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-worklets:compileDebugKotlin NO-SOURCE
+> Task :expo-dev-menu:compileDebugKotlin UP-TO-DATE
+> Task :react-native-worklets:javaPreCompileDebug UP-TO-DATE
+> Task :expo-dev-menu:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-dev-menu:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-menu:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-worklets:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-worklets:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-worklets:mergeDebugShaders UP-TO-DATE
+> Task :react-native-worklets:compileDebugShaders NO-SOURCE
+> Task :react-native-worklets:generateDebugAssets UP-TO-DATE
+> Task :expo-dev-menu:processDebugJavaRes UP-TO-DATE
+> Task :react-native-worklets:mergeDebugAssets UP-TO-DATE
+> Task :react-native-worklets:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-worklets:processDebugJavaRes NO-SOURCE
+> Task :react-native-screens:buildCMakeDebug[arm64-v8a]
+> Task :expo-modules-core:buildCMakeDebug[arm64-v8a]
+> Task :expo-dev-launcher:compileDebugKotlin UP-TO-DATE
+> Task :expo-dev-launcher:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo-dev-launcher:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-dev-launcher:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-screens:configureCMakeDebug[armeabi-v7a]
+> Task :expo-dev-launcher:processDebugJavaRes UP-TO-DATE
+> Task :expo-modules-core:configureCMakeDebug[armeabi-v7a]
+> Task :react-native-reanimated:assertWorkletsVersionTask
+> Task :react-native-reanimated:generateCodegenSchemaFromJavaScript UP-TO-DATE
+> Task :react-native-reanimated:generateCodegenArtifactsFromSchema UP-TO-DATE
+> Task :react-native-reanimated:prepareReanimatedHeadersForPrefabs UP-TO-DATE
+> Task :react-native-reanimated:preBuild
+> Task :react-native-reanimated:preDebugBuild
+> Task :react-native-reanimated:writeDebugAarMetadata UP-TO-DATE
+> Task :react-native-reanimated:generateDebugResValues UP-TO-DATE
+> Task :react-native-reanimated:generateDebugResources UP-TO-DATE
+> Task :react-native-reanimated:packageDebugResources UP-TO-DATE
+> Task :react-native-reanimated:extractDeepLinksDebug UP-TO-DATE
+> Task :react-native-reanimated:processDebugManifest UP-TO-DATE
+> Task :react-native-reanimated:compileDebugLibraryResources UP-TO-DATE
+> Task :react-native-reanimated:parseDebugLocalResources UP-TO-DATE
+> Task :react-native-reanimated:generateDebugRFile UP-TO-DATE
+> Task :react-native-reanimated:generateDebugBuildConfig UP-TO-DATE
+> Task :react-native-reanimated:javaPreCompileDebug UP-TO-DATE
+> Task :react-native-reanimated:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-reanimated:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-reanimated:mergeDebugShaders UP-TO-DATE
+> Task :react-native-reanimated:compileDebugShaders NO-SOURCE
+> Task :react-native-reanimated:generateDebugAssets UP-TO-DATE
+> Task :react-native-reanimated:mergeDebugAssets UP-TO-DATE
+> Task :react-native-reanimated:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-reanimated:processDebugJavaRes NO-SOURCE
+> Task :react-native-reanimated:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-gesture-handler:compileDebugKotlin UP-TO-DATE
+> Task :react-native-gesture-handler:compileDebugJavaWithJavac UP-TO-DATE
+> Task :react-native-gesture-handler:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :react-native-gesture-handler:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :react-native-gesture-handler:processDebugJavaRes UP-TO-DATE
+
+> Task :expo-constants:createExpoConfig
+.\gradlew.bat : The NODE_ENV environment variable is required but was not specified. Ensure the project is bundled with Expo CLI or NODE_ENV is set. Using only .env.local and .env
+At line:1 char:1
++ .\gradlew.bat app:assembleDebug --stacktrace 2>&1 | Out-File -FilePat ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (The NODE_ENV en....local and .env:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+> Task :expo-constants:preBuild
+> Task :expo-constants:preDebugBuild
+> Task :app:preBuild
+> Task :app:preDebugBuild
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :expo-constants:writeDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugBuildConfig UP-TO-DATE
+> Task :expo-constants:generateDebugResValues UP-TO-DATE
+> Task :expo-constants:generateDebugResources UP-TO-DATE
+> Task :expo-constants:packageDebugResources UP-TO-DATE
+> Task :expo-constants:extractDeepLinksDebug UP-TO-DATE
+> Task :app:checkDebugAarMetadata UP-TO-DATE
+> Task :app:generateDebugResValues UP-TO-DATE
+> Task :expo-constants:processDebugManifest UP-TO-DATE
+> Task :expo-constants:compileDebugLibraryResources UP-TO-DATE
+> Task :expo-constants:parseDebugLocalResources UP-TO-DATE
+> Task :expo-constants:generateDebugRFile UP-TO-DATE
+> Task :expo-constants:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :app:mapDebugSourceSetPaths UP-TO-DATE
+> Task :expo-constants:generateDebugBuildConfig UP-TO-DATE
+> Task :app:generateDebugResources UP-TO-DATE
+> Task :app:mergeDebugResources UP-TO-DATE
+> Task :app:packageDebugResources UP-TO-DATE
+> Task :app:parseDebugLocalResources UP-TO-DATE
+> Task :app:createDebugCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksDebug UP-TO-DATE
+> Task :expo-constants:compileDebugKotlin UP-TO-DATE
+> Task :expo-constants:javaPreCompileDebug UP-TO-DATE
+> Task :app:processDebugMainManifest UP-TO-DATE
+> Task :app:processDebugManifest UP-TO-DATE
+> Task :expo-constants:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:processDebugManifestForPackage UP-TO-DATE
+> Task :expo-constants:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo-constants:mergeDebugShaders UP-TO-DATE
+> Task :expo-constants:compileDebugShaders NO-SOURCE
+> Task :expo-constants:generateDebugAssets UP-TO-DATE
+> Task :expo-constants:mergeDebugAssets UP-TO-DATE
+> Task :expo-constants:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :expo-constants:processDebugJavaRes UP-TO-DATE
+> Task :expo-constants:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-constants:mergeDebugNativeLibs NO-SOURCE
+> Task :expo-constants:copyDebugJniLibsProjectOnly UP-TO-DATE
+> Task :app:processDebugResources UP-TO-DATE
+> Task :app:javaPreCompileDebug UP-TO-DATE
+> Task :app:mergeDebugShaders UP-TO-DATE
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets UP-TO-DATE
+> Task :app:compressDebugAssets UP-TO-DATE
+> Task :app:desugarDebugFileDependencies UP-TO-DATE
+> Task :app:checkDebugDuplicateClasses UP-TO-DATE
+> Task :expo:compileDebugKotlin UP-TO-DATE
+> Task :expo:compileDebugJavaWithJavac UP-TO-DATE
+> Task :expo:bundleLibCompileToJarDebug UP-TO-DATE
+> Task :expo:bundleLibRuntimeToJarDebug UP-TO-DATE
+> Task :expo:processDebugJavaRes UP-TO-DATE
+> Task :app:mergeExtDexDebug UP-TO-DATE
+> Task :app:compileDebugKotlin UP-TO-DATE
+> Task :app:compileDebugJavaWithJavac UP-TO-DATE
+> Task :app:transformDebugClassesWithAsm UP-TO-DATE
+> Task :app:dexBuilderDebug UP-TO-DATE
+> Task :app:mergeDebugGlobalSynthetics UP-TO-DATE
+> Task :app:processDebugJavaRes UP-TO-DATE
+> Task :app:mergeDebugJavaResource UP-TO-DATE
+> Task :app:mergeLibDexDebug UP-TO-DATE
+> Task :app:mergeProjectDexDebug UP-TO-DATE
+> Task :app:mergeDebugJniLibFolders UP-TO-DATE
+> Task :app:validateSigningDebug UP-TO-DATE
+> Task :app:writeDebugAppMetadata UP-TO-DATE
+> Task :app:writeDebugSigningConfigVersions UP-TO-DATE
+> Task :react-native-worklets:configureCMakeDebug[arm64-v8a]
+> Task :react-native-worklets:buildCMakeDebug[arm64-v8a][worklets]
+> Task :react-native-screens:buildCMakeDebug[armeabi-v7a]
+> Task :react-native-screens:configureCMakeDebug[x86]
+> Task :react-native-worklets:configureCMakeDebug[armeabi-v7a]
+> Task :expo-modules-core:buildCMakeDebug[armeabi-v7a]
+> Task :expo-modules-core:configureCMakeDebug[x86]
+> Task :react-native-screens:buildCMakeDebug[x86]
+> Task :react-native-screens:configureCMakeDebug[x86_64]
+> Task :react-native-screens:buildCMakeDebug[x86_64]
+> Task :react-native-screens:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-screens:mergeDebugNativeLibs
+> Task :react-native-screens:copyDebugJniLibsProjectOnly
+> Task :react-native-worklets:buildCMakeDebug[armeabi-v7a][worklets]
+> Task :expo-modules-core:buildCMakeDebug[x86]
+> Task :expo-modules-core:configureCMakeDebug[x86_64]
+> Task :expo-modules-core:buildCMakeDebug[x86_64]
+> Task :expo-modules-core:mergeDebugJniLibFolders UP-TO-DATE
+> Task :expo-modules-core:mergeDebugNativeLibs
+> Task :expo-modules-core:copyDebugJniLibsProjectOnly
+> Task :react-native-worklets:configureCMakeDebug[x86]
+> Task :react-native-worklets:buildCMakeDebug[x86][worklets]
+> Task :react-native-worklets:configureCMakeDebug[x86_64]
+> Task :react-native-worklets:buildCMakeDebug[x86_64][worklets]
+> Task :react-native-worklets:externalNativeBuildDebug
+> Task :react-native-worklets:generateJsonModelDebug
+> Task :react-native-worklets:prefabDebugConfigurePackage
+> Task :react-native-worklets:prefabDebugPackage
+> Task :react-native-worklets:mergeDebugJniLibFolders UP-TO-DATE
+> Task :react-native-worklets:mergeDebugNativeLibs
+> Task :react-native-worklets:copyDebugJniLibsProjectOnly
+> Task :react-native-reanimated:configureCMakeDebug[arm64-v8a]
+> Task :react-native-reanimated:configureCMakeDebug[armeabi-v7a]
+> Task :react-native-reanimated:configureCMakeDebug[x86]
+> Task :react-native-reanimated:configureCMakeDebug[x86_64]
+> Task :react-native-reanimated:generateJsonModelDebug
+> Task :react-native-reanimated:prefabDebugConfigurePackage
+> Task :react-native-reanimated:buildCMakeDebug[arm64-v8a][reanimated]
+> Task :app:configureCMakeDebug[arm64-v8a]
+> Task :react-native-gesture-handler:configureCMakeDebug[arm64-v8a]
+> Task :react-native-reanimated:buildCMakeDebug[armeabi-v7a][reanimated]
+> Task :react-native-reanimated:buildCMakeDebug[x86][reanimated]
+> Task :react-native-reanimated:buildCMakeDebug[x86_64][reanimated]
+> Task :react-native-reanimated:externalNativeBuildDebug
+> Task :react-native-reanimated:prefabDebugPackage
+> Task :react-native-gesture-handler:buildCMakeDebug[arm64-v8a]
+> Task :react-native-reanimated:mergeDebugNativeLibs
+> Task :react-native-reanimated:copyDebugJniLibsProjectOnly
+
+> Task :app:configureCMakeDebug[arm64-v8a]
+C/C++: CMake Warning in C:/projetos/meu-projeto-ai/verly-mobile/node_modules/react-native-gesture-handler/android/build/generated/source/codegen/jni/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/projetos/meu-projeto-ai/verly-mobile/android/app/.cxx/Debug/6a525r2c/arm64-v8a/rngesturehandler_codegen_autolinked_build/CMakeFiles/react_codegen_rngesturehandler_codegen.dir/./
+C/C++:   has 180 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     react/renderer/components/rngesturehandler_codegen/rngesturehandler_codegenJSI-generated.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-gesture-handler:configureCMakeDebug[armeabi-v7a]
+> Task :app:buildCMakeDebug[arm64-v8a]
+> Task :react-native-gesture-handler:buildCMakeDebug[armeabi-v7a]
+
+> Task :app:configureCMakeDebug[armeabi-v7a]
+C/C++: CMake Warning in C:/projetos/meu-projeto-ai/verly-mobile/node_modules/react-native-gesture-handler/android/build/generated/source/codegen/jni/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/projetos/meu-projeto-ai/verly-mobile/android/app/.cxx/Debug/6a525r2c/armeabi-v7a/rngesturehandler_codegen_autolinked_build/CMakeFiles/react_codegen_rngesturehandler_codegen.dir/./
+C/C++:   has 182 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     react/renderer/components/rngesturehandler_codegen/rngesturehandler_codegenJSI-generated.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :react-native-gesture-handler:configureCMakeDebug[x86]
+> Task :react-native-gesture-handler:buildCMakeDebug[x86]
+> Task :react-native-gesture-handler:configureCMakeDebug[x86_64]
+> Task :react-native-gesture-handler:buildCMakeDebug[x86_64]
+> Task :react-native-gesture-handler:mergeDebugNativeLibs
+> Task :react-native-gesture-handler:copyDebugJniLibsProjectOnly
+> Task :app:buildCMakeDebug[armeabi-v7a]
+> Task :app:configureCMakeDebug[x86]
+> Task :app:buildCMakeDebug[x86]
+
+> Task :app:configureCMakeDebug[x86_64]
+C/C++: CMake Warning in C:/projetos/meu-projeto-ai/verly-mobile/node_modules/react-native-gesture-handler/android/build/generated/source/codegen/jni/CMakeLists.txt:
+C/C++:   The object file directory
+C/C++:     C:/projetos/meu-projeto-ai/verly-mobile/android/app/.cxx/Debug/6a525r2c/x86_64/rngesturehandler_codegen_autolinked_build/CMakeFiles/react_codegen_rngesturehandler_codegen.dir/./
+C/C++:   has 177 characters.  The maximum full path to an object file is 250
+C/C++:   characters (see CMAKE_OBJECT_PATH_MAX).  Object file
+C/C++:     react/renderer/components/rngesturehandler_codegen/rngesturehandler_codegenJSI-generated.cpp.o
+C/C++:   cannot be safely placed under this directory.  The build may not work
+C/C++:   correctly.
+
+> Task :app:buildCMakeDebug[x86_64]
+> Task :app:mergeDebugNativeLibs
+> Task :app:stripDebugDebugSymbols
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+
+[Incubating] Problems report is available at: file:///C:/projetos/meu-projeto-ai/verly-mobile/android/build/reports/problems/problems-report.html
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD SUCCESSFUL in 5m 23s
+627 actionable tasks: 72 executed, 555 up-to-date
+</file>
+
 <file path="verly-mobile/android/build.gradle">
 // Top-level build file where you can add configuration options common to all sub-projects/modules.
 
@@ -7334,12 +10575,12 @@ function Avatar({ nome, size = 44, color = C.brand }) {
   );
 }
 
-export default function AmigosScreen() {
+export default function AmigosScreen({ navigation }) {
   const [amigos,   setAmigos]   = useState([]);
   const [pedidos,  setPedidos]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [refresh,  setRefresh]  = useState(false);
-  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos'
+  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos' | 'grupos'
 
   // Modal adicionar
   const [showAdd,  setShowAdd]  = useState(false);
@@ -7441,6 +10682,19 @@ export default function AmigosScreen() {
 
   return (
     <View style={s.root}>
+      {/* Acesso rápido a Grupos e Recompensas */}
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
+        <Pressable onPress={() => navigation.navigate('Grupos')}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#7C6FE020', borderRadius: 12, borderWidth: 1, borderColor: '#7C6FE040', padding: 10 }}>
+          <Text style={{ fontSize: 18 }}>👥</Text>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C6FE0' }}>Grupos</Text>
+        </Pressable>
+        <Pressable onPress={() => navigation.navigate('Recompensas')}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFB30020', borderRadius: 12, borderWidth: 1, borderColor: '#FFB30040', padding: 10 }}>
+          <Text style={{ fontSize: 18 }}>🏆</Text>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFB300' }}>Recompensas</Text>
+        </Pressable>
+      </View>
       {/* Tab selector */}
       <Reveal delay={0} style={s.tabs}>
         <Pressable onPress={() => setTab('amigos')} style={[s.tab, tab === 'amigos' && s.tabActive]}>
@@ -11470,6 +14724,74 @@ def adicionar_manual():
     db.session.add(sub)
     db.session.commit()
     return jsonify({'success': True, 'id': sub.id})
+</file>
+
+<file path="app/tasks/ai_insights.py">
+"""
+app/tasks/ai_insights.py — Task Celery: gera insights IA e guarda em cache Redis.
+"""
+
+import logging
+from run import celery
+from app.extensions import cache
+
+logger = logging.getLogger(__name__)
+
+
+@celery.task(
+    bind=True,
+    name='tasks.gerar_insights',
+    queue='ai',
+    max_retries=2,
+    default_retry_delay=60,
+)
+def gerar_insights_task(self, user_id: int):
+    try:
+        from app.api.insights import _build_context, _gerar_insights_llm
+        from app.models import User
+
+        ctx = _build_context(user_id)
+        user = User.query.get(user_id)
+        personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+        insights = _gerar_insights_llm(ctx, personalidade)
+
+        # Guardar o resultado completo (mesmo formato que o frontend espera)
+        result = {
+            'success': True,
+            'insights': insights,
+            'resumo': {
+                'total_gasto':         ctx['total_gasto_mes'],
+                'num_faturas':         ctx['num_faturas_mes'],
+                'variacao_pct':        ctx['variacao_pct'],
+                'variacao_subiu':      (ctx['variacao_pct'] or 0) > 0,
+                'orcamento_mensal':    ctx['orcamento_mensal'],
+                'rendimento_mensal':   ctx['rendimento_mensal'],
+                'pct_orcamento':       round((ctx['total_gasto_mes'] / ctx['orcamento_mensal'] * 100), 1)
+                                       if ctx['orcamento_mensal'] > 0 else None,
+                'pct_rendimento':      round((ctx['total_gasto_mes'] / ctx['rendimento_mensal'] * 100), 1)
+                                       if ctx['rendimento_mensal'] > 0 else None,
+                'top_categorias':      ctx['top_categorias'],
+                'metas':               ctx['metas'],
+                'previsao_mensal':     ctx['previsao_mensal'],
+                'subscricoes':         ctx['subscricoes_detetadas'],
+                'total_subscricoes':   ctx['total_subscricoes'],
+                'historico_mensal':    ctx['historico_mensal'],
+                'regra_5030_20':       ctx['regra_5030_20'],
+                'itens_por_categoria': ctx['itens_por_categoria'],
+            },
+            'personalidade': personalidade,
+            'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
+        }
+
+        cache_key = f'insights:{user_id}'
+        cache.set(cache_key, result, timeout=900)  # 15 min
+
+        logger.info(f'Insights gerados para user {user_id}')
+        return {'status': 'ok', 'user_id': user_id}
+
+    except Exception as exc:
+        logger.exception(f'Insights IA falharam para user {user_id}: {exc}')
+        raise self.retry(exc=exc)
 </file>
 
 <file path="config.py">
@@ -30425,6 +33747,7 @@ from app.api import gmail          # noqa
 from app.api import exportar_mobile    # noqa
 from app.api import push_notifications # noqa
 from app.api import estatisticas  # noqa
+from app.api import social         # noqa
 </file>
 
 <file path="app/models.py">
@@ -31582,7 +34905,6 @@ import {
 import { haptic } from '../utils/haptics';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { AIStateBanner, DynamicAlertBanners, SimuladorQuickAccess } from '../components/DynamicDashboardEngine';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -31592,12 +34914,10 @@ const initials = (name = '') =>
 
 const PREFS_KEY = '@verly_dashboard_prefs';
 const CARDS_KEY = '@verly_card_order';
-const CARDS_DEFAULT = ['hero', 'metricas', 'poupanca', 'previsao', 'quicklinks', 'graficos', 'insights', 'subscricoes', 'faturas'];
+const CARDS_DEFAULT = ['hero', 'metricas', 'previsao', 'quicklinks', 'feedaccess', 'graficos', 'subscricoes', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
-  mostrarPoupanca: true,
   mostrarGraficos: true,
-  mostrarInsights: true,
   mostrarFaturas:  true,
   mostrarSubscricoes: true,
 };
@@ -32609,6 +35929,57 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
 }
 
 
+
+// ─── Quick Actions — acesso direto às features principais ────────────────────
+function QuickActions({ navigation }) {
+  const actions = [
+    {
+      label: 'Cockpit',
+      sub: 'Feed ao vivo',
+      icon: '⚡',
+      color: C.brand,
+      onPress: () => { haptic.light(); navigation?.navigate('IntelligenceFeed'); },
+    },
+    {
+      label: 'Simulador',
+      sub: 'E se cortasses?',
+      icon: '🎛️',
+      color: '#00D68F',
+      onPress: () => { haptic.light(); navigation?.navigate('Simulador'); },
+    },
+    {
+      label: 'Padrões',
+      sub: 'O teu perfil',
+      icon: '📊',
+      color: '#FFB300',
+      onPress: () => { haptic.light(); navigation?.navigate('FinancialGraph'); },
+    },
+  ];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(380).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {actions.map((a, i) => (
+          <Pressable
+            key={i}
+            onPress={a.onPress}
+            style={{
+              flex: 1, backgroundColor: C.surface,
+              borderRadius: RADIUS.lg, borderWidth: 1,
+              borderColor: a.color + '35', padding: 12,
+              alignItems: 'center', gap: 4,
+            }}
+          >
+            <Text style={{ fontSize: 22 }}>{a.icon}</Text>
+            <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>{a.label}</Text>
+            <Text style={{ fontSize: 10, color: a.color, fontWeight: '600' }}>{a.sub}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </Animated.View>
+  );
+}
+
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
 
 
@@ -32628,7 +35999,6 @@ export default function DashboardScreen({ navigation, route }) {
   const [notifLoad,  setNotifLoad]  = useState(false);
   const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
   const [insights,   setInsights]   = useState([]);
-  const [resumoInsights, setResumoInsights] = useState(null);
   const [streakDias,   setStreakDias]   = useState(0);
   const [numGarantias, setNumGarantias] = useState(0);
   const [previsao,     setPrevisao]     = useState(null);
@@ -32649,16 +36019,10 @@ export default function DashboardScreen({ navigation, route }) {
 
   useEffect(() => { fetchNotifs(); }, [fetchNotifs]);
 
-  const fetchInsights = useCallback(async (retryCount = 0) => {
+  const fetchInsights = useCallback(async () => {
     try {
       const data = await insightsAPI.get();
-      if (data.success && data.resumo) {
-        setInsights((data.insights || []).slice(0, 3));
-        setResumoInsights(data.resumo);
-      } else if (data.status === 'a_calcular' && retryCount < 4) {
-        // Backend está a calcular — retry em 10s
-        setTimeout(() => fetchInsights(retryCount + 1), 10000);
-      }
+      if (data.success) setInsights((data.insights || []).slice(0, 3));
     } catch (e) {}
   }, []);
 
@@ -32696,7 +36060,15 @@ export default function DashboardScreen({ navigation, route }) {
   // Carrega ordem dos cards
   useEffect(() => {
     AsyncStorage.getItem(CARDS_KEY).then(saved => {
-      if (saved) { try { setCardOrder(JSON.parse(saved)); } catch {} }
+      if (saved) { try {
+        const parsed = JSON.parse(saved);
+        // Merge: keep saved order but add any new default cards not yet saved
+        const merged = [
+          ...parsed.filter(id => CARDS_DEFAULT.includes(id)),
+          ...CARDS_DEFAULT.filter(id => !parsed.includes(id)),
+        ];
+        setCardOrder(merged);
+      } catch {} }
     });
   }, []);
 
@@ -32741,16 +36113,12 @@ export default function DashboardScreen({ navigation, route }) {
         return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
       case 'metricas':
         return <MetricsRow key="metricas" data={data} />;
-      case 'poupanca':
-        return prefs.mostrarPoupanca ? <PoupancaCard key="poupanca" data={data} /> : null;
       case 'previsao':
         return prefs.mostrarPrevisao ? <PrevisaoCard key="previsao" previsao={previsao} orcamento={orcamento} navigation={navigation} /> : null;
       case 'quicklinks':
         return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
       case 'graficos':
         return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} /> : null;
-      case 'insights':
-        return prefs.mostrarInsights ? <InsightsSection key="insights" mood={data?.mood} feed={data?.feed} /> : null;
       case 'subscricoes':
         return (prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0) ? (
           <Animated.View key="subscricoes" entering={FadeInDown.delay(200).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
@@ -32769,6 +36137,8 @@ export default function DashboardScreen({ navigation, route }) {
             </Pressable>
           </Animated.View>
         ) : null;
+      case 'feedaccess':
+        return <QuickActions key="feedaccess" navigation={navigation} />;
       case 'faturas':
         return prefs.mostrarFaturas ? <RecentFaturas key="faturas" faturas={data?.ultimas_faturas} navigation={navigation} /> : null;
       default:
@@ -32922,9 +36292,6 @@ export default function DashboardScreen({ navigation, route }) {
             }
           >
             <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-            <AIStateBanner resumo={resumoInsights} />
-            <DynamicAlertBanners resumo={resumoInsights} />
-            <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
             {loading ? <LoadingSkeleton /> : (
               cardOrder.map((id) => renderCard(id))
             )}
@@ -32939,9 +36306,6 @@ export default function DashboardScreen({ navigation, route }) {
             ListHeaderComponent={() => (
               <>
                 <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-                <AIStateBanner resumo={resumoInsights} />
-                <DynamicAlertBanners resumo={resumoInsights} />
-                <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
                 {loading && <LoadingSkeleton />}
                 <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
                   <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>
@@ -33143,6 +36507,9 @@ import ConfiguracoesScreen     from '../screens/ConfiguracoesScreen';
 import GmailScreen             from '../screens/GmailScreen';
 import GarantiasScreen         from '../screens/GarantiasScreen';
 import RetrospetivaMensalScreen from '../screens/RetrospetivaMensalScreen';
+import SimuladorScreen         from '../screens/SimuladorScreen';
+import IntelligenceFeedScreen  from '../screens/IntelligenceFeedScreen';
+import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
@@ -33648,6 +37015,13 @@ function MainStackNav() {
       <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
       <MainStack.Screen name="Garantias"     component={GarantiasScreen}         options={{ headerShown: false }} />
       <MainStack.Screen name="Retrospetiva"  component={RetrospetivaMensalScreen} options={{ headerShown: false }} />
+      <MainStack.Screen name="Simulador"     component={SimuladorScreen}          options={{ headerShown: false }} />
+      <MainStack.Screen name="IntelligenceFeed" component={IntelligenceFeedScreen} options={{ headerShown: false }} />
+      <MainStack.Screen name="FinancialGraph"   component={FinancialGraphScreen}   options={{ headerShown: false }} />
+      <MainStack.Screen name="Grupos"          component={GruposScreen}          options={{ headerShown: false }} />
+      <MainStack.Screen name="GrupoDetalhe"    component={GrupoDetalheScreen}    options={{ headerShown: false }} />
+      <MainStack.Screen name="DesafioDetalhe"  component={DesafioDetalheScreen}  options={{ headerShown: false }} />
+      <MainStack.Screen name="Recompensas"     component={RecompensasScreen}     options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }
@@ -34240,6 +37614,29 @@ export const pushAPI = {
 // ── Poupança ───────────────────────────────────────────────────────────────────
 export const poupancaAPI = {
   get: () => apiFetch('/poupanca'),
+};
+
+// ── Grupos & Desafios & Recompensas ───────────────────────────────────────────
+
+export const gruposAPI = {
+  listar:   () => apiFetch('/grupos'),
+  criar:    (data) => apiFetch('/grupos', { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:  (id) => apiFetch(`/grupos/${id}`),
+  convidar: (id, user_id) => apiFetch(`/grupos/${id}/convidar`, { method: 'POST', body: JSON.stringify({ user_id }) }),
+  sair:     (id) => apiFetch(`/grupos/${id}/sair`, { method: 'POST' }),
+};
+
+export const desafiosAPI = {
+  listar:    (grupo_id) => apiFetch(`/grupos/${grupo_id}/desafios`),
+  criar:     (grupo_id, data) => apiFetch(`/grupos/${grupo_id}/desafios`, { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:   (id) => apiFetch(`/desafios/${id}`),
+  progresso: (id) => apiFetch(`/desafios/${id}/progresso`, { method: 'POST' }),
+  terminar:  (id) => apiFetch(`/desafios/${id}/terminar`, { method: 'POST' }),
+};
+
+export const recompensasAPI = {
+  listar: () => apiFetch('/recompensas'),
+  novas:  () => apiFetch('/recompensas/novas'),
 };
 </file>
 

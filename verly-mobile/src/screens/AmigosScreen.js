@@ -30,12 +30,12 @@ function Avatar({ nome, size = 44, color = C.brand }) {
   );
 }
 
-export default function AmigosScreen() {
+export default function AmigosScreen({ navigation }) {
   const [amigos,   setAmigos]   = useState([]);
   const [pedidos,  setPedidos]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [refresh,  setRefresh]  = useState(false);
-  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos'
+  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos' | 'grupos'
 
   // Modal adicionar
   const [showAdd,  setShowAdd]  = useState(false);
@@ -137,6 +137,19 @@ export default function AmigosScreen() {
 
   return (
     <View style={s.root}>
+      {/* Acesso rápido a Grupos e Recompensas */}
+      <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
+        <Pressable onPress={() => navigation.navigate('Grupos')}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#7C6FE020', borderRadius: 12, borderWidth: 1, borderColor: '#7C6FE040', padding: 10 }}>
+          <Text style={{ fontSize: 18 }}>👥</Text>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C6FE0' }}>Grupos</Text>
+        </Pressable>
+        <Pressable onPress={() => navigation.navigate('Recompensas')}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFB30020', borderRadius: 12, borderWidth: 1, borderColor: '#FFB30040', padding: 10 }}>
+          <Text style={{ fontSize: 18 }}>🏆</Text>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFB300' }}>Recompensas</Text>
+        </Pressable>
+      </View>
       {/* Tab selector */}
       <Reveal delay={0} style={s.tabs}>
         <Pressable onPress={() => setTab('amigos')} style={[s.tab, tab === 'amigos' && s.tabActive]}>

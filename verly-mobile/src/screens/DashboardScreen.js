@@ -46,7 +46,6 @@ import {
 import { haptic } from '../utils/haptics';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { AIStateBanner, DynamicAlertBanners, SimuladorQuickAccess } from '../components/DynamicDashboardEngine';
 
 const C   = COLORS;
 const W   = Dimensions.get('window').width;
@@ -56,12 +55,10 @@ const initials = (name = '') =>
 
 const PREFS_KEY = '@verly_dashboard_prefs';
 const CARDS_KEY = '@verly_card_order';
-const CARDS_DEFAULT = ['hero', 'metricas', 'poupanca', 'previsao', 'quicklinks', 'graficos', 'insights', 'subscricoes', 'faturas'];
+const CARDS_DEFAULT = ['hero', 'metricas', 'previsao', 'quicklinks', 'feedaccess', 'graficos', 'subscricoes', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
-  mostrarPoupanca: true,
   mostrarGraficos: true,
-  mostrarInsights: true,
   mostrarFaturas:  true,
   mostrarSubscricoes: true,
 };
@@ -1073,6 +1070,57 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
 }
 
 
+
+// ─── Quick Actions — acesso direto às features principais ────────────────────
+function QuickActions({ navigation }) {
+  const actions = [
+    {
+      label: 'Cockpit',
+      sub: 'Feed ao vivo',
+      icon: '⚡',
+      color: C.brand,
+      onPress: () => { haptic.light(); navigation?.navigate('IntelligenceFeed'); },
+    },
+    {
+      label: 'Simulador',
+      sub: 'E se cortasses?',
+      icon: '🎛️',
+      color: '#00D68F',
+      onPress: () => { haptic.light(); navigation?.navigate('Simulador'); },
+    },
+    {
+      label: 'Padrões',
+      sub: 'O teu perfil',
+      icon: '📊',
+      color: '#FFB300',
+      onPress: () => { haptic.light(); navigation?.navigate('FinancialGraph'); },
+    },
+  ];
+
+  return (
+    <Animated.View entering={FadeInDown.delay(380).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        {actions.map((a, i) => (
+          <Pressable
+            key={i}
+            onPress={a.onPress}
+            style={{
+              flex: 1, backgroundColor: C.surface,
+              borderRadius: RADIUS.lg, borderWidth: 1,
+              borderColor: a.color + '35', padding: 12,
+              alignItems: 'center', gap: 4,
+            }}
+          >
+            <Text style={{ fontSize: 22 }}>{a.icon}</Text>
+            <Text style={{ fontSize: 12, fontWeight: '800', color: C.text }}>{a.label}</Text>
+            <Text style={{ fontSize: 10, color: a.color, fontWeight: '600' }}>{a.sub}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </Animated.View>
+  );
+}
+
 // ─── Ecrã principal ───────────────────────────────────────────────────────────
 
 
@@ -1092,7 +1140,6 @@ export default function DashboardScreen({ navigation, route }) {
   const [notifLoad,  setNotifLoad]  = useState(false);
   const [uploadResult, setUploadResult] = useState(null); // fatura extraída após upload
   const [insights,   setInsights]   = useState([]);
-  const [resumoInsights, setResumoInsights] = useState(null);
   const [streakDias,   setStreakDias]   = useState(0);
   const [numGarantias, setNumGarantias] = useState(0);
   const [previsao,     setPrevisao]     = useState(null);
@@ -1113,16 +1160,10 @@ export default function DashboardScreen({ navigation, route }) {
 
   useEffect(() => { fetchNotifs(); }, [fetchNotifs]);
 
-  const fetchInsights = useCallback(async (retryCount = 0) => {
+  const fetchInsights = useCallback(async () => {
     try {
       const data = await insightsAPI.get();
-      if (data.success && data.resumo) {
-        setInsights((data.insights || []).slice(0, 3));
-        setResumoInsights(data.resumo);
-      } else if (data.status === 'a_calcular' && retryCount < 4) {
-        // Backend está a calcular — retry em 10s
-        setTimeout(() => fetchInsights(retryCount + 1), 10000);
-      }
+      if (data.success) setInsights((data.insights || []).slice(0, 3));
     } catch (e) {}
   }, []);
 
@@ -1160,7 +1201,15 @@ export default function DashboardScreen({ navigation, route }) {
   // Carrega ordem dos cards
   useEffect(() => {
     AsyncStorage.getItem(CARDS_KEY).then(saved => {
-      if (saved) { try { setCardOrder(JSON.parse(saved)); } catch {} }
+      if (saved) { try {
+        const parsed = JSON.parse(saved);
+        // Merge: keep saved order but add any new default cards not yet saved
+        const merged = [
+          ...parsed.filter(id => CARDS_DEFAULT.includes(id)),
+          ...CARDS_DEFAULT.filter(id => !parsed.includes(id)),
+        ];
+        setCardOrder(merged);
+      } catch {} }
     });
   }, []);
 
@@ -1205,16 +1254,12 @@ export default function DashboardScreen({ navigation, route }) {
         return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
       case 'metricas':
         return <MetricsRow key="metricas" data={data} />;
-      case 'poupanca':
-        return prefs.mostrarPoupanca ? <PoupancaCard key="poupanca" data={data} /> : null;
       case 'previsao':
         return prefs.mostrarPrevisao ? <PrevisaoCard key="previsao" previsao={previsao} orcamento={orcamento} navigation={navigation} /> : null;
       case 'quicklinks':
         return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
       case 'graficos':
         return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} /> : null;
-      case 'insights':
-        return prefs.mostrarInsights ? <InsightsSection key="insights" mood={data?.mood} feed={data?.feed} /> : null;
       case 'subscricoes':
         return (prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0) ? (
           <Animated.View key="subscricoes" entering={FadeInDown.delay(200).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
@@ -1233,6 +1278,8 @@ export default function DashboardScreen({ navigation, route }) {
             </Pressable>
           </Animated.View>
         ) : null;
+      case 'feedaccess':
+        return <QuickActions key="feedaccess" navigation={navigation} />;
       case 'faturas':
         return prefs.mostrarFaturas ? <RecentFaturas key="faturas" faturas={data?.ultimas_faturas} navigation={navigation} /> : null;
       default:
@@ -1386,9 +1433,6 @@ export default function DashboardScreen({ navigation, route }) {
             }
           >
             <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-            <AIStateBanner resumo={resumoInsights} />
-            <DynamicAlertBanners resumo={resumoInsights} />
-            <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
             {loading ? <LoadingSkeleton /> : (
               cardOrder.map((id) => renderCard(id))
             )}
@@ -1403,9 +1447,6 @@ export default function DashboardScreen({ navigation, route }) {
             ListHeaderComponent={() => (
               <>
                 <AlertsPanel visible={showAlerts} alertas={data?.alertas || []} />
-                <AIStateBanner resumo={resumoInsights} />
-                <DynamicAlertBanners resumo={resumoInsights} />
-                <SimuladorQuickAccess resumo={resumoInsights} onPress={() => navigation.navigate('Simulador')} />
                 {loading && <LoadingSkeleton />}
                 <Animated.View entering={FadeInDown.duration(250)} style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 4, padding: 12, backgroundColor: C.brand + '15', borderRadius: 12, borderWidth: 1, borderColor: C.brand + '40' }}>
                   <Text style={{ color: C.brand, fontSize: 12, fontWeight: '700', textAlign: 'center' }}>

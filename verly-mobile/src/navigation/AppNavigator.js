@@ -38,6 +38,9 @@ import ConfiguracoesScreen     from '../screens/ConfiguracoesScreen';
 import GmailScreen             from '../screens/GmailScreen';
 import GarantiasScreen         from '../screens/GarantiasScreen';
 import RetrospetivaMensalScreen from '../screens/RetrospetivaMensalScreen';
+import SimuladorScreen         from '../screens/SimuladorScreen';
+import IntelligenceFeedScreen  from '../screens/IntelligenceFeedScreen';
+import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
@@ -543,6 +546,13 @@ function MainStackNav() {
       <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
       <MainStack.Screen name="Garantias"     component={GarantiasScreen}         options={{ headerShown: false }} />
       <MainStack.Screen name="Retrospetiva"  component={RetrospetivaMensalScreen} options={{ headerShown: false }} />
+      <MainStack.Screen name="Simulador"     component={SimuladorScreen}          options={{ headerShown: false }} />
+      <MainStack.Screen name="IntelligenceFeed" component={IntelligenceFeedScreen} options={{ headerShown: false }} />
+      <MainStack.Screen name="FinancialGraph"   component={FinancialGraphScreen}   options={{ headerShown: false }} />
+      <MainStack.Screen name="Grupos"          component={GruposScreen}          options={{ headerShown: false }} />
+      <MainStack.Screen name="GrupoDetalhe"    component={GrupoDetalheScreen}    options={{ headerShown: false }} />
+      <MainStack.Screen name="DesafioDetalhe"  component={DesafioDetalheScreen}  options={{ headerShown: false }} />
+      <MainStack.Screen name="Recompensas"     component={RecompensasScreen}     options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

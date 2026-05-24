@@ -323,3 +323,26 @@ export const pushAPI = {
 export const poupancaAPI = {
   get: () => apiFetch('/poupanca'),
 };
+
+// ── Grupos & Desafios & Recompensas ───────────────────────────────────────────
+
+export const gruposAPI = {
+  listar:   () => apiFetch('/grupos'),
+  criar:    (data) => apiFetch('/grupos', { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:  (id) => apiFetch(`/grupos/${id}`),
+  convidar: (id, user_id) => apiFetch(`/grupos/${id}/convidar`, { method: 'POST', body: JSON.stringify({ user_id }) }),
+  sair:     (id) => apiFetch(`/grupos/${id}/sair`, { method: 'POST' }),
+};
+
+export const desafiosAPI = {
+  listar:    (grupo_id) => apiFetch(`/grupos/${grupo_id}/desafios`),
+  criar:     (grupo_id, data) => apiFetch(`/grupos/${grupo_id}/desafios`, { method: 'POST', body: JSON.stringify(data) }),
+  detalhe:   (id) => apiFetch(`/desafios/${id}`),
+  progresso: (id) => apiFetch(`/desafios/${id}/progresso`, { method: 'POST' }),
+  terminar:  (id) => apiFetch(`/desafios/${id}/terminar`, { method: 'POST' }),
+};
+
+export const recompensasAPI = {
+  listar: () => apiFetch('/recompensas'),
+  novas:  () => apiFetch('/recompensas/novas'),
+};
