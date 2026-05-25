@@ -41,6 +41,10 @@ import RetrospetivaMensalScreen from '../screens/RetrospetivaMensalScreen';
 import SimuladorScreen         from '../screens/SimuladorScreen';
 import IntelligenceFeedScreen  from '../screens/IntelligenceFeedScreen';
 import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
+import GruposScreen            from '../screens/GruposScreen';
+import GrupoDetalheScreen      from '../screens/GrupoDetalheScreen';
+import DesafioDetalheScreen    from '../screens/DesafioDetalheScreen';
+import RecompensasScreen        from '../screens/RecompensasScreen';
 
 export const COLORS = {
   brand:    '#7C6FE0',
