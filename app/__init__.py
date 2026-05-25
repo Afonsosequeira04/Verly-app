@@ -195,20 +195,33 @@ def _migrate_db():
             return True
 
     migrations = [
+        # ── faturas ───────────────────────────────────────────────────────────
         ('faturas', 'categoria',      "VARCHAR(50) DEFAULT 'Outros'"),
         ('faturas', 'data_garantia',  'VARCHAR(50)'),
         ('faturas', 'data_devolucao', 'VARCHAR(50)'),
         ('faturas', 'notas',          'TEXT'),
         ('faturas', 'file_key',       'VARCHAR(512)'),
-        ('users',   'notificacoes_email',        'BOOLEAN DEFAULT 0'),
+        # ── users ─────────────────────────────────────────────────────────────
+        ('users',   'notificacoes_email',        'BOOLEAN DEFAULT false'),
         ('users',   'email_notificacoes',        'VARCHAR(150)'),
         ('users',   'personalidade',             "VARCHAR(20) DEFAULT 'calm'"),
         ('users',   'orcamento_mensal',          'FLOAT DEFAULT 0'),
-        ('users',   'onboarding_completo',       'BOOLEAN DEFAULT 0'),
+        ('users',   'onboarding_completo',       'BOOLEAN DEFAULT false'),
         ('users',   'avatar',                    'VARCHAR(255)'),
         ('users',   'streak_dias',               'INTEGER DEFAULT 0'),
-        ('users',   'streak_ultima_atualizacao', 'DATETIME'),
+        ('users',   'streak_ultima_atualizacao', 'TIMESTAMP'),
         ('users',   'lingua',                    "VARCHAR(10) DEFAULT 'pt'"),
+        ('users',   'fcm_token',                 'VARCHAR(512)'),
+        ('users',   'fcm_token_updated',         'TIMESTAMP'),
+        ('users',   'push_ativas',               'BOOLEAN DEFAULT true'),
+        # ── grupos ────────────────────────────────────────────────────────────
+        ('grupos',  'streak_dias',               'INTEGER DEFAULT 0'),
+        ('grupos',  'streak_ultima_data',        'DATE'),
+        # ── desafios ──────────────────────────────────────────────────────────
+        ('desafios', 'criado_por_ia',            'BOOLEAN DEFAULT false'),
+        ('desafios', 'push_enviado',             'BOOLEAN DEFAULT false'),
+        # ── desafio_participantes ─────────────────────────────────────────────
+        ('desafio_participantes', 'push_ranking_enviado', 'BOOLEAN DEFAULT false'),
     ]
 
     for table, column, col_type in migrations:
@@ -216,5 +229,7 @@ def _migrate_db():
             try:
                 db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
                 db.session.commit()
-            except Exception:
+                print(f'✅ Migração: {table}.{column} adicionada.')
+            except Exception as e:
                 db.session.rollback()
+                print(f'⚠️ Migração falhou {table}.{column}: {e}')
