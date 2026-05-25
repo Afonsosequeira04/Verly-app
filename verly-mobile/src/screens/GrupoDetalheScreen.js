@@ -6,7 +6,7 @@ import {
   KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { gruposAPI, desafiosAPI, amigosAPI, chatGrupoAPI } from '../services/api';
+import { gruposAPI, desafiosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
@@ -14,7 +14,8 @@ const TABS = ['Feed', 'Chat', 'Desafios', 'Streak'];
 const REACAO_EMOJIS = ['👀', '🔥', '💸', '💪', '😅', '🏆'];
 
 export default function GrupoDetalheScreen({ route, navigation }) {
-  const { grupo_id } = route.params;
+  // ✅ FIX: usar grupoId (camelCase) igual ao que GruposScreen passa
+  const { grupoId } = route.params;
 
   const [grupo, setGrupo]           = useState(null);
   const [tab, setTab]               = useState('Feed');
@@ -28,7 +29,7 @@ export default function GrupoDetalheScreen({ route, navigation }) {
   const [mensagens, setMensagens]   = useState([]);
   const [texto, setTexto]           = useState('');
   const [enviando, setEnviando]     = useState(false);
-  const [mostrarReacoes, setMostrarReacoes] = useState(null); // msg_id
+  const [mostrarReacoes, setMostrarReacoes] = useState(null);
   const chatRef = useRef(null);
 
   // Desafios
@@ -54,15 +55,16 @@ export default function GrupoDetalheScreen({ route, navigation }) {
 
   const carregar = useCallback(async () => {
     try {
+      // ✅ FIX: usar gruposAPI em vez de chatGrupoAPI
       const [g, f, d, s] = await Promise.all([
-        gruposAPI.detalhe(grupo_id),
-        chatGrupoAPI.feed(grupo_id),
-        desafiosAPI.listar(grupo_id),
-        chatGrupoAPI.streak(grupo_id),
+        gruposAPI.detalhe(grupoId),
+        gruposAPI.feed(grupoId),
+        desafiosAPI.listar(grupoId),
+        gruposAPI.streak(grupoId),
       ]);
       setGrupo(g);
-      setFeed(f);
-      setDesafios(d);
+      setFeed(Array.isArray(f) ? f : []);
+      setDesafios(Array.isArray(d) ? d : []);
       setStreakInfo(s);
     } catch (e) {
       Alert.alert('Erro', e.message);
@@ -70,15 +72,16 @@ export default function GrupoDetalheScreen({ route, navigation }) {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [grupo_id]);
+  }, [grupoId]);
 
   const carregarChat = useCallback(async () => {
     try {
-      const msgs = await chatGrupoAPI.mensagens(grupo_id);
-      setMensagens(msgs);
+      // ✅ FIX: usar gruposAPI.chatHistorico
+      const msgs = await gruposAPI.chatHistorico(grupoId);
+      setMensagens(Array.isArray(msgs) ? msgs : []);
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 100);
     } catch (e) {}
-  }, [grupo_id]);
+  }, [grupoId]);
 
   useFocusEffect(useCallback(() => {
     carregar();
@@ -98,7 +101,8 @@ export default function GrupoDetalheScreen({ route, navigation }) {
     if (!texto.trim() || enviando) return;
     setEnviando(true);
     try {
-      const msg = await chatGrupoAPI.enviar(grupo_id, texto.trim());
+      // ✅ FIX: usar gruposAPI.chatEnviar
+      const msg = await gruposAPI.chatEnviar(grupoId, texto.trim());
       setMensagens(prev => [...prev, msg]);
       setTexto('');
       setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
@@ -111,7 +115,8 @@ export default function GrupoDetalheScreen({ route, navigation }) {
 
   const reagir = async (msg_id, emoji) => {
     try {
-      const updated = await chatGrupoAPI.reagir(grupo_id, msg_id, emoji);
+      // ✅ FIX: usar gruposAPI.chatReagir
+      const updated = await gruposAPI.chatReagir(grupoId, msg_id, emoji);
       setMensagens(prev => prev.map(m => m.id === msg_id ? updated : m));
     } catch (e) {}
     setMostrarReacoes(null);
@@ -120,7 +125,8 @@ export default function GrupoDetalheScreen({ route, navigation }) {
   const pedirDesafioIA = async () => {
     setLoadingIA(true);
     try {
-      const res = await desafiosAPI.sugestaoIA(grupo_id);
+      // ✅ FIX: usar desafiosAPI.criarComIA
+      const res = await desafiosAPI.criarComIA(grupoId);
       setSugestaoIA(res.sugestao);
       const s = res.sugestao;
       setFormDesafio({
@@ -146,7 +152,7 @@ export default function GrupoDetalheScreen({ route, navigation }) {
     try {
       const inicio = new Date();
       const fim    = new Date(inicio.getTime() + parseInt(formDesafio.dias || 14) * 86400000);
-      await desafiosAPI.criar(grupo_id, {
+      await desafiosAPI.criar(grupoId, {
         titulo: formDesafio.titulo,
         descricao: formDesafio.descricao,
         tipo: formDesafio.tipo,
@@ -168,7 +174,8 @@ export default function GrupoDetalheScreen({ route, navigation }) {
   const fazerCheckIn = async () => {
     setFazendoCheckIn(true);
     try {
-      const res = await chatGrupoAPI.checkIn(grupo_id);
+      // ✅ FIX: usar gruposAPI.streakCheckIn
+      const res = await gruposAPI.streakCheckIn(grupoId);
       setStreakInfo(prev => ({ ...prev, ...res, eu_cumpri_hoje: true, check_ins_hoje: res.check_ins_hoje }));
       if (res.streak_aumentou) {
         Alert.alert('🔥 Streak do grupo!', `O grupo tem agora ${res.streak_dias} dias seguidos!`);
@@ -258,7 +265,7 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                   {!item.minha && (
                     <View style={styles.msgAvatar}>
                       <Text style={{ fontSize: 18 }}>
-                        {item.avatar_autor ? '🧑' : item.nome_autor?.[0]?.toUpperCase()}
+                        {item.nome_autor?.[0]?.toUpperCase()}
                       </Text>
                     </View>
                   )}
@@ -271,7 +278,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                     <Text style={styles.msgHora}>
                       {new Date(item.enviada_em).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
                     </Text>
-                    {/* Reações */}
                     {Object.keys(item.reacoes || {}).length > 0 && (
                       <View style={styles.reacoesRow}>
                         {Object.entries(item.reacoes).map(([emoji, users]) => (
@@ -286,7 +292,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
               )}
               onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
             />
-            {/* Picker de reações */}
             {mostrarReacoes && (
               <View style={styles.reacoesBar}>
                 {REACAO_EMOJIS.map(e => (
@@ -299,7 +304,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                 </Pressable>
               </View>
             )}
-            {/* Input */}
             <View style={styles.inputRow}>
               <TextInput
                 style={styles.input}
@@ -308,7 +312,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                 placeholder="Mensagem..."
                 placeholderTextColor={COLORS.textSecondary}
                 multiline
-                onSubmitEditing={enviarMensagem}
               />
               <Pressable onPress={enviarMensagem} style={[styles.sendBtn, enviando && { opacity: 0.5 }]}>
                 {enviando
@@ -355,7 +358,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                       </View>
                     )}
                     {terminado && <Text style={styles.terminadoTxt}>Terminado</Text>}
-                    {/* Mini ranking */}
                     <View style={styles.rankRow}>
                       {(d.ranking || []).slice(0, 3).map((r, pos) => (
                         <View key={r.user_id} style={styles.rankItem}>
@@ -417,7 +419,6 @@ export default function GrupoDetalheScreen({ route, navigation }) {
             <View style={styles.modalBox}>
               <Text style={styles.modalTitulo}>Novo Desafio</Text>
 
-              {/* Botão IA */}
               <Pressable onPress={pedirDesafioIA} style={[styles.iaBtnModal, loadingIA && { opacity: 0.6 }]}>
                 {loadingIA
                   ? <ActivityIndicator size="small" color="#fff" />
@@ -516,23 +517,19 @@ const styles = StyleSheet.create({
   headerSub:   { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
   btnNovo:     { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, paddingHorizontal: 10, paddingVertical: 6 },
   btnNovoTxt:  { color: '#fff', fontSize: 12, fontFamily: FONT.bold },
-
   tabs:        { flexDirection: 'row', backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
   tab:         { flex: 1, paddingVertical: 12, alignItems: 'center' },
   tabAtivo:    { borderBottomWidth: 2, borderBottomColor: COLORS.primary },
   tabTxt:      { fontSize: 13, color: COLORS.textSecondary, fontFamily: FONT.medium },
   tabTxtAtivo: { color: COLORS.primary, fontFamily: FONT.bold },
-
   vazio:       { textAlign: 'center', color: COLORS.textSecondary, marginTop: 40, fontSize: 15 },
   vazioCard:   { alignItems: 'center', paddingVertical: 40 },
   vazioTxt:    { fontSize: 16, fontFamily: FONT.bold, color: COLORS.text, marginTop: 12 },
   vazioSub:    { fontSize: 13, color: COLORS.textSecondary, marginTop: 4 },
-
   feedCard:    { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
   feedEmoji:   { fontSize: 22, marginRight: 10, marginTop: 2 },
   feedDesc:    { fontSize: 14, color: COLORS.text, fontFamily: FONT.regular },
   feedData:    { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
-
   msgRow:      { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-end' },
   msgRowMinha: { flexDirection: 'row-reverse' },
   msgAvatar:   { width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
@@ -549,7 +546,6 @@ const styles = StyleSheet.create({
   input:       { flex: 1, backgroundColor: COLORS.background, borderRadius: RADIUS.lg, paddingHorizontal: 14, paddingVertical: 8, color: COLORS.text, maxHeight: 100, fontSize: 14 },
   sendBtn:     { width: 38, height: 38, borderRadius: 19, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
   sendTxt:     { color: '#fff', fontSize: 18, fontFamily: FONT.bold },
-
   desafioCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 14, marginBottom: 12 },
   desafioTop:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   desafioTitulo: { fontSize: 15, fontFamily: FONT.bold, color: COLORS.text, flex: 1 },
@@ -564,7 +560,6 @@ const styles = StyleSheet.create({
   rankNome:    { fontSize: 11, color: COLORS.text, fontFamily: FONT.medium, marginTop: 2 },
   rankVal:     { fontSize: 11, color: COLORS.textSecondary },
   secTitulo:   { fontSize: 15, fontFamily: FONT.bold, color: COLORS.text, marginTop: 16, marginBottom: 8 },
-
   streakCard:  { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 28, alignItems: 'center', marginBottom: 20 },
   streakEmoji: { fontSize: 48 },
   streakNum:   { fontSize: 64, fontFamily: FONT.bold, color: COLORS.primary, lineHeight: 76 },
@@ -578,7 +573,6 @@ const styles = StyleSheet.create({
   membroStreakNome: { fontSize: 14, color: COLORS.text, fontFamily: FONT.medium },
   cumpriuSim:  { fontSize: 20 },
   cumpriuNao:  { fontSize: 20 },
-
   modalBg:     { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000066' },
   modalBox:    { backgroundColor: COLORS.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, paddingBottom: 40 },
   modalTitulo: { fontSize: 18, fontFamily: FONT.bold, color: COLORS.text, marginBottom: 14 },
