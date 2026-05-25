@@ -184,15 +184,12 @@ def _setup_logging(app: Flask):
 
 
 def _migrate_db():
-    from sqlalchemy import text, inspect
-    inspector = inspect(db.engine)
-
-    def column_exists(table, column):
-        try:
-            cols = [c['name'] for c in inspector.get_columns(table)]
-            return column in cols
-        except Exception:
-            return True
+    """
+    Adiciona colunas em falta nas tabelas existentes.
+    Usa try/except em vez de inspect() para evitar problemas de cache.
+    O IF NOT EXISTS garante idempotência — pode correr quantas vezes quiser.
+    """
+    from sqlalchemy import text
 
     migrations = [
         # ── faturas ───────────────────────────────────────────────────────────
@@ -219,17 +216,30 @@ def _migrate_db():
         ('grupos',  'streak_ultima_data',        'DATE'),
         # ── desafios ──────────────────────────────────────────────────────────
         ('desafios', 'criado_por_ia',            'BOOLEAN DEFAULT false'),
+        ('desafios', 'gerado_ia',                'BOOLEAN DEFAULT false'),
         ('desafios', 'push_enviado',             'BOOLEAN DEFAULT false'),
         # ── desafio_participantes ─────────────────────────────────────────────
         ('desafio_participantes', 'push_ranking_enviado', 'BOOLEAN DEFAULT false'),
+        # ── recompensas ───────────────────────────────────────────────────────
+        ('recompensas', 'cor',           "VARCHAR(20) DEFAULT '#FFD700'"),
+        ('recompensas', 'desbloqueada_em', 'TIMESTAMP'),
+        # ── mensagens_grupo ───────────────────────────────────────────────────
+        ('mensagens_grupo', 'editada',   'BOOLEAN DEFAULT false'),
     ]
 
-    for table, column, col_type in migrations:
-        if not column_exists(table, column):
+    with db.engine.connect() as conn:
+        for table, column, col_type in migrations:
             try:
-                db.session.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
-                db.session.commit()
-                print(f'✅ Migração: {table}.{column} adicionada.')
+                conn.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}'
+                ))
+                conn.commit()
+                print(f'✅ Migração: {table}.{column} ok.')
             except Exception as e:
-                db.session.rollback()
-                print(f'⚠️ Migração falhou {table}.{column}: {e}')
+                conn.rollback()
+                # Ignora erro "already exists" (PG code 42701) silenciosamente
+                err = str(e)
+                if 'already exists' in err or '42701' in err:
+                    pass  # coluna já existe, tudo bem
+                else:
+                    print(f'⚠️  Migração {table}.{column}: {err}')
