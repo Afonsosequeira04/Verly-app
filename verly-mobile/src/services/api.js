@@ -96,12 +96,11 @@ export const authAPI = {
   firebaseLogin: (idToken) =>
     apiFetch('/auth/firebase', { method: 'POST', body: JSON.stringify({ idToken }) }),
 
-  // ✅ Apagar conta permanentemente
   deleteAccount: () =>
     apiFetch('/auth/account', { method: 'DELETE' }),
 };
 
-// ── Onboarding (guarda rendimento + objetivo) ──────────────────────────────────
+// ── Onboarding ─────────────────────────────────────────────────────────────────
 
 export const onboardingAPI = {
   save: (answers) =>
@@ -148,7 +147,7 @@ export const notificacoesAPI = {
   listar: () => apiFetch('/notificacoes'),
 };
 
-// ── Chat ───────────────────────────────────────────────────────────────────────
+// ── Chat (IA) ──────────────────────────────────────────────────────────────────
 
 export const chatAPI = {
   enviar: (mensagem) =>
@@ -226,7 +225,7 @@ export const relatorioAPI = {
   get: () => apiFetch('/relatorio'),
 };
 
-// ── Playlists (Criar Em) ───────────────────────────────────────────────────────
+// ── Playlists ──────────────────────────────────────────────────────────────────
 
 export const playlistsAPI = {
   listar: () => apiFetch('/playlists'),
@@ -269,6 +268,8 @@ export const amigosAPI = {
 
   pedidos: () => apiFetch('/amigos/pedidos'),
 
+  buscar: (q) => apiFetch(`/utilizadores/buscar?q=${encodeURIComponent(q)}`),
+
   enviarPedido: (email) =>
     apiFetch('/amigos/pedido', { method: 'POST', body: JSON.stringify({ email }) }),
 
@@ -298,7 +299,6 @@ export const garantiasAPI = {
 // ── Exportar PDF ───────────────────────────────────────────────────────────────
 
 export const exportarAPI = {
-  // Abre o PDF no browser (URL com token)
   pdfUrl: async () => {
     const token = await getToken();
     const BASE = 'https://verly-app-production.up.railway.app/api/v1';
@@ -320,29 +320,88 @@ export const pushAPI = {
 };
 
 // ── Poupança ───────────────────────────────────────────────────────────────────
+
 export const poupancaAPI = {
   get: () => apiFetch('/poupanca'),
 };
 
-// ── Grupos & Desafios & Recompensas ───────────────────────────────────────────
+// ── Grupos ─────────────────────────────────────────────────────────────────────
 
 export const gruposAPI = {
+  // CRUD base
   listar:   () => apiFetch('/grupos'),
   criar:    (data) => apiFetch('/grupos', { method: 'POST', body: JSON.stringify(data) }),
   detalhe:  (id) => apiFetch(`/grupos/${id}`),
   convidar: (id, user_id) => apiFetch(`/grupos/${id}/convidar`, { method: 'POST', body: JSON.stringify({ user_id }) }),
   sair:     (id) => apiFetch(`/grupos/${id}/sair`, { method: 'POST' }),
+
+  // ── Chat de grupo ──────────────────────────────────────────────────────────
+  // GET  /grupos/:id/chat?limite=50&antes_de=<msg_id>
+  chatHistorico: (grupoId, params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/grupos/${grupoId}/chat${query ? `?${query}` : ''}`);
+  },
+
+  // POST /grupos/:id/chat   { texto }
+  chatEnviar: (grupoId, texto) =>
+    apiFetch(`/grupos/${grupoId}/chat`, { method: 'POST', body: JSON.stringify({ texto }) }),
+
+  // POST /grupos/:id/chat/:msgId/reagir   { emoji }
+  chatReagir: (grupoId, msgId, emoji) =>
+    apiFetch(`/grupos/${grupoId}/chat/${msgId}/reagir`, { method: 'POST', body: JSON.stringify({ emoji }) }),
+
+  // ── Feed de atividade ──────────────────────────────────────────────────────
+  // GET  /grupos/:id/feed?limite=20
+  feed: (grupoId, params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/grupos/${grupoId}/feed${query ? `?${query}` : ''}`);
+  },
+
+  // ── Streak de grupo ────────────────────────────────────────────────────────
+  // GET  /grupos/:id/streak
+  streak: (grupoId) => apiFetch(`/grupos/${grupoId}/streak`),
+
+  // POST /grupos/:id/streak/check-in
+  streakCheckIn: (grupoId) =>
+    apiFetch(`/grupos/${grupoId}/streak/check-in`, { method: 'POST' }),
 };
+
+// ── Desafios ───────────────────────────────────────────────────────────────────
 
 export const desafiosAPI = {
-  listar:    (grupo_id) => apiFetch(`/grupos/${grupo_id}/desafios`),
-  criar:     (grupo_id, data) => apiFetch(`/grupos/${grupo_id}/desafios`, { method: 'POST', body: JSON.stringify(data) }),
-  detalhe:   (id) => apiFetch(`/desafios/${id}`),
-  progresso: (id) => apiFetch(`/desafios/${id}/progresso`, { method: 'POST' }),
-  terminar:  (id) => apiFetch(`/desafios/${id}/terminar`, { method: 'POST' }),
+  // Listar desafios de um grupo
+  listar: (grupo_id) => apiFetch(`/grupos/${grupo_id}/desafios`),
+
+  // Criar desafio manual num grupo
+  criar: (grupo_id, data) =>
+    apiFetch(`/grupos/${grupo_id}/desafios`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Criar desafio gerado por IA para o grupo
+  // POST /grupos/:id/desafios/ia   { tipo?, dificuldade? }
+  criarComIA: (grupo_id, opcoes = {}) =>
+    apiFetch(`/grupos/${grupo_id}/desafios/ia`, { method: 'POST', body: JSON.stringify(opcoes) }),
+
+  // Detalhe + ranking de um desafio
+  detalhe: (id) => apiFetch(`/desafios/${id}`),
+
+  // Atualizar progresso (incrementa ou define valor)
+  // POST /desafios/:id/progresso   { valor? }
+  progresso: (id, valor = null) =>
+    apiFetch(`/desafios/${id}/progresso`, {
+      method: 'POST',
+      body: JSON.stringify(valor !== null ? { valor } : {}),
+    }),
+
+  // Terminar/fechar desafio (dono ou admin do grupo)
+  terminar: (id) => apiFetch(`/desafios/${id}/terminar`, { method: 'POST' }),
 };
 
+// ── Recompensas & Badges ───────────────────────────────────────────────────────
+
 export const recompensasAPI = {
+  // Todas as recompensas do utilizador (badges, XP, histórico de desafios)
   listar: () => apiFetch('/recompensas'),
-  novas:  () => apiFetch('/recompensas/novas'),
+
+  // Apenas as recompensas desbloqueadas recentemente (para notificação/badge novo)
+  novas: () => apiFetch('/recompensas/novas'),
 };

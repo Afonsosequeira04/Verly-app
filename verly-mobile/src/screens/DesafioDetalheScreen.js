@@ -1,5 +1,5 @@
-// src/screens/DesafioDetalheScreen.js — Verly Social: Detalhe do Desafio
-import React, { useState, useCallback } from 'react';
+// src/screens/DesafioDetalheScreen.js — Countdown em tempo real, ranking, atualizar progresso
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, ScrollView, Pressable,
   ActivityIndicator, StyleSheet, RefreshControl, Alert,
@@ -7,91 +7,78 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { desafiosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown, useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 
-const C   = COLORS;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const initials = (n = '') =>
-  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
-
-function Avatar({ nome, size = 38, color = C.brand }) {
-  return (
-    <View style={{
-      width: size, height: size, borderRadius: size * 0.3,
-      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
-      justifyContent: 'center', alignItems: 'center',
-    }}>
-      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>{initials(nome)}</Text>
-    </View>
-  );
-}
-
-function ProgressBar({ value, max, color = C.brand }) {
-  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
-  return (
-    <View style={{ height: 6, backgroundColor: C.surface3, borderRadius: 3, overflow: 'hidden', marginTop: 4 }}>
-      <View style={{ width: `${pct}%`, height: '100%', backgroundColor: color, borderRadius: 3 }} />
-    </View>
-  );
-}
-
-const TIPO_INFO = {
-  gastar_menos:     { label: 'Quem gastar menos',        emoji: '💸', desc: 'Ganha quem tiver o menor gasto total no período' },
-  categoria_limite: { label: 'Limite numa categoria',    emoji: '🛒', desc: 'Ganha quem gastar menos nessa categoria' },
-  poupar_valor:     { label: 'Poupar o máximo',          emoji: '💰', desc: 'Ganha quem poupar mais vs o seu orçamento' },
-  streak_dias:      { label: 'Streak de dias',           emoji: '🔥', desc: 'Ganha quem tiver mais dias consecutivos sem gastar' },
-};
+const MEDALHAS = ['🥇', '🥈', '🥉'];
 
 export default function DesafioDetalheScreen({ route, navigation }) {
-  const { desafioId } = route.params;
-  const [desafio,    setDesafio]    = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [refresh,    setRefresh]    = useState(false);
-  const [atualizando, setAtualizando] = useState(false);
-  const [terminando,  setTerminando]  = useState(false);
+  const { desafio_id } = route.params;
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
+  const [desafio, setDesafio]       = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [atualizando, setAtualizando] = useState(false);
+  const [terminando, setTerminando] = useState(false);
+  const [agora, setAgora]           = useState(new Date());
+
+  // Countdown em tempo real
+  useEffect(() => {
+    const interval = setInterval(() => setAgora(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const carregar = useCallback(async () => {
     try {
-      const d = await desafiosAPI.detalhe(desafioId);
+      const d = await desafiosAPI.detalhe(desafio_id);
       setDesafio(d);
     } catch (e) {
-      console.log('desafio err', e);
+      Alert.alert('Erro', e.message);
     } finally {
       setLoading(false);
-      setRefresh(false);
+      setRefreshing(false);
     }
-  }, [desafioId]);
+  }, [desafio_id]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => {
+    carregar();
+  }, [carregar]));
 
   const atualizarProgresso = async () => {
     setAtualizando(true);
     try {
-      await desafiosAPI.progresso(desafioId);
-      await load(true);
-    } catch {
-      Alert.alert('Erro', 'Não foi possível atualizar');
+      const res = await desafiosAPI.progresso(desafio_id);
+      setDesafio(prev => ({
+        ...prev,
+        meu_progresso: res.progresso,
+        minha_posicao: res.minha_posicao,
+        ranking: res.ranking,
+      }));
+      Alert.alert('✅ Atualizado!', `O teu progresso é ${res.progresso.toFixed(2)}€. Posição: #${res.minha_posicao}`);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
     } finally {
       setAtualizando(false);
     }
   };
 
   const terminarDesafio = async () => {
-    Alert.alert('Terminar desafio', 'Isto vai calcular o vencedor e atribuir a recompensa. Tens a certeza?', [
+    Alert.alert('Terminar desafio', 'Tens a certeza? Isto calcula o vencedor agora.', [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Terminar', style: 'destructive',
+        text: 'Terminar',
+        style: 'destructive',
         onPress: async () => {
           setTerminando(true);
           try {
-            const result = await desafiosAPI.terminar(desafioId);
-            await load(true);
-            if (result.vencedor) {
-              Alert.alert('🏆 Desafio terminado!', `Vencedor: ${result.vencedor.nome}\n\n${desafio?.recompensa || ''}`);
-            }
-          } catch {
-            Alert.alert('Erro', 'Não foi possível terminar o desafio');
+            const res = await desafiosAPI.terminar(desafio_id);
+            const v = res.vencedor;
+            Alert.alert(
+              '🏆 Desafio terminado!',
+              v ? `${v.nome} venceu com ${v.progresso.toFixed(2)}€ poupados!` : 'Nenhum participante.',
+              [{ text: 'OK', onPress: carregar }]
+            );
+          } catch (e) {
+            Alert.alert('Erro', e.message);
           } finally {
             setTerminando(false);
           }
@@ -100,174 +87,205 @@ export default function DesafioDetalheScreen({ route, navigation }) {
     ]);
   };
 
-  if (loading) return (
-    <View style={styles.center}><ActivityIndicator color={C.brand} size="large" /></View>
-  );
+  const formatarContagem = (fim) => {
+    const segsTotal = Math.max(0, Math.floor((new Date(fim) - agora) / 1000));
+    if (segsTotal === 0) return { texto: 'Terminado', urgente: false };
+    const d = Math.floor(segsTotal / 86400);
+    const h = Math.floor((segsTotal % 86400) / 3600);
+    const m = Math.floor((segsTotal % 3600) / 60);
+    const s = segsTotal % 60;
+    const urgente = segsTotal < 3600; // menos de 1h
+    if (d > 0) return { texto: `${d}d ${h}h ${m}m restantes`, urgente: false };
+    if (h > 0) return { texto: `${h}h ${m}m ${s}s restantes`, urgente: urgente };
+    return { texto: `${m}m ${s.toString().padStart(2,'0')}s restantes`, urgente: true };
+  };
+
+  const tipoLabel = (tipo) => {
+    const map = {
+      gastar_menos: '📉 Gastar menos',
+      categoria_limite: '🏷️ Limite por categoria',
+      poupar_valor: '💰 Poupar valor',
+      streak_dias: '🔥 Streak de dias',
+    };
+    return map[tipo] || tipo;
+  };
+
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>;
+  }
+
   if (!desafio) return null;
 
-  const hoje        = new Date();
-  const fim         = new Date(desafio.fim);
-  const inicio      = new Date(desafio.inicio);
-  const ativo       = desafio.estado === 'ativo' && fim > hoje;
-  const terminado   = desafio.estado === 'terminado';
-  const diasRestantes = Math.max(0, Math.ceil((fim - hoje) / 86400000));
-  const duracaoTotal  = Math.ceil((fim - inicio) / 86400000);
-  const progTempo     = Math.min(100, ((hoje - inicio) / (fim - inicio)) * 100);
-  const tipoInfo      = TIPO_INFO[desafio.tipo] || TIPO_INFO.gastar_menos;
-  const maxProgresso  = Math.max(...(desafio.ranking || []).map(r => r.progresso), 1);
+  const { texto: contagemTxt, urgente } = formatarContagem(desafio.fim);
+  const terminado = desafio.estado === 'terminado';
+  const progressoPct = desafio.valor_alvo
+    ? Math.min(100, (desafio.meu_progresso / desafio.valor_alvo) * 100)
+    : 0;
 
   return (
-    <View style={styles.root}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backTxt}>←</Text>
-        </Pressable>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle} numberOfLines={2}>{desafio.titulo}</Text>
-        </View>
-      </View>
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); carregar(); }} />}
+      contentContainerStyle={{ padding: SPACE.md, paddingBottom: 60 }}
+    >
+      <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+        <Text style={styles.backTxt}>← Voltar</Text>
+      </Pressable>
 
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
-      >
-        {/* Status card */}
-        <Animated.View entering={FadeIn} style={[styles.statusCard, terminado && styles.statusCardTerminado]}>
-          <View style={styles.statusRow}>
-            <View style={[styles.statusBadge, { backgroundColor: ativo ? C.brandDim : terminado ? C.yellowDim : C.surface3 }]}>
-              <Text style={[styles.statusBadgeTxt, { color: ativo ? C.brand : terminado ? C.yellow : C.textSub }]}>
-                {ativo ? '⚡ Ativo' : terminado ? '✅ Terminado' : '❌ Cancelado'}
-              </Text>
+      {/* Header do desafio */}
+      <Animated.View entering={FadeIn} style={styles.headerCard}>
+        <View style={styles.headerTop}>
+          <Text style={styles.titulo}>{desafio.titulo}</Text>
+          {desafio.gerado_ia && (
+            <View style={styles.iaBadge}>
+              <Text style={styles.iaBadgeTxt}>🤖 IA</Text>
             </View>
-            <Text style={styles.statusDias}>
-              {ativo ? `${diasRestantes} dias restantes` : `${duracaoTotal} dias`}
+          )}
+        </View>
+        {desafio.descricao ? <Text style={styles.descricao}>{desafio.descricao}</Text> : null}
+
+        <View style={styles.infoRow}>
+          <Text style={styles.infoChip}>{tipoLabel(desafio.tipo)}</Text>
+          {desafio.valor_alvo && <Text style={styles.infoChip}>Alvo: {desafio.valor_alvo}€</Text>}
+          <Text style={styles.infoChip}>👥 {desafio.total_participantes}</Text>
+        </View>
+
+        {/* Countdown */}
+        {!terminado && (
+          <View style={[styles.countdownBox, urgente && styles.countdownUrgente]}>
+            <Text style={[styles.countdownTxt, urgente && styles.countdownUrgenteTxt]}>
+              ⏱️ {contagemTxt}
             </Text>
           </View>
-
-          {ativo && (
-            <>
-              <Text style={styles.statusProgLabel}>Tempo decorrido</Text>
-              <ProgressBar value={progTempo} max={100} color={C.brand} />
-            </>
-          )}
-
-          {/* Tipo */}
-          <View style={styles.tipoRow}>
-            <Text style={styles.tipoEmoji}>{tipoInfo.emoji}</Text>
-            <View>
-              <Text style={styles.tipoLabel}>{tipoInfo.label}</Text>
-              <Text style={styles.tipoDesc}>{tipoInfo.desc}</Text>
-              {desafio.categoria && <Text style={styles.tipoCategoria}>Categoria: {desafio.categoria}</Text>}
-              {desafio.valor_alvo && <Text style={styles.tipoCategoria}>Alvo: {fmt(desafio.valor_alvo)}€</Text>}
-            </View>
-          </View>
-
-          {/* Recompensa */}
-          {desafio.recompensa && (
-            <View style={styles.recompensaRow}>
-              <Text style={styles.recompensaLabel}>🎁 Recompensa</Text>
-              <Text style={styles.recompensaTxt}>{desafio.recompensa}</Text>
-            </View>
-          )}
-        </Animated.View>
-
-        {/* A minha posição */}
-        {desafio.minha_posicao && (
-          <Animated.View entering={FadeInDown.delay(100)} style={styles.minhaCard}>
-            <Text style={styles.minhaLabel}>A TUA POSIÇÃO</Text>
-            <View style={styles.minhaRow}>
-              <Text style={styles.minhaMedal}>
-                {desafio.minha_posicao === 1 ? '🥇' : desafio.minha_posicao === 2 ? '🥈' : desafio.minha_posicao === 3 ? '🥉' : `#${desafio.minha_posicao}`}
-              </Text>
-              <View>
-                <Text style={styles.minhaPosicao}>#{desafio.minha_posicao} de {desafio.total_participantes}</Text>
-                <Text style={styles.minhaProgresso}>Progresso: {fmt(desafio.meu_progresso)}€</Text>
-              </View>
-              {ativo && (
-                <Pressable onPress={atualizarProgresso} disabled={atualizando} style={styles.atualizarBtn}>
-                  {atualizando ? <ActivityIndicator color={C.brand} size="small" /> : <Text style={styles.atualizarTxt}>↻ Atualizar</Text>}
-                </Pressable>
-              )}
-            </View>
-          </Animated.View>
         )}
+        {terminado && (
+          <View style={styles.terminadoBox}>
+            <Text style={styles.terminadoTxt}>🏁 Desafio terminado</Text>
+          </View>
+        )}
+      </Animated.View>
 
-        {/* Ranking */}
-        <Animated.View entering={FadeInDown.delay(200)} style={styles.rankingCard}>
-          <Text style={styles.rankingTitle}>🏆 RANKING</Text>
-          {(desafio.ranking || []).map((p, i) => {
-            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
-            return (
-              <View key={p.user_id} style={[styles.rankRow, i === 0 && styles.rankRowFirst]}>
-                <Text style={styles.rankMedal}>{medal}</Text>
-                <Avatar nome={p.nome} size={34} color={p.ganhou ? C.yellow : i === 0 ? C.brand : C.textMid} />
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={[styles.rankNome, i === 0 && { color: C.brand }]}>{p.nome}</Text>
-                    <Text style={[styles.rankProg, i === 0 && { color: C.brand }]}>{fmt(p.progresso)}€</Text>
-                  </View>
-                  <ProgressBar value={p.progresso} max={maxProgresso} color={i === 0 ? C.brand : C.textSub} />
-                </View>
-                {p.ganhou && <Text style={{ fontSize: 18, marginLeft: 6 }}>🏆</Text>}
-              </View>
-            );
-          })}
-        </Animated.View>
-
-        {/* Ações admin */}
-        {ativo && (
-          <Pressable onPress={terminarDesafio} disabled={terminando} style={[styles.terminarBtn, terminando && { opacity: 0.5 }]}>
-            {terminando ? <ActivityIndicator color={C.red} size="small" /> : <Text style={styles.terminarTxt}>Terminar e declarar vencedor</Text>}
+      {/* O meu progresso */}
+      <Animated.View entering={FadeInDown.delay(100)} style={styles.progressoCard}>
+        <Text style={styles.secTitulo}>O meu progresso</Text>
+        <View style={styles.progressoRow}>
+          <Text style={styles.progressoVal}>{desafio.meu_progresso?.toFixed(2) || '0.00'}€</Text>
+          {desafio.minha_posicao && (
+            <Text style={styles.posicaoTxt}>
+              {MEDALHAS[desafio.minha_posicao - 1] || `#${desafio.minha_posicao}`}
+            </Text>
+          )}
+        </View>
+        {desafio.valor_alvo && (
+          <View style={styles.barraContainer}>
+            <View style={[styles.barraPreenchida, { width: `${progressoPct}%` }]} />
+          </View>
+        )}
+        {!terminado && (
+          <Pressable
+            onPress={atualizarProgresso}
+            style={[styles.btnAtualizar, atualizando && { opacity: 0.6 }]}
+          >
+            {atualizando
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <Text style={styles.btnAtualizarTxt}>🔄 Atualizar progresso</Text>
+            }
           </Pressable>
         )}
-      </ScrollView>
-    </View>
+      </Animated.View>
+
+      {/* Ranking */}
+      <Animated.View entering={FadeInDown.delay(200)} style={styles.rankingCard}>
+        <Text style={styles.secTitulo}>🏆 Ranking</Text>
+        {(desafio.ranking || []).map((p, i) => (
+          <View key={p.user_id} style={[styles.rankRow, i === 0 && styles.rankRow1]}>
+            <Text style={styles.rankMedalha}>{MEDALHAS[i] || `#${i + 1}`}</Text>
+            <Text style={styles.rankNome} numberOfLines={1}>{p.nome}</Text>
+            <Text style={styles.rankVal}>{p.progresso.toFixed(2)}€</Text>
+            {p.ganhou && <Text style={styles.vencedorBadge}>🏆</Text>}
+          </View>
+        ))}
+      </Animated.View>
+
+      {/* Recompensa */}
+      {desafio.recompensa && (
+        <Animated.View entering={FadeInDown.delay(300)} style={styles.recompensaCard}>
+          <Text style={styles.recompensaTxt}>{desafio.recompensa}</Text>
+        </Animated.View>
+      )}
+
+      {/* Datas */}
+      <View style={styles.datasRow}>
+        <Text style={styles.dataTxt}>
+          Início: {new Date(desafio.inicio).toLocaleDateString('pt-PT')}
+        </Text>
+        <Text style={styles.dataTxt}>
+          Fim: {new Date(desafio.fim).toLocaleDateString('pt-PT')}
+        </Text>
+      </View>
+
+      {/* Botão terminar (só criador) */}
+      {!terminado && (
+        <Pressable
+          onPress={terminarDesafio}
+          style={[styles.btnTerminar, terminando && { opacity: 0.5 }]}
+        >
+          {terminando
+            ? <ActivityIndicator size="small" color={COLORS.danger || '#E74C3C'} />
+            : <Text style={styles.btnTerminarTxt}>🏁 Terminar desafio</Text>
+          }
+        </Pressable>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  root:               { flex: 1, backgroundColor: C.bg },
-  center:             { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-  header:             { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
-  backBtn:            { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
-  backTxt:            { fontSize: 18, color: C.text },
-  headerTitle:        { fontSize: FONT.lg, fontWeight: '800', color: C.text },
-  scroll:             { padding: SPACE.lg, paddingBottom: 100 },
-  // Status
-  statusCard:         { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
-  statusCardTerminado:{ borderColor: C.yellow + '40' },
-  statusRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  statusBadge:        { paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
-  statusBadgeTxt:     { fontSize: FONT.xs, fontWeight: '700' },
-  statusDias:         { fontSize: FONT.xs, color: C.textMid },
-  statusProgLabel:    { fontSize: FONT.xs, color: C.textMid, marginTop: 4 },
-  tipoRow:            { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: C.surface2, borderRadius: RADIUS.sm, padding: 10 },
-  tipoEmoji:          { fontSize: 24 },
-  tipoLabel:          { fontSize: FONT.sm, fontWeight: '700', color: C.text, marginBottom: 2 },
-  tipoDesc:           { fontSize: FONT.xs, color: C.textMid, lineHeight: 16 },
-  tipoCategoria:      { fontSize: FONT.xs, color: C.brand, fontWeight: '600', marginTop: 2 },
-  recompensaRow:      { backgroundColor: C.yellowDim, borderRadius: RADIUS.sm, padding: 10, gap: 3 },
-  recompensaLabel:    { fontSize: FONT.xs, fontWeight: '700', color: C.yellow },
-  recompensaTxt:      { fontSize: FONT.sm, color: C.text },
-  // Minha posição
-  minhaCard:          { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.brand + '30', padding: SPACE.md, marginBottom: SPACE.sm },
-  minhaLabel:         { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 10 },
-  minhaRow:           { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  minhaMedal:         { fontSize: 32 },
-  minhaPosicao:       { fontSize: FONT.lg, fontWeight: '800', color: C.text },
-  minhaProgresso:     { fontSize: FONT.sm, color: C.textMid },
-  atualizarBtn:       { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.brandDim, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: C.brand },
-  atualizarTxt:       { fontSize: FONT.xs, color: C.brand, fontWeight: '700' },
-  // Ranking
-  rankingCard:        { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
-  rankingTitle:       { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1, marginBottom: 12 },
-  rankRow:            { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: C.border },
-  rankRowFirst:       { backgroundColor: C.brandDim, borderRadius: RADIUS.sm, paddingHorizontal: 8, borderBottomWidth: 0 },
-  rankMedal:          { fontSize: 20, width: 30, textAlign: 'center' },
-  rankNome:           { fontSize: FONT.sm, fontWeight: '600', color: C.text },
-  rankProg:           { fontSize: FONT.sm, fontWeight: '700', color: C.textMid },
-  // Terminar
-  terminarBtn:        { borderWidth: 1, borderColor: C.red + '40', borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 8 },
-  terminarTxt:        { fontSize: FONT.sm, color: C.red, fontWeight: '700' },
+  container:   { flex: 1, backgroundColor: COLORS.background },
+  center:      { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background },
+  backBtn:     { marginBottom: 12 },
+  backTxt:     { color: COLORS.primary, fontSize: 15, fontFamily: FONT.medium },
+
+  headerCard:  { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 18, marginBottom: 12 },
+  headerTop:   { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 6 },
+  titulo:      { fontSize: 20, fontFamily: FONT.bold, color: COLORS.text, flex: 1 },
+  descricao:   { fontSize: 14, color: COLORS.textSecondary, marginBottom: 10 },
+  iaBadge:     { backgroundColor: '#A29BFE22', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  iaBadgeTxt:  { color: '#A29BFE', fontSize: 12, fontFamily: FONT.bold },
+  infoRow:     { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 12 },
+  infoChip:    { backgroundColor: COLORS.background, borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 4, marginRight: 6, marginBottom: 4, fontSize: 12, color: COLORS.text, fontFamily: FONT.medium },
+
+  countdownBox: { backgroundColor: `${COLORS.primary}20`, borderRadius: RADIUS.md, padding: 10, alignItems: 'center' },
+  countdownUrgente: { backgroundColor: '#FF636320' },
+  countdownTxt: { fontSize: 16, fontFamily: FONT.bold, color: COLORS.primary },
+  countdownUrgenteTxt: { color: '#E74C3C' },
+  terminadoBox: { backgroundColor: '#00B89420', borderRadius: RADIUS.md, padding: 10, alignItems: 'center' },
+  terminadoTxt: { fontSize: 14, fontFamily: FONT.bold, color: '#00B894' },
+
+  progressoCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 18, marginBottom: 12 },
+  secTitulo:   { fontSize: 15, fontFamily: FONT.bold, color: COLORS.text, marginBottom: 10 },
+  progressoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  progressoVal: { fontSize: 28, fontFamily: FONT.bold, color: COLORS.primary },
+  posicaoTxt:  { fontSize: 32 },
+  barraContainer: { height: 8, backgroundColor: COLORS.background, borderRadius: 4, marginBottom: 14, overflow: 'hidden' },
+  barraPreenchida: { height: '100%', backgroundColor: COLORS.primary, borderRadius: 4 },
+  btnAtualizar: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center' },
+  btnAtualizarTxt: { color: '#fff', fontSize: 14, fontFamily: FONT.bold },
+
+  rankingCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 18, marginBottom: 12 },
+  rankRow:     { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: COLORS.background },
+  rankRow1:    { paddingVertical: 12 },
+  rankMedalha: { fontSize: 22, marginRight: 10, width: 30, textAlign: 'center' },
+  rankNome:    { flex: 1, fontSize: 14, color: COLORS.text, fontFamily: FONT.medium },
+  rankVal:     { fontSize: 14, fontFamily: FONT.bold, color: COLORS.primary, marginRight: 6 },
+  vencedorBadge: { fontSize: 18 },
+
+  recompensaCard: { backgroundColor: '#FFD70015', borderRadius: RADIUS.lg, padding: 14, marginBottom: 12, alignItems: 'center' },
+  recompensaTxt: { fontSize: 15, fontFamily: FONT.bold, color: '#B8860B' },
+
+  datasRow:    { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
+  dataTxt:     { fontSize: 12, color: COLORS.textSecondary },
+
+  btnTerminar: { borderWidth: 1, borderColor: '#E74C3C', borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center' },
+  btnTerminarTxt: { color: '#E74C3C', fontSize: 14, fontFamily: FONT.bold },
 });

@@ -1,348 +1,600 @@
-// src/screens/GrupoDetalheScreen.js — Verly Social: Detalhe de Grupo
-import React, { useState, useCallback } from 'react';
+// src/screens/GrupoDetalheScreen.js — Chat, Feed, Streak, Countdown, IA
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  View, Text, ScrollView, Pressable, TextInput,
-  Alert, ActivityIndicator, StyleSheet, RefreshControl, Modal,
+  View, Text, ScrollView, FlatList, Pressable, TextInput,
+  Alert, ActivityIndicator, StyleSheet, RefreshControl,
+  KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { gruposAPI, desafiosAPI, amigosAPI } from '../services/api';
+import { gruposAPI, desafiosAPI, amigosAPI, chatGrupoAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
-const C   = COLORS;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-const initials = (n = '') =>
-  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
-
-function Avatar({ nome, size = 38, color = C.brand }) {
-  return (
-    <View style={{
-      width: size, height: size, borderRadius: size * 0.3,
-      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
-      justifyContent: 'center', alignItems: 'center',
-    }}>
-      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>{initials(nome)}</Text>
-    </View>
-  );
-}
-
-const TIPOS_DESAFIO = [
-  { key: 'gastar_menos',      label: 'Gastar menos no total',        emoji: '💸' },
-  { key: 'categoria_limite',  label: 'Limite numa categoria',        emoji: '🛒' },
-  { key: 'poupar_valor',      label: 'Poupar o máximo possível',     emoji: '💰' },
-  { key: 'streak_dias',       label: 'Streak de dias sem gastar',    emoji: '🔥' },
-];
-
-function RankingRow({ posicao, participante }) {
-  const medal = posicao === 1 ? '🥇' : posicao === 2 ? '🥈' : posicao === 3 ? '🥉' : `#${posicao}`;
-  return (
-    <View style={styles.rankRow}>
-      <Text style={styles.rankMedal}>{medal}</Text>
-      <Avatar nome={participante.nome} size={32} color={participante.ganhou ? C.yellow : C.brand} />
-      <View style={{ flex: 1 }}>
-        <Text style={styles.rankNome}>{participante.nome}</Text>
-        <Text style={styles.rankProg}>{fmt(participante.progresso)}€</Text>
-      </View>
-      {participante.ganhou && <Text style={styles.rankTrophy}>🏆</Text>}
-    </View>
-  );
-}
-
-function DesafioCard({ desafio, navigation }) {
-  const hoje   = new Date();
-  const fim    = new Date(desafio.fim);
-  const ativo  = desafio.estado === 'ativo' && fim > hoje;
-  const diasRestantes = Math.max(0, Math.ceil((fim - hoje) / 86400000));
-
-  return (
-    <Pressable
-      style={[styles.desafioCard, !ativo && styles.desafioCardInativo]}
-      onPress={() => navigation.navigate('DesafioDetalhe', { desafioId: desafio.id })}
-    >
-      <View style={styles.desafioTop}>
-        <View style={[styles.desafioBadge, { backgroundColor: ativo ? C.brandDim : C.surface3 }]}>
-          <Text style={[styles.desafioBadgeTxt, { color: ativo ? C.brand : C.textSub }]}>
-            {ativo ? `${diasRestantes}d restantes` : desafio.estado === 'terminado' ? 'Terminado' : 'Cancelado'}
-          </Text>
-        </View>
-        {desafio.minha_posicao && (
-          <Text style={styles.desafioPos}>
-            {desafio.minha_posicao === 1 ? '🥇' : desafio.minha_posicao === 2 ? '🥈' : desafio.minha_posicao === 3 ? '🥉' : `#${desafio.minha_posicao}`}
-          </Text>
-        )}
-      </View>
-      <Text style={styles.desafioTitulo}>{desafio.titulo}</Text>
-      {desafio.recompensa ? <Text style={styles.desafioRecompensa}>🎁 {desafio.recompensa}</Text> : null}
-      <View style={styles.desafioMeta}>
-        <Text style={styles.desafioMetaTxt}>{desafio.total_participantes} participantes</Text>
-        <Text style={styles.desafioMetaTxt}>Progresso: {fmt(desafio.meu_progresso)}€</Text>
-      </View>
-    </Pressable>
-  );
-}
+const TABS = ['Feed', 'Chat', 'Desafios', 'Streak'];
+const REACAO_EMOJIS = ['👀', '🔥', '💸', '💪', '😅', '🏆'];
 
 export default function GrupoDetalheScreen({ route, navigation }) {
-  const { grupoId } = route.params;
-  const [grupo,    setGrupo]    = useState(null);
-  const [desafios, setDesafios] = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [refresh,  setRefresh]  = useState(false);
-  const [modal,    setModal]    = useState(false);
-  const [amigos,   setAmigos]   = useState([]);
+  const { grupo_id } = route.params;
 
-  // Form criar desafio
-  const [titulo,      setTitulo]     = useState('');
-  const [descricao,   setDescricao]  = useState('');
-  const [tipo,        setTipo]       = useState('gastar_menos');
-  const [categoria,   setCategoria]  = useState('');
-  const [valorAlvo,   setValorAlvo]  = useState('');
-  const [recompensa,  setRecompensa] = useState('');
-  const [duracao,     setDuracao]    = useState('30'); // dias
-  const [criando,     setCriando]    = useState(false);
+  const [grupo, setGrupo]           = useState(null);
+  const [tab, setTab]               = useState('Feed');
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const load = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
+  // Feed
+  const [feed, setFeed]             = useState([]);
+
+  // Chat
+  const [mensagens, setMensagens]   = useState([]);
+  const [texto, setTexto]           = useState('');
+  const [enviando, setEnviando]     = useState(false);
+  const [mostrarReacoes, setMostrarReacoes] = useState(null); // msg_id
+  const chatRef = useRef(null);
+
+  // Desafios
+  const [desafios, setDesafios]     = useState([]);
+  const [modalDesafio, setModalDesafio] = useState(false);
+  const [sugestaoIA, setSugestaoIA] = useState(null);
+  const [loadingIA, setLoadingIA]   = useState(false);
+  const [formDesafio, setFormDesafio] = useState({
+    titulo: '', descricao: '', tipo: 'gastar_menos',
+    valor_alvo: '', dias: '14', recompensa: '🏆 Vencedor',
+  });
+
+  // Streak
+  const [streakInfo, setStreakInfo] = useState(null);
+  const [fazendoCheckIn, setFazendoCheckIn] = useState(false);
+
+  // Countdown timer
+  const [agora, setAgora] = useState(new Date());
+  useEffect(() => {
+    const interval = setInterval(() => setAgora(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const carregar = useCallback(async () => {
     try {
-      const [g, d] = await Promise.all([
-        gruposAPI.detalhe(grupoId),
-        desafiosAPI.listar(grupoId),
+      const [g, f, d, s] = await Promise.all([
+        gruposAPI.detalhe(grupo_id),
+        chatGrupoAPI.feed(grupo_id),
+        desafiosAPI.listar(grupo_id),
+        chatGrupoAPI.streak(grupo_id),
       ]);
       setGrupo(g);
-      setDesafios(Array.isArray(d) ? d : []);
+      setFeed(f);
+      setDesafios(d);
+      setStreakInfo(s);
     } catch (e) {
-      console.log('grupo detalhe err', e);
+      Alert.alert('Erro', e.message);
     } finally {
       setLoading(false);
-      setRefresh(false);
+      setRefreshing(false);
     }
-  }, [grupoId]);
+  }, [grupo_id]);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
-
-  const abrirModalDesafio = async () => {
+  const carregarChat = useCallback(async () => {
     try {
-      const data = await amigosAPI.listar();
-      setAmigos(Array.isArray(data?.amigos) ? data.amigos : []);
-    } catch {}
-    setModal(true);
+      const msgs = await chatGrupoAPI.mensagens(grupo_id);
+      setMensagens(msgs);
+      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 100);
+    } catch (e) {}
+  }, [grupo_id]);
+
+  useFocusEffect(useCallback(() => {
+    carregar();
+  }, [carregar]));
+
+  useEffect(() => {
+    if (tab === 'Chat') {
+      carregarChat();
+      const interval = setInterval(carregarChat, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [tab, carregarChat]);
+
+  const onRefresh = () => { setRefreshing(true); carregar(); };
+
+  const enviarMensagem = async () => {
+    if (!texto.trim() || enviando) return;
+    setEnviando(true);
+    try {
+      const msg = await chatGrupoAPI.enviar(grupo_id, texto.trim());
+      setMensagens(prev => [...prev, msg]);
+      setTexto('');
+      setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  const reagir = async (msg_id, emoji) => {
+    try {
+      const updated = await chatGrupoAPI.reagir(grupo_id, msg_id, emoji);
+      setMensagens(prev => prev.map(m => m.id === msg_id ? updated : m));
+    } catch (e) {}
+    setMostrarReacoes(null);
+  };
+
+  const pedirDesafioIA = async () => {
+    setLoadingIA(true);
+    try {
+      const res = await desafiosAPI.sugestaoIA(grupo_id);
+      setSugestaoIA(res.sugestao);
+      const s = res.sugestao;
+      setFormDesafio({
+        titulo: s.titulo || '',
+        descricao: s.descricao || '',
+        tipo: s.tipo || 'gastar_menos',
+        valor_alvo: String(s.valor_alvo || ''),
+        dias: String(s.dias || '14'),
+        recompensa: s.recompensa || '🏆',
+      });
+    } catch (e) {
+      Alert.alert('Erro IA', e.message);
+    } finally {
+      setLoadingIA(false);
+    }
   };
 
   const criarDesafio = async () => {
-    if (!titulo.trim()) return Alert.alert('Ops', 'Dá um título ao desafio');
-    setCriando(true);
+    if (!formDesafio.titulo.trim()) {
+      Alert.alert('Falta o título');
+      return;
+    }
     try {
-      const inicio = new Date().toISOString();
-      const fim    = new Date(Date.now() + parseInt(duracao || 30) * 86400000).toISOString();
-      await desafiosAPI.criar(grupoId, {
-        titulo:     titulo.trim(),
-        descricao:  descricao.trim(),
-        tipo,
-        categoria:  categoria.trim() || undefined,
-        valor_alvo: valorAlvo ? parseFloat(valorAlvo) : undefined,
-        recompensa: recompensa.trim() || '🏆 Vencedor do desafio',
-        inicio, fim,
+      const inicio = new Date();
+      const fim    = new Date(inicio.getTime() + parseInt(formDesafio.dias || 14) * 86400000);
+      await desafiosAPI.criar(grupo_id, {
+        titulo: formDesafio.titulo,
+        descricao: formDesafio.descricao,
+        tipo: formDesafio.tipo,
+        valor_alvo: parseFloat(formDesafio.valor_alvo) || null,
+        inicio: inicio.toISOString(),
+        fim: fim.toISOString(),
+        recompensa: formDesafio.recompensa,
+        gerado_ia: !!sugestaoIA,
       });
-      setModal(false);
-      setTitulo(''); setDescricao(''); setTipo('gastar_menos');
-      setCategoria(''); setValorAlvo(''); setRecompensa(''); setDuracao('30');
-      await load();
-    } catch {
-      Alert.alert('Erro', 'Não foi possível criar o desafio');
-    } finally {
-      setCriando(false);
+      setModalDesafio(false);
+      setSugestaoIA(null);
+      await carregar();
+      Alert.alert('✅ Desafio criado!', 'Todos os membros já foram adicionados.');
+    } catch (e) {
+      Alert.alert('Erro', e.message);
     }
   };
 
-  const convidarAmigo = async (amigoId) => {
+  const fazerCheckIn = async () => {
+    setFazendoCheckIn(true);
     try {
-      await gruposAPI.convidar(grupoId, amigoId);
-      Alert.alert('✅', 'Amigo adicionado ao grupo!');
-      await load();
-    } catch {
-      Alert.alert('Erro', 'Não foi possível convidar');
+      const res = await chatGrupoAPI.checkIn(grupo_id);
+      setStreakInfo(prev => ({ ...prev, ...res, eu_cumpri_hoje: true, check_ins_hoje: res.check_ins_hoje }));
+      if (res.streak_aumentou) {
+        Alert.alert('🔥 Streak do grupo!', `O grupo tem agora ${res.streak_dias} dias seguidos!`);
+      } else {
+        Alert.alert('✅ Check-in feito!', `${res.check_ins_hoje}/${res.total_membros} membros cumpriram hoje.`);
+      }
+    } catch (e) {
+      Alert.alert('Erro', e.message);
+    } finally {
+      setFazendoCheckIn(false);
     }
   };
 
-  if (loading) return (
-    <View style={styles.center}>
-      <ActivityIndicator color={C.brand} size="large" />
-    </View>
-  );
+  const formatarContagem = (segundos) => {
+    if (segundos <= 0) return 'Terminado';
+    const d = Math.floor(segundos / 86400);
+    const h = Math.floor((segundos % 86400) / 3600);
+    const m = Math.floor((segundos % 3600) / 60);
+    const s = segundos % 60;
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+  };
 
-  if (!grupo) return null;
-
-  const membrosIds = grupo.membros.map(m => m.id);
-  const amigosForaDoGrupo = amigos.filter(a => !membrosIds.includes(a.id));
+  if (loading) {
+    return <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>;
+  }
 
   return (
-    <View style={styles.root}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backTxt}>←</Text>
-        </Pressable>
-        <View style={styles.headerEmoji}>
-          <Text style={{ fontSize: 28 }}>{grupo.emoji}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>{grupo.nome}</Text>
-          {grupo.descricao ? <Text style={styles.headerSub} numberOfLines={1}>{grupo.descricao}</Text> : null}
-        </View>
-        {grupo.sou_admin && (
-          <Pressable onPress={abrirModalDesafio} style={styles.addBtn}>
-            <Text style={styles.addTxt}>+ Desafio</Text>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Text style={styles.backTxt}>←</Text>
           </Pressable>
-        )}
-      </View>
+          <Text style={styles.headerEmoji}>{grupo?.emoji}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerNome}>{grupo?.nome}</Text>
+            <Text style={styles.headerSub}>{grupo?.total_membros} membros · 🔥 {grupo?.streak_dias || 0} dias</Text>
+          </View>
+          <Pressable onPress={() => setModalDesafio(true)} style={styles.btnNovo}>
+            <Text style={styles.btnNovoTxt}>+ Desafio</Text>
+          </Pressable>
+        </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
-      >
-        {/* Membros */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>MEMBROS ({grupo.total_membros})</Text>
-          <View style={styles.membrosRow}>
-            {grupo.membros.map(m => (
-              <View key={m.id} style={styles.membroItem}>
-                <Avatar nome={m.nome} size={44} color={m.id === grupo.criador_id ? C.yellow : C.brand} />
-                <Text style={styles.membroNome} numberOfLines={1}>{m.nome.split(' ')[0]}</Text>
-                {m.id === grupo.criador_id && <Text style={styles.adminTag}>admin</Text>}
+        {/* Tabs */}
+        <View style={styles.tabs}>
+          {TABS.map(t => (
+            <Pressable key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabAtivo]}>
+              <Text style={[styles.tabTxt, tab === t && styles.tabTxtAtivo]}>{t}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* ── Feed ── */}
+        {tab === 'Feed' && (
+          <ScrollView
+            style={{ flex: 1 }}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={{ padding: SPACE.md }}
+          >
+            {feed.length === 0 && (
+              <Text style={styles.vazio}>Ainda não há atividade. Cria um desafio!</Text>
+            )}
+            {feed.map((item, i) => (
+              <Animated.View key={item.id} entering={FadeInDown.delay(i * 50)} style={styles.feedCard}>
+                <Text style={styles.feedEmoji}>{item.emoji}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.feedDesc}>{item.descricao}</Text>
+                  <Text style={styles.feedData}>{new Date(item.criada_em).toLocaleString('pt-PT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                </View>
+              </Animated.View>
+            ))}
+          </ScrollView>
+        )}
+
+        {/* ── Chat ── */}
+        {tab === 'Chat' && (
+          <View style={{ flex: 1 }}>
+            <FlatList
+              ref={chatRef}
+              data={mensagens}
+              keyExtractor={m => String(m.id)}
+              contentContainerStyle={{ padding: SPACE.md }}
+              renderItem={({ item }) => (
+                <View style={[styles.msgRow, item.minha && styles.msgRowMinha]}>
+                  {!item.minha && (
+                    <View style={styles.msgAvatar}>
+                      <Text style={{ fontSize: 18 }}>
+                        {item.avatar_autor ? '🧑' : item.nome_autor?.[0]?.toUpperCase()}
+                      </Text>
+                    </View>
+                  )}
+                  <Pressable
+                    onLongPress={() => setMostrarReacoes(item.id)}
+                    style={[styles.msgBubble, item.minha && styles.msgBubbleMinha]}
+                  >
+                    {!item.minha && <Text style={styles.msgNome}>{item.nome_autor}</Text>}
+                    <Text style={styles.msgTexto}>{item.texto}</Text>
+                    <Text style={styles.msgHora}>
+                      {new Date(item.enviada_em).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                    {/* Reações */}
+                    {Object.keys(item.reacoes || {}).length > 0 && (
+                      <View style={styles.reacoesRow}>
+                        {Object.entries(item.reacoes).map(([emoji, users]) => (
+                          <Pressable key={emoji} onPress={() => reagir(item.id, emoji)} style={styles.reacaoChip}>
+                            <Text style={{ fontSize: 13 }}>{emoji} {users.length}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+                  </Pressable>
+                </View>
+              )}
+              onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
+            />
+            {/* Picker de reações */}
+            {mostrarReacoes && (
+              <View style={styles.reacoesBar}>
+                {REACAO_EMOJIS.map(e => (
+                  <Pressable key={e} onPress={() => reagir(mostrarReacoes, e)} style={styles.reacaoBtnBar}>
+                    <Text style={{ fontSize: 24 }}>{e}</Text>
+                  </Pressable>
+                ))}
+                <Pressable onPress={() => setMostrarReacoes(null)} style={styles.reacaoBtnBar}>
+                  <Text style={{ fontSize: 18, color: COLORS.textSecondary }}>✕</Text>
+                </Pressable>
+              </View>
+            )}
+            {/* Input */}
+            <View style={styles.inputRow}>
+              <TextInput
+                style={styles.input}
+                value={texto}
+                onChangeText={setTexto}
+                placeholder="Mensagem..."
+                placeholderTextColor={COLORS.textSecondary}
+                multiline
+                onSubmitEditing={enviarMensagem}
+              />
+              <Pressable onPress={enviarMensagem} style={[styles.sendBtn, enviando && { opacity: 0.5 }]}>
+                {enviando
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={styles.sendTxt}>↑</Text>
+                }
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        {/* ── Desafios ── */}
+        {tab === 'Desafios' && (
+          <ScrollView
+            style={{ flex: 1 }}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            contentContainerStyle={{ padding: SPACE.md }}
+          >
+            {desafios.length === 0 && (
+              <View style={styles.vazioCard}>
+                <Text style={{ fontSize: 40, textAlign: 'center' }}>⚡</Text>
+                <Text style={styles.vazioTxt}>Sem desafios ainda.</Text>
+                <Text style={styles.vazioSub}>Cria um ou deixa a IA sugerir um!</Text>
+              </View>
+            )}
+            {desafios.map((d, i) => {
+              const fim = new Date(d.fim);
+              const segsRestantes = Math.max(0, Math.floor((fim - agora) / 1000));
+              const terminado = d.estado === 'terminado';
+              return (
+                <Animated.View key={d.id} entering={FadeInDown.delay(i * 60)}>
+                  <Pressable
+                    style={[styles.desafioCard, terminado && { opacity: 0.6 }]}
+                    onPress={() => navigation.navigate('DesafioDetalhe', { desafio_id: d.id })}
+                  >
+                    <View style={styles.desafioTop}>
+                      <Text style={styles.desafioTitulo}>{d.titulo}</Text>
+                      {d.gerado_ia && <Text style={styles.iaBadge}>🤖 IA</Text>}
+                    </View>
+                    {!terminado && (
+                      <View style={styles.countdownRow}>
+                        <Text style={styles.countdownEmoji}>⏱️</Text>
+                        <Text style={styles.countdownTxt}>{formatarContagem(segsRestantes)}</Text>
+                      </View>
+                    )}
+                    {terminado && <Text style={styles.terminadoTxt}>Terminado</Text>}
+                    {/* Mini ranking */}
+                    <View style={styles.rankRow}>
+                      {(d.ranking || []).slice(0, 3).map((r, pos) => (
+                        <View key={r.user_id} style={styles.rankItem}>
+                          <Text style={styles.rankPos}>{['🥇','🥈','🥉'][pos]}</Text>
+                          <Text style={styles.rankNome} numberOfLines={1}>{r.nome}</Text>
+                          <Text style={styles.rankVal}>{r.progresso.toFixed(0)}€</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </Pressable>
+                </Animated.View>
+              );
+            })}
+          </ScrollView>
+        )}
+
+        {/* ── Streak ── */}
+        {tab === 'Streak' && streakInfo && (
+          <ScrollView contentContainerStyle={{ padding: SPACE.md }}>
+            <Animated.View entering={FadeIn} style={styles.streakCard}>
+              <Text style={styles.streakEmoji}>🔥</Text>
+              <Text style={styles.streakNum}>{streakInfo.streak_dias}</Text>
+              <Text style={styles.streakLabel}>dias seguidos</Text>
+              <Text style={styles.streakSub}>
+                {streakInfo.check_ins_hoje}/{streakInfo.total_membros} cumpriram hoje
+              </Text>
+              {!streakInfo.eu_cumpri_hoje ? (
+                <Pressable
+                  onPress={fazerCheckIn}
+                  style={[styles.checkInBtn, fazendoCheckIn && { opacity: 0.6 }]}
+                >
+                  {fazendoCheckIn
+                    ? <ActivityIndicator color="#fff" />
+                    : <Text style={styles.checkInTxt}>✓ Marcar objetivo hoje</Text>
+                  }
+                </Pressable>
+              ) : (
+                <View style={styles.checkInDone}>
+                  <Text style={styles.checkInDoneTxt}>✅ Já marcaste hoje!</Text>
+                </View>
+              )}
+            </Animated.View>
+
+            <Text style={styles.secTitulo}>Estado dos membros</Text>
+            {(streakInfo.membros || []).map(m => (
+              <View key={m.id} style={styles.membroStreakRow}>
+                <Text style={styles.membroStreakNome}>{m.nome}</Text>
+                <Text style={m.cumpriu_hoje ? styles.cumpriuSim : styles.cumpriuNao}>
+                  {m.cumpriu_hoje ? '✅' : '⏳'}
+                </Text>
               </View>
             ))}
-          </View>
-        </View>
-
-        {/* Convidar amigos */}
-        {grupo.sou_admin && amigosForaDoGrupo.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>CONVIDAR AMIGOS</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {amigosForaDoGrupo.map(a => (
-                <Pressable key={a.id} onPress={() => convidarAmigo(a.id)} style={styles.convidarChip}>
-                  <Avatar nome={a.nome} size={28} />
-                  <Text style={styles.convidarNome}>{a.nome.split(' ')[0]}</Text>
-                  <Text style={styles.convidarPlus}>+</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
+          </ScrollView>
         )}
 
-        {/* Desafios */}
-        <View style={styles.section}>
-          <View style={styles.sectionRow}>
-            <Text style={styles.sectionTitle}>DESAFIOS</Text>
-            {grupo.sou_admin && (
-              <Pressable onPress={abrirModalDesafio}>
-                <Text style={styles.sectionLink}>+ Criar</Text>
+        {/* ── Modal Criar Desafio ── */}
+        <Modal visible={modalDesafio} animationType="slide" transparent>
+          <View style={styles.modalBg}>
+            <View style={styles.modalBox}>
+              <Text style={styles.modalTitulo}>Novo Desafio</Text>
+
+              {/* Botão IA */}
+              <Pressable onPress={pedirDesafioIA} style={[styles.iaBtnModal, loadingIA && { opacity: 0.6 }]}>
+                {loadingIA
+                  ? <ActivityIndicator size="small" color="#fff" />
+                  : <Text style={styles.iaBtnTxt}>🤖 Sugerir com IA</Text>
+                }
               </Pressable>
-            )}
-          </View>
-          {desafios.length === 0 ? (
-            <View style={styles.emptyDesafios}>
-              <Text style={{ fontSize: 32, marginBottom: 8 }}>🎯</Text>
-              <Text style={styles.emptyDesafiosTxt}>Ainda sem desafios. {grupo.sou_admin ? 'Cria o primeiro!' : 'O admin pode criar desafios.'}</Text>
+
+              {sugestaoIA && (
+                <View style={styles.sugestaoBox}>
+                  <Text style={styles.sugestaoTxt}>💡 {sugestaoIA.justificacao}</Text>
+                </View>
+              )}
+
+              <TextInput
+                style={styles.field}
+                placeholder="Título do desafio"
+                placeholderTextColor={COLORS.textSecondary}
+                value={formDesafio.titulo}
+                onChangeText={v => setFormDesafio(p => ({ ...p, titulo: v }))}
+              />
+              <TextInput
+                style={styles.field}
+                placeholder="Descrição (opcional)"
+                placeholderTextColor={COLORS.textSecondary}
+                value={formDesafio.descricao}
+                onChangeText={v => setFormDesafio(p => ({ ...p, descricao: v }))}
+              />
+
+              <View style={styles.tipoRow}>
+                {['gastar_menos','categoria_limite','poupar_valor','streak_dias'].map(t => (
+                  <Pressable
+                    key={t}
+                    onPress={() => setFormDesafio(p => ({ ...p, tipo: t }))}
+                    style={[styles.tipoBtn, formDesafio.tipo === t && styles.tipoBtnAtivo]}
+                  >
+                    <Text style={[styles.tipoTxt, formDesafio.tipo === t && { color: '#fff' }]}>
+                      {t === 'gastar_menos' ? '📉 Gastar menos' :
+                       t === 'categoria_limite' ? '🏷️ Categoria' :
+                       t === 'poupar_valor' ? '💰 Poupar' : '🔥 Streak'}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <View style={styles.rowFields}>
+                <TextInput
+                  style={[styles.field, { flex: 1, marginRight: 6 }]}
+                  placeholder="Valor alvo (€)"
+                  placeholderTextColor={COLORS.textSecondary}
+                  keyboardType="numeric"
+                  value={formDesafio.valor_alvo}
+                  onChangeText={v => setFormDesafio(p => ({ ...p, valor_alvo: v }))}
+                />
+                <TextInput
+                  style={[styles.field, { flex: 1 }]}
+                  placeholder="Duração (dias)"
+                  placeholderTextColor={COLORS.textSecondary}
+                  keyboardType="numeric"
+                  value={formDesafio.dias}
+                  onChangeText={v => setFormDesafio(p => ({ ...p, dias: v }))}
+                />
+              </View>
+
+              <TextInput
+                style={styles.field}
+                placeholder="Recompensa (ex: 🏆 Jantar grátis)"
+                placeholderTextColor={COLORS.textSecondary}
+                value={formDesafio.recompensa}
+                onChangeText={v => setFormDesafio(p => ({ ...p, recompensa: v }))}
+              />
+
+              <View style={styles.modalBtns}>
+                <Pressable onPress={() => { setModalDesafio(false); setSugestaoIA(null); }} style={styles.cancelBtn}>
+                  <Text style={styles.cancelTxt}>Cancelar</Text>
+                </Pressable>
+                <Pressable onPress={criarDesafio} style={styles.confirmBtn}>
+                  <Text style={styles.confirmTxt}>Criar ⚡</Text>
+                </Pressable>
+              </View>
             </View>
-          ) : (
-            desafios.map((d, i) => (
-              <Animated.View key={d.id} entering={FadeInDown.delay(i * 60)}>
-                <DesafioCard desafio={d} navigation={navigation} />
-              </Animated.View>
-            ))
-          )}
-        </View>
-      </ScrollView>
-
-      {/* Modal criar desafio */}
-      <Modal visible={modal} transparent animationType="slide" onRequestClose={() => setModal(false)}>
-        <View style={styles.overlay}>
-          <Pressable style={styles.overlayBg} onPress={() => setModal(false)} />
-          <ScrollView style={styles.sheet} keyboardShouldPersistTaps="handled">
-            <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>Novo Desafio</Text>
-
-            <TextInput style={styles.input} placeholder="Título do desafio" placeholderTextColor={C.textSub} value={titulo} onChangeText={setTitulo} />
-            <TextInput style={[styles.input, { height: 60 }]} placeholder="Descrição (opcional)" placeholderTextColor={C.textSub} value={descricao} onChangeText={setDescricao} multiline />
-
-            <Text style={styles.sheetLabel}>TIPO DE DESAFIO</Text>
-            {TIPOS_DESAFIO.map(t => (
-              <Pressable key={t.key} onPress={() => setTipo(t.key)} style={[styles.tipoBtn, tipo === t.key && styles.tipoBtnActive]}>
-                <Text style={styles.tipoEmoji}>{t.emoji}</Text>
-                <Text style={[styles.tipoLabel, tipo === t.key && { color: C.brand }]}>{t.label}</Text>
-              </Pressable>
-            ))}
-
-            {tipo === 'categoria_limite' && (
-              <TextInput style={styles.input} placeholder="Categoria (ex: delivery, lazer)" placeholderTextColor={C.textSub} value={categoria} onChangeText={setCategoria} />
-            )}
-
-            {(tipo !== 'streak_dias') && (
-              <TextInput style={styles.input} placeholder="Valor alvo em € (ex: 200)" placeholderTextColor={C.textSub} value={valorAlvo} onChangeText={setValorAlvo} keyboardType="numeric" />
-            )}
-
-            <TextInput style={styles.input} placeholder="Duração em dias (ex: 30)" placeholderTextColor={C.textSub} value={duracao} onChangeText={setDuracao} keyboardType="numeric" />
-            <TextInput style={styles.input} placeholder="Recompensa (ex: 🍕 Pizza para o vencedor)" placeholderTextColor={C.textSub} value={recompensa} onChangeText={setRecompensa} />
-
-            <Pressable onPress={criarDesafio} disabled={criando} style={[styles.criarBtn, criando && { opacity: 0.5 }]}>
-              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Lançar Desafio 🚀</Text>}
-            </Pressable>
-            <View style={{ height: 40 }} />
-          </ScrollView>
-        </View>
-      </Modal>
-    </View>
+          </View>
+        </Modal>
+      </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  root:             { flex: 1, backgroundColor: C.bg },
-  center:           { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-  header:           { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 10 },
-  backBtn:          { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
-  backTxt:          { fontSize: 18, color: C.text },
-  headerEmoji:      { width: 48, height: 48, borderRadius: 14, backgroundColor: C.brandDim, justifyContent: 'center', alignItems: 'center' },
-  headerTitle:      { fontSize: FONT.lg, fontWeight: '800', color: C.text },
-  headerSub:        { fontSize: FONT.xs, color: C.textMid },
-  addBtn:           { paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
-  addTxt:           { fontSize: FONT.xs, fontWeight: '800', color: '#fff' },
-  scroll:           { padding: SPACE.lg, paddingBottom: 100 },
-  section:          { marginBottom: SPACE.lg },
-  sectionRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionTitle:     { fontSize: FONT.xs, fontWeight: '800', color: C.textMid, letterSpacing: 1.2, marginBottom: 10 },
-  sectionLink:      { fontSize: FONT.sm, color: C.brand, fontWeight: '700' },
-  membrosRow:       { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  membroItem:       { alignItems: 'center', gap: 4, width: 56 },
-  membroNome:       { fontSize: FONT.xs, color: C.textMid, textAlign: 'center' },
-  adminTag:         { fontSize: 9, color: C.yellow, fontWeight: '700' },
-  convidarChip:     { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: C.surface, borderRadius: RADIUS.pill, paddingHorizontal: 12, paddingVertical: 8, marginRight: 8, borderWidth: 1, borderColor: C.border },
-  convidarNome:     { fontSize: FONT.xs, color: C.text, fontWeight: '600' },
-  convidarPlus:     { fontSize: 14, color: C.brand, fontWeight: '800' },
-  // Desafio card
-  desafioCard:      { backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm },
-  desafioCardInativo:{ opacity: 0.6 },
-  desafioTop:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  desafioBadge:     { paddingHorizontal: 10, paddingVertical: 4, borderRadius: RADIUS.pill },
-  desafioBadgeTxt:  { fontSize: FONT.xs, fontWeight: '700' },
-  desafioPos:       { fontSize: 20 },
-  desafioTitulo:    { fontSize: FONT.md, fontWeight: '700', color: C.text, marginBottom: 4 },
-  desafioRecompensa:{ fontSize: FONT.xs, color: C.yellow, marginBottom: 8 },
-  desafioMeta:      { flexDirection: 'row', justifyContent: 'space-between' },
-  desafioMetaTxt:   { fontSize: FONT.xs, color: C.textSub },
-  emptyDesafios:    { alignItems: 'center', paddingVertical: 32 },
-  emptyDesafiosTxt: { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20 },
-  // Modal
-  overlay:          { flex: 1, justifyContent: 'flex-end' },
-  overlayBg:        { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
-  sheet:            { backgroundColor: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, maxHeight: '90%' },
-  sheetHandle:      { width: 40, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 16 },
-  sheetTitle:       { fontSize: FONT.xl, fontWeight: '800', color: C.text, marginBottom: 16 },
-  sheetLabel:       { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 8, marginTop: 4 },
-  tipoBtn:          { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: RADIUS.sm, marginBottom: 6, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border },
-  tipoBtnActive:    { borderColor: C.brand, backgroundColor: C.brandDim },
-  tipoEmoji:        { fontSize: 18 },
-  tipoLabel:        { fontSize: FONT.sm, color: C.textMid, fontWeight: '600' },
-  input:            { backgroundColor: C.surface2, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, padding: 12, color: C.text, fontSize: FONT.md, marginBottom: 10 },
-  criarBtn:         { backgroundColor: C.brand, borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 12 },
-  criarBtnTxt:      { fontSize: FONT.md, fontWeight: '800', color: '#fff' },
+  container:   { flex: 1, backgroundColor: COLORS.background },
+  center:      { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background },
+  header:      { flexDirection: 'row', alignItems: 'center', padding: SPACE.md, paddingTop: 48, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  backBtn:     { marginRight: 8 },
+  backTxt:     { fontSize: 22, color: COLORS.primary },
+  headerEmoji: { fontSize: 28, marginRight: 8 },
+  headerNome:  { fontSize: 17, fontFamily: FONT.bold, color: COLORS.text },
+  headerSub:   { fontSize: 12, color: COLORS.textSecondary, marginTop: 1 },
+  btnNovo:     { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, paddingHorizontal: 10, paddingVertical: 6 },
+  btnNovoTxt:  { color: '#fff', fontSize: 12, fontFamily: FONT.bold },
+
+  tabs:        { flexDirection: 'row', backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  tab:         { flex: 1, paddingVertical: 12, alignItems: 'center' },
+  tabAtivo:    { borderBottomWidth: 2, borderBottomColor: COLORS.primary },
+  tabTxt:      { fontSize: 13, color: COLORS.textSecondary, fontFamily: FONT.medium },
+  tabTxtAtivo: { color: COLORS.primary, fontFamily: FONT.bold },
+
+  vazio:       { textAlign: 'center', color: COLORS.textSecondary, marginTop: 40, fontSize: 15 },
+  vazioCard:   { alignItems: 'center', paddingVertical: 40 },
+  vazioTxt:    { fontSize: 16, fontFamily: FONT.bold, color: COLORS.text, marginTop: 12 },
+  vazioSub:    { fontSize: 13, color: COLORS.textSecondary, marginTop: 4 },
+
+  feedCard:    { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
+  feedEmoji:   { fontSize: 22, marginRight: 10, marginTop: 2 },
+  feedDesc:    { fontSize: 14, color: COLORS.text, fontFamily: FONT.regular },
+  feedData:    { fontSize: 11, color: COLORS.textSecondary, marginTop: 2 },
+
+  msgRow:      { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-end' },
+  msgRowMinha: { flexDirection: 'row-reverse' },
+  msgAvatar:   { width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surface, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
+  msgBubble:   { maxWidth: '75%', backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 10, borderTopLeftRadius: 4 },
+  msgBubbleMinha: { backgroundColor: COLORS.primary, borderTopLeftRadius: RADIUS.lg, borderTopRightRadius: 4 },
+  msgNome:     { fontSize: 11, fontFamily: FONT.bold, color: COLORS.primary, marginBottom: 2 },
+  msgTexto:    { fontSize: 14, color: COLORS.text },
+  msgHora:     { fontSize: 10, color: COLORS.textSecondary, marginTop: 3, alignSelf: 'flex-end' },
+  reacoesRow:  { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
+  reacaoChip:  { backgroundColor: COLORS.background, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, marginRight: 4, marginTop: 2 },
+  reacoesBar:  { flexDirection: 'row', justifyContent: 'center', backgroundColor: COLORS.surface, paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLORS.border },
+  reacaoBtnBar: { paddingHorizontal: 10 },
+  inputRow:    { flexDirection: 'row', padding: 10, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, alignItems: 'flex-end' },
+  input:       { flex: 1, backgroundColor: COLORS.background, borderRadius: RADIUS.lg, paddingHorizontal: 14, paddingVertical: 8, color: COLORS.text, maxHeight: 100, fontSize: 14 },
+  sendBtn:     { width: 38, height: 38, borderRadius: 19, backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
+  sendTxt:     { color: '#fff', fontSize: 18, fontFamily: FONT.bold },
+
+  desafioCard: { backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 14, marginBottom: 12 },
+  desafioTop:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  desafioTitulo: { fontSize: 15, fontFamily: FONT.bold, color: COLORS.text, flex: 1 },
+  iaBadge:     { fontSize: 12, backgroundColor: '#A29BFE22', color: '#A29BFE', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, fontFamily: FONT.bold },
+  countdownRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  countdownEmoji: { fontSize: 14, marginRight: 4 },
+  countdownTxt: { fontSize: 15, fontFamily: FONT.bold, color: COLORS.primary },
+  terminadoTxt: { fontSize: 12, color: COLORS.textSecondary, marginBottom: 8 },
+  rankRow:     { flexDirection: 'row', marginTop: 8 },
+  rankItem:    { flex: 1, alignItems: 'center' },
+  rankPos:     { fontSize: 18 },
+  rankNome:    { fontSize: 11, color: COLORS.text, fontFamily: FONT.medium, marginTop: 2 },
+  rankVal:     { fontSize: 11, color: COLORS.textSecondary },
+  secTitulo:   { fontSize: 15, fontFamily: FONT.bold, color: COLORS.text, marginTop: 16, marginBottom: 8 },
+
+  streakCard:  { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 28, alignItems: 'center', marginBottom: 20 },
+  streakEmoji: { fontSize: 48 },
+  streakNum:   { fontSize: 64, fontFamily: FONT.bold, color: COLORS.primary, lineHeight: 76 },
+  streakLabel: { fontSize: 16, color: COLORS.textSecondary, fontFamily: FONT.medium },
+  streakSub:   { fontSize: 13, color: COLORS.textSecondary, marginTop: 6, marginBottom: 16 },
+  checkInBtn:  { backgroundColor: COLORS.primary, borderRadius: RADIUS.lg, paddingHorizontal: 24, paddingVertical: 12 },
+  checkInTxt:  { color: '#fff', fontSize: 15, fontFamily: FONT.bold },
+  checkInDone: { backgroundColor: '#00B89420', borderRadius: RADIUS.lg, paddingHorizontal: 24, paddingVertical: 12 },
+  checkInDoneTxt: { color: '#00B894', fontSize: 15, fontFamily: FONT.bold },
+  membroStreakRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
+  membroStreakNome: { fontSize: 14, color: COLORS.text, fontFamily: FONT.medium },
+  cumpriuSim:  { fontSize: 20 },
+  cumpriuNao:  { fontSize: 20 },
+
+  modalBg:     { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000066' },
+  modalBox:    { backgroundColor: COLORS.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, paddingBottom: 40 },
+  modalTitulo: { fontSize: 18, fontFamily: FONT.bold, color: COLORS.text, marginBottom: 14 },
+  iaBtnModal:  { backgroundColor: '#A29BFE', borderRadius: RADIUS.md, paddingVertical: 10, alignItems: 'center', marginBottom: 10 },
+  iaBtnTxt:    { color: '#fff', fontFamily: FONT.bold, fontSize: 14 },
+  sugestaoBox: { backgroundColor: '#A29BFE15', borderRadius: RADIUS.md, padding: 10, marginBottom: 10 },
+  sugestaoTxt: { fontSize: 12, color: '#A29BFE' },
+  field:       { backgroundColor: COLORS.background, borderRadius: RADIUS.md, paddingHorizontal: 12, paddingVertical: 10, color: COLORS.text, marginBottom: 8, fontSize: 14 },
+  tipoRow:     { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 },
+  tipoBtn:     { borderRadius: RADIUS.sm, paddingHorizontal: 8, paddingVertical: 6, backgroundColor: COLORS.background, marginRight: 6, marginBottom: 6 },
+  tipoBtnAtivo: { backgroundColor: COLORS.primary },
+  tipoTxt:     { fontSize: 12, color: COLORS.text, fontFamily: FONT.medium },
+  rowFields:   { flexDirection: 'row' },
+  modalBtns:   { flexDirection: 'row', marginTop: 10 },
+  cancelBtn:   { flex: 1, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center', backgroundColor: COLORS.background, marginRight: 8 },
+  cancelTxt:   { color: COLORS.textSecondary, fontFamily: FONT.medium },
+  confirmBtn:  { flex: 1, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center', backgroundColor: COLORS.primary },
+  confirmTxt:  { color: '#fff', fontFamily: FONT.bold, fontSize: 15 },
 });
