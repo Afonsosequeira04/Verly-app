@@ -1,11 +1,13 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from flask import current_app
 
 config = context.config
 
-fileConfig(config.config_file_name)
+if config.config_file_name and Path(config.config_file_name).exists():
+    fileConfig(config.config_file_name)
 
 target_db = current_app.extensions['migrate'].db
 target_metadata = target_db.metadata
