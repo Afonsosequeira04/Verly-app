@@ -26,6 +26,7 @@ from flask import request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
+    decode_token,
     jwt_required,
     get_jwt_identity,
     get_jwt,
@@ -155,6 +156,12 @@ def logout():
     # Revogar refresh token se enviado
     data = request.get_json(silent=True) or {}
     refresh_jti = data.get('refresh_jti')
+    refresh_token = data.get('refresh_token')
+    if refresh_token and not refresh_jti:
+        try:
+            refresh_jti = decode_token(refresh_token)['jti']
+        except Exception:
+            refresh_jti = None
     if refresh_jti:
         redis.setex(f'blacklist:{refresh_jti}', int(timedelta(days=30).total_seconds()), 'revoked')
 

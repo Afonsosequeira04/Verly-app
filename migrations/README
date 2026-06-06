@@ -1,0 +1,5 @@
+Single-database Flask-Migrate repository for Verly.
+
+Run locally:
+  flask --app run:flask_app db migrate -m "message"
+  flask --app run:flask_app db upgrade

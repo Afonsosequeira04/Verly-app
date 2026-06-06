@@ -23,3 +23,4 @@ from app.api import exportar_mobile    # noqa
 from app.api import push_notifications # noqa
 from app.api import estatisticas  # noqa
 from app.api import social         # noqa
+from app.api import open_banking   # noqa

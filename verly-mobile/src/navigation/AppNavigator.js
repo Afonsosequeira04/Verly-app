@@ -41,6 +41,7 @@ import RetrospetivaMensalScreen from '../screens/RetrospetivaMensalScreen';
 import SimuladorScreen         from '../screens/SimuladorScreen';
 import IntelligenceFeedScreen  from '../screens/IntelligenceFeedScreen';
 import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
+import OpenBankingScreen       from '../screens/OpenBankingScreen';
 import GruposScreen            from '../screens/GruposScreen';
 import GrupoDetalheScreen      from '../screens/GrupoDetalheScreen';
 import DesafioDetalheScreen    from '../screens/DesafioDetalheScreen';
@@ -70,6 +71,19 @@ const Stack     = createStackNavigator();
 const AuthStack = createStackNavigator();
 const MainStack = createStackNavigator();
 const Tab       = createBottomTabNavigator();
+
+const linking = {
+  prefixes: ['verly://'],
+  config: {
+    screens: {
+      Main: {
+        screens: {
+          OpenBanking: 'open-banking/callback',
+        },
+      },
+    },
+  },
+};
 
 // ─── Ícones SVG da tab bar ────────────────────────────────────────────────────
 function TabIcon({ name, color, size = 22, focused }) {
@@ -212,6 +226,14 @@ function MenuIcon({ name, color = C.textMid, size = 16 }) {
           <Polyline points="22,6 12,13 2,6" />
         </Svg>
       );
+    case 'wallet':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M20 7H5a2 2 0 0 1 0-4h12" />
+          <Path d="M5 7h15v14H5a2 2 0 0 1-2-2V5" />
+          <Path d="M16 12h4v4h-4a2 2 0 0 1 0-4z" />
+        </Svg>
+      );
     case 'logout':
       return (
         <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={C.red} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
@@ -272,6 +294,7 @@ function MenuScreen({ navigation }) {
     {
       label: 'Importar',
       items: [
+        { label: 'Open Banking',        screen: 'OpenBanking', icon: 'wallet'   },
         { label: 'Importar Gmail',        screen: 'Gmail',       icon: 'mail'     },
       ],
     },
@@ -548,6 +571,7 @@ function MainStackNav() {
       <MainStack.Screen name="Amigos"        component={AmigosScreen}        options={{ ...hdr, headerTitle: 'Amigos' }} />
       <MainStack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ ...hdr, headerTitle: 'Configurações' }} />
       <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
+      <MainStack.Screen name="OpenBanking"   component={OpenBankingScreen}   options={{ headerShown: false }} />
       <MainStack.Screen name="Garantias"     component={GarantiasScreen}         options={{ headerShown: false }} />
       <MainStack.Screen name="Retrospetiva"  component={RetrospetivaMensalScreen} options={{ headerShown: false }} />
       <MainStack.Screen name="Simulador"     component={SimuladorScreen}          options={{ headerShown: false }} />
@@ -587,7 +611,7 @@ export default function AppNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {user
           ? user.onboarding_completo

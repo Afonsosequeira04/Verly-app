@@ -3,6 +3,9 @@ storage/
 __pycache__/
 finetune/
 dados_reduzidos/
+.env
+instance/
+*.pem
 *.pyc
 verly-mobile/node_modules/
 verly-mobile/.expo/

@@ -11,7 +11,8 @@ os.environ['FLASK_ENV'] = 'production'
 from app import create_app, db
 from app.models import (
     User, Fatura, Conversa, Meta, ContaBancaria,
-    Subscricao, Playlist, playlist_fatura, playlist_membro
+    Subscricao, Playlist, playlist_fatura, playlist_membro,
+    OpenBankingConnection, BankTransaction
 )
 
 try:

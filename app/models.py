@@ -102,6 +102,51 @@ class ContaBancaria(db.Model):
     iban             = db.Column(db.String(50))
     nome_banco       = db.Column(db.String(100))
     ligada_em        = db.Column(db.DateTime, default=datetime.utcnow)
+    ativa            = db.Column(db.Boolean, default=True)
+
+
+class OpenBankingConnection(db.Model):
+    __tablename__ = 'open_banking_connections'
+
+    id              = db.Column(db.Integer, primary_key=True)
+    user_id         = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    provider        = db.Column(db.String(40), default='enablebanking', nullable=False)
+    institution_id  = db.Column(db.String(100), nullable=False)
+    requisition_id  = db.Column(db.String(100), unique=True)
+    reference       = db.Column(db.String(120), unique=True, nullable=False)
+    status          = db.Column(db.String(30), default='created', nullable=False)
+    redirect_url    = db.Column(db.String(512))
+    agreement_id    = db.Column(db.String(100))
+    error           = db.Column(db.Text)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at      = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_sync_at    = db.Column(db.DateTime)
+    consent_expires_at = db.Column(db.DateTime)
+
+    user = db.relationship('User', backref=db.backref('open_banking_connections', lazy=True))
+
+
+class BankTransaction(db.Model):
+    __tablename__ = 'bank_transactions'
+
+    id                 = db.Column(db.Integer, primary_key=True)
+    user_id            = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    conta_bancaria_id  = db.Column(db.Integer, db.ForeignKey('contas_bancarias.id'), nullable=False, index=True)
+    provider           = db.Column(db.String(40), default='enablebanking', nullable=False)
+    transaction_id     = db.Column(db.String(160))
+    transaction_hash   = db.Column(db.String(64), unique=True, nullable=False)
+    booked_at          = db.Column(db.Date)
+    value_date         = db.Column(db.Date)
+    amount             = db.Column(db.Float, nullable=False, default=0)
+    currency           = db.Column(db.String(10), default='EUR')
+    description        = db.Column(db.Text)
+    merchant_name      = db.Column(db.String(200))
+    categoria          = db.Column(db.String(50), default='Outros')
+    raw_json           = db.Column(db.Text)
+    created_at         = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('bank_transactions', lazy=True))
+    conta = db.relationship('ContaBancaria', backref=db.backref('transactions', lazy=True))
 
 
 class Subscricao(db.Model):

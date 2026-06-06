@@ -5,39 +5,151 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+let SecureStore = null;
+try {
+  SecureStore = require('expo-secure-store');
+} catch (_) {
+  SecureStore = null;
+}
+
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
 const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+export const OPEN_BANKING_CALLBACK_URL = `${BASE_URL}/open-banking/callback`;
 
-const TOKEN_KEY = '@verly_token';
+const ACCESS_TOKEN_KEY = '@verly_access_token';
+const REFRESH_TOKEN_KEY = '@verly_refresh_token';
+const LEGACY_TOKEN_KEY = '@verly_token';
 
 // ── Token ──────────────────────────────────────────────────────────────────────
 
-export const saveToken   = async (token) => AsyncStorage.setItem(TOKEN_KEY, token);
-export const getToken    = async ()      => AsyncStorage.getItem(TOKEN_KEY);
-export const removeToken = async ()      => AsyncStorage.removeItem(TOKEN_KEY);
+async function setStoredItem(key, value) {
+  if (!value) return removeStoredItem(key);
+  if (SecureStore?.setItemAsync) {
+    await SecureStore.setItemAsync(key, value);
+    return;
+  }
+  await AsyncStorage.setItem(key, value);
+}
+
+async function getStoredItem(key) {
+  if (SecureStore?.getItemAsync) {
+    const value = await SecureStore.getItemAsync(key);
+    if (value) return value;
+  }
+  return AsyncStorage.getItem(key);
+}
+
+async function removeStoredItem(key) {
+  if (SecureStore?.deleteItemAsync) {
+    await SecureStore.deleteItemAsync(key);
+  }
+  await AsyncStorage.removeItem(key);
+}
+
+export const saveTokens = async ({ access_token, refresh_token }) => {
+  if (access_token) await setStoredItem(ACCESS_TOKEN_KEY, access_token);
+  if (refresh_token) await setStoredItem(REFRESH_TOKEN_KEY, refresh_token);
+  await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+};
+
+export const saveToken = async (token) => saveTokens({ access_token: token });
+
+export const getToken = async () => {
+  const token = await getStoredItem(ACCESS_TOKEN_KEY);
+  if (token) return token;
+
+  const legacyToken = await AsyncStorage.getItem(LEGACY_TOKEN_KEY);
+  if (legacyToken) {
+    await setStoredItem(ACCESS_TOKEN_KEY, legacyToken);
+    await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+  }
+  return legacyToken;
+};
+
+export const getRefreshToken = async () => getStoredItem(REFRESH_TOKEN_KEY);
+
+export const removeTokens = async () => {
+  await removeStoredItem(ACCESS_TOKEN_KEY);
+  await removeStoredItem(REFRESH_TOKEN_KEY);
+  await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+};
+
+export const removeToken = removeTokens;
+
+async function parseJsonResponse(response) {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return { error: text };
+  }
+}
+
+let refreshPromise = null;
+
+async function refreshAccessToken() {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const refreshToken = await getRefreshToken();
+      if (!refreshToken) throw new Error('UNAUTHORIZED');
+
+      const response = await fetch(`${BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${refreshToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      const data = await parseJsonResponse(response);
+      if (!response.ok || !data.access_token) {
+        await removeTokens();
+        throw new Error('UNAUTHORIZED');
+      }
+      await saveTokens({ access_token: data.access_token });
+      return data.access_token;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+async function buildHeaders(options = {}, token = null) {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  return {
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {}),
+  };
+}
+
+async function rawApiFetch(path, options = {}, token = null) {
+  const { skipAuthRefresh, auth, ...fetchOptions } = options;
+  return fetch(`${BASE_URL}${path}`, {
+    ...fetchOptions,
+    headers: await buildHeaders(options, token),
+  });
+}
 
 // ── Fetch base ─────────────────────────────────────────────────────────────────
 
 export async function apiFetch(path, options = {}) {
-  const token = await getToken();
+  const token = options.auth === false ? null : await getToken();
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {}),
-  };
+  let response = await rawApiFetch(path, options, token);
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
-
-  if (response.status === 401) {
-    await removeToken();
-    throw new Error('UNAUTHORIZED');
+  if (token && response.status === 401 && !options.skipAuthRefresh) {
+    const nextToken = await refreshAccessToken();
+    response = await rawApiFetch(path, options, nextToken);
   }
 
-  const data = await response.json();
+  const data = await parseJsonResponse(response);
+
+  if (response.status === 401) {
+    await removeTokens();
+    throw new Error('UNAUTHORIZED');
+  }
 
   if (!response.ok) {
     const err = new Error(data.error || `Erro ${response.status}`);
@@ -53,7 +165,7 @@ export async function apiFetch(path, options = {}) {
 async function apiUpload(path, formData) {
   const token = await getToken();
 
-  const response = await fetch(`${BASE_URL}${path}`, {
+  let response = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -61,7 +173,16 @@ async function apiUpload(path, formData) {
     body: formData,
   });
 
-  const data = await response.json();
+  if (response.status === 401) {
+    const nextToken = await refreshAccessToken();
+    response = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${nextToken}` },
+      body: formData,
+    });
+  }
+
+  const data = await parseJsonResponse(response);
 
   if (!response.ok) {
     throw new Error(data.error || `Erro ${response.status}`);
@@ -74,10 +195,10 @@ async function apiUpload(path, formData) {
 
 export const authAPI = {
   login: (email, password) =>
-    apiFetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+    apiFetch('/auth/login', { method: 'POST', auth: false, body: JSON.stringify({ email, password }) }),
 
   register: (nome, email, password) =>
-    apiFetch('/auth/register', { method: 'POST', body: JSON.stringify({ nome, email, password }) }),
+    apiFetch('/auth/register', { method: 'POST', auth: false, body: JSON.stringify({ nome, email, password }) }),
 
   me: () => apiFetch('/auth/me'),
 
@@ -91,10 +212,18 @@ export const authAPI = {
     apiFetch('/auth/onboarding', { method: 'POST', body: JSON.stringify(answers) }),
 
   resendConfirm: (email) =>
-    apiFetch('/auth/resend-confirm', { method: 'POST', body: JSON.stringify({ email }) }),
+    apiFetch('/auth/resend-confirm', { method: 'POST', auth: false, body: JSON.stringify({ email }) }),
 
   firebaseLogin: (idToken) =>
-    apiFetch('/auth/firebase', { method: 'POST', body: JSON.stringify({ idToken }) }),
+    apiFetch('/auth/firebase', { method: 'POST', auth: false, body: JSON.stringify({ idToken }) }),
+
+  logout: async () => {
+    const refresh_token = await getRefreshToken();
+    return apiFetch('/auth/logout', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token }),
+    });
+  },
 
   deleteAccount: () =>
     apiFetch('/auth/account', { method: 'DELETE' }),
@@ -290,6 +419,34 @@ export const gmailAPI = {
   disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
 };
 
+export const openBankingAPI = {
+  status: () => apiFetch('/open-banking/status'),
+
+  institutions: (country = 'PT') =>
+    apiFetch(`/open-banking/institutions?country=${encodeURIComponent(country)}`),
+
+  connect: ({ institution_id, institution_name, country, redirect_url, psu_type } = {}) =>
+    apiFetch('/open-banking/connect', {
+      method: 'POST',
+      body: JSON.stringify({ institution_id, institution_name, country, redirect_url, psu_type }),
+    }),
+
+  callback: (payload) =>
+    apiFetch('/open-banking/callback', {
+      method: 'POST',
+      body: JSON.stringify(typeof payload === 'string' ? { reference: payload } : payload),
+    }),
+
+  accounts: () => apiFetch('/open-banking/accounts'),
+
+  sync: () => apiFetch('/open-banking/sync', { method: 'POST' }),
+
+  transactions: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/open-banking/transactions${query ? `?${query}` : ''}`);
+  },
+};
+
 // ── Garantias & Resumo ─────────────────────────────────────────────────────────
 
 export const garantiasAPI = {
@@ -301,8 +458,7 @@ export const garantiasAPI = {
 export const exportarAPI = {
   pdfUrl: async () => {
     const token = await getToken();
-    const BASE = 'https://verly-app-production.up.railway.app/api/v1';
-    return `${BASE}/exportar/pdf?_token=${token}`;
+    return `${BASE_URL}/exportar/pdf?_token=${token}`;
   },
 };
 

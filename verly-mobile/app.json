@@ -3,6 +3,7 @@
     "name": "Verly",
     "slug": "verly-mobile",
     "version": "1.0.0",
+    "scheme": "verly",
     "platforms": ["ios", "android", "web"],
     "icon": "./assets/icon.png",
     "splash": {

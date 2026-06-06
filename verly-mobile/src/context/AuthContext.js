@@ -4,7 +4,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authAPI, saveToken, removeToken, getToken } from '../services/api';
+import { authAPI, saveTokens, removeTokens, getToken } from '../services/api';
 
 // ── Google Sign-In ────────────────────────────────────────────────────────────
 let GoogleSignin, statusCodes, firebaseAuth, GoogleAuthProvider;
@@ -86,7 +86,7 @@ export function AuthProvider({ children }) {
           if (pushAPI) registarTokenFCM(pushAPI);
         }
       } catch {
-        await removeToken();
+        await removeTokens();
       } finally {
         setLoading(false);
       }
@@ -96,7 +96,7 @@ export function AuthProvider({ children }) {
   // ── Login com Email + Password ────────────────────────────────────────────
   const login = async (email, password) => {
     const data = await authAPI.login(email, password);
-    await saveToken(data.access_token);
+    await saveTokens(data);
     setUser(data.user);
 
     // Registar token FCM após login
@@ -136,7 +136,7 @@ export function AuthProvider({ children }) {
       const firebaseToken = await firebaseUserCred.user.getIdToken();
 
       const data = await authAPI.firebaseLogin(firebaseToken);
-      await saveToken(data.access_token);
+      await saveTokens(data);
       setUser(data.user);
 
       // Registar token FCM após login com Google
@@ -163,7 +163,11 @@ export function AuthProvider({ children }) {
       }
     } catch (_) {}
 
-    await removeToken();
+    try {
+      await authAPI.logout();
+    } catch (_) {}
+
+    await removeTokens();
     setUser(null);
     try {
       if (GoogleSignin) await GoogleSignin.signOut();

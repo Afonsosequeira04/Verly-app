@@ -16,6 +16,7 @@ from flask_login import LoginManager
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
+from flask_migrate import Migrate
 
 load_dotenv()
 
@@ -23,6 +24,7 @@ db = SQLAlchemy()
 login_manager = LoginManager()
 csrf = CSRFProtect()
 jwt = JWTManager()
+migrate = Migrate()
 
 
 def _init_firebase(app):
@@ -61,6 +63,7 @@ def create_app(config_override=None):
     login_manager.init_app(app)
     csrf.init_app(app)
     jwt.init_app(app)
+    migrate.init_app(app, db)
 
     from app.extensions import cache, limiter
     cache.init_app(app)
@@ -76,7 +79,10 @@ def create_app(config_override=None):
         except Exception:
             return False
 
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": app.config.get('API_CORS_ORIGINS', [])}},
+    )
 
     login_manager.login_view = 'auth.login'
     login_manager.login_message = 'Precisas de fazer login primeiro.'
@@ -164,9 +170,10 @@ def create_app(config_override=None):
     app.register_blueprint(api_bp, url_prefix='/api/v1')
     csrf.exempt(api_bp)
 
-    with app.app_context():
-        db.create_all()
-        _migrate_db()
+    if app.config.get('AUTO_MIGRATE_ON_STARTUP', False):
+        with app.app_context():
+            db.create_all()
+            _migrate_db()
 
     app.logger.info(f'Verly iniciada — ambiente: {os.getenv("FLASK_ENV", "development")}')
     return app
@@ -186,10 +193,9 @@ def _setup_logging(app: Flask):
 def _migrate_db():
     """
     Adiciona colunas em falta nas tabelas existentes.
-    Usa try/except em vez de inspect() para evitar problemas de cache.
-    O IF NOT EXISTS garante idempotência — pode correr quantas vezes quiser.
+    Inspeciona o schema antes de alterar para funcionar em PostgreSQL e SQLite.
     """
-    from sqlalchemy import text
+    from sqlalchemy import inspect, text
 
     migrations = [
         # ── faturas ───────────────────────────────────────────────────────────
@@ -225,16 +231,29 @@ def _migrate_db():
         ('recompensas', 'desbloqueada_em', 'TIMESTAMP'),
         # ── mensagens_grupo ───────────────────────────────────────────────────
         ('mensagens_grupo', 'editada',   'BOOLEAN DEFAULT false'),
+        ('contas_bancarias', 'ativa',     'BOOLEAN DEFAULT true'),
     ]
 
     with db.engine.connect() as conn:
+        inspector = inspect(conn)
+        table_names = set(inspector.get_table_names())
+        column_cache = {}
+
         for table, column, col_type in migrations:
+            if table not in table_names:
+                continue
+            if table not in column_cache:
+                column_cache[table] = {
+                    item['name'] for item in inspector.get_columns(table)
+                }
+            if column in column_cache[table]:
+                continue
+
             try:
-                conn.execute(text(
-                    f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}'
-                ))
+                conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}'))
                 conn.commit()
-                print(f'✅ Migração: {table}.{column} ok.')
+                column_cache[table].add(column)
+                logging.getLogger(__name__).info('Migration added column %s.%s', table, column)
             except Exception as e:
                 conn.rollback()
                 # Ignora erro "already exists" (PG code 42701) silenciosamente
@@ -242,4 +261,4 @@ def _migrate_db():
                 if 'already exists' in err or '42701' in err:
                     pass  # coluna já existe, tudo bem
                 else:
-                    print(f'⚠️  Migração {table}.{column}: {err}')
+                    logging.getLogger(__name__).warning('Migration %s.%s failed: %s', table, column, err)

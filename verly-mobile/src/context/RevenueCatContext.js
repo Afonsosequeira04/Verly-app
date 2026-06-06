@@ -3,7 +3,7 @@
  * Contexto global do RevenueCat — gere estado de subscrição Pro
  *
  * SETUP:
- *  1. npx expo install react-native-purchases react-native-purchases-ui
+ *  1. npx expo install react-native-purchases
  *  2. Substitui REVENUECAT_API_KEY pela tua chave do dashboard RevenueCat
  *  3. Faz rebuild: npx expo run:android
  */
@@ -20,7 +20,7 @@ let Purchases = null;
 try {
   Purchases = require('react-native-purchases').default;
 } catch (_) {
-  console.warn('[RevenueCat] react-native-purchases não instalado — faz: npx expo install react-native-purchases react-native-purchases-ui && npx expo run:android');
+  console.warn('[RevenueCat] react-native-purchases não instalado — faz: npx expo install react-native-purchases && npx expo run:android');
 }
 
 // ─── Context ──────────────────────────────────────────────────────────────────

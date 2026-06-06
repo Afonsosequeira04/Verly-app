@@ -71,6 +71,33 @@ class Config:
     # ── JWT ───────────────────────────────────────────────────────────────────
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY') or os.getenv('SECRET_KEY', 'dev-secret')
 
+    API_CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv(
+            'API_CORS_ORIGINS',
+            'http://localhost:19006,http://localhost:8081,http://127.0.0.1:19006'
+        ).split(',')
+        if origin.strip()
+    ]
+
+    AUTO_MIGRATE_ON_STARTUP = os.getenv('AUTO_MIGRATE_ON_STARTUP', 'true').lower() == 'true'
+
+    OPEN_BANKING_PROVIDER = os.getenv('OPEN_BANKING_PROVIDER', 'enablebanking')
+    OPEN_BANKING_DEFAULT_COUNTRY = os.getenv('OPEN_BANKING_DEFAULT_COUNTRY', 'PT')
+    OPEN_BANKING_REDIRECT_URL = os.getenv('OPEN_BANKING_REDIRECT_URL')
+    OPEN_BANKING_APP_RETURN_URL = os.getenv('OPEN_BANKING_APP_RETURN_URL', 'verly://open-banking/callback')
+    ENABLE_BANKING_BASE_URL = os.getenv('ENABLE_BANKING_BASE_URL', 'https://api.enablebanking.com')
+    ENABLE_BANKING_APP_ID = os.getenv('ENABLE_BANKING_APP_ID')
+    ENABLE_BANKING_PRIVATE_KEY = os.getenv('ENABLE_BANKING_PRIVATE_KEY')
+    ENABLE_BANKING_PRIVATE_KEY_FILE = os.getenv('ENABLE_BANKING_PRIVATE_KEY_FILE')
+    ENABLE_BANKING_CONSENT_DAYS = int(os.getenv('ENABLE_BANKING_CONSENT_DAYS', 90))
+    GOCARDLESS_BASE_URL = os.getenv(
+        'GOCARDLESS_BASE_URL',
+        'https://bankaccountdata.gocardless.com/api/v2'
+    )
+    GOCARDLESS_SECRET_ID = os.getenv('GOCARDLESS_SECRET_ID')
+    GOCARDLESS_SECRET_KEY = os.getenv('GOCARDLESS_SECRET_KEY')
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
@@ -88,6 +115,7 @@ class ProductionConfig(Config):
     TESTING = False
     SESSION_COOKIE_SECURE = True
     SQLALCHEMY_ECHO = False
+    AUTO_MIGRATE_ON_STARTUP = os.getenv('AUTO_MIGRATE_ON_STARTUP', 'false').lower() == 'true'
     SQLALCHEMY_ENGINE_OPTIONS = {
         'pool_pre_ping': True,
         'pool_size': 10,
@@ -112,6 +140,7 @@ class TestingConfig(Config):
     WTF_CSRF_ENABLED = False
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
     SECRET_KEY = 'test-secret-key'
+    AUTO_MIGRATE_ON_STARTUP = False
 
 
 config_map = {
