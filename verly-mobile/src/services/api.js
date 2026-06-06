@@ -19,7 +19,7 @@ const ENV_BASE_URL =
   typeof process !== 'undefined'
     ? process.env?.EXPO_PUBLIC_API_URL
     : null;
-const BASE_URL = ENV_BASE_URL || (__DEV__ ? DEV_BASE_URL : PROD_BASE_URL);
+const BASE_URL = ENV_BASE_URL || PROD_BASE_URL;
 export const OPEN_BANKING_CALLBACK_URL = `${BASE_URL}/open-banking/callback`;
 
 const ACCESS_TOKEN_KEY = 'verly_access_token';

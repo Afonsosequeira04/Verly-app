@@ -554,3 +554,19 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
         'previsao_currency': selected_currency if forecast is not None else None,
         'dias_no_mes': monthrange(today.year, today.month)[1],
     }
+
+
+def json_safe_financial_summary(summary, include_records=False):
+    def convert(value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {key: convert(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [convert(item) for item in value]
+        return value
+
+    payload = convert(summary)
+    if not include_records:
+        payload.pop('records', None)
+    return payload

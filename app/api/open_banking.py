@@ -8,7 +8,12 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app import db
 from app.api import api_bp
 from app.extensions import cache
-from app.financial_records import classify_bank_movement, normalize_text, summarize_expenses
+from app.financial_records import (
+    classify_bank_movement,
+    json_safe_financial_summary,
+    normalize_text,
+    summarize_expenses,
+)
 from app.models import BankTransaction, ContaBancaria, Meta, OpenBankingConnection, User
 from app.open_banking_service import (
     OpenBankingNotConfigured,
@@ -426,7 +431,7 @@ def open_banking_summary():
 
     return jsonify({
         'success': True,
-        'summary': summary,
+        'summary': json_safe_financial_summary(summary),
         'budget': budget_status,
         'metas': metas,
         'subscriptions': subscriptions,

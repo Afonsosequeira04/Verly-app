@@ -12,7 +12,7 @@ from datetime import datetime
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
-from app.financial_records import summarize_expenses
+from app.financial_records import json_safe_financial_summary, summarize_expenses
 from app.models import Fatura, Conversa
 from app.subscriptions import detect_subscriptions
 from app.dashboard import (
@@ -46,6 +46,8 @@ def dashboard():
         real_summary if real_summary['currency'] == 'EUR'
         else summarize_expenses(user_id, currency='EUR')
     )
+    real_summary_public = json_safe_financial_summary(real_summary)
+    budget_summary_public = json_safe_financial_summary(budget_summary)
 
     faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
     conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
@@ -126,14 +128,14 @@ def dashboard():
         'total_gasto':       round(total_gasto, 2),
         'total_gasto_real':  real_summary['mes_atual']['total'],
         'total_faturas':     round(total_faturas, 2),
-        'fontes_reais':      real_summary['fontes_por_moeda'],
-        'real_summary':      real_summary,
-        'budget_summary':    budget_summary,
+        'fontes_reais':      real_summary_public['fontes_por_moeda'],
+        'real_summary':      real_summary_public,
+        'budget_summary':    budget_summary_public,
         'banking': {
-            'active_currency': real_summary['currency'],
-            'available_currencies': real_summary['available_currencies'],
-            'other_currencies': real_summary['other_currencies'],
-            'excluded': real_summary['excluded'],
+            'active_currency': real_summary_public['currency'],
+            'available_currencies': real_summary_public['available_currencies'],
+            'other_currencies': real_summary_public['other_currencies'],
+            'excluded': real_summary_public['excluded'],
         },
         'num_faturas':       num_faturas,
         'top_loja':          top_loja,
@@ -149,7 +151,7 @@ def dashboard():
             {
                 'nome': item['categoria'],
                 'categoria': item['categoria'],
-                'total': item['valor'],
+                'total': item.get('valor', item.get('total', 0)),
                 'currency': item.get('currency', real_summary['currency']),
             }
             for item in (
