@@ -1,13 +1,16 @@
 import hashlib
 import json
+import re
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin
 
 import jwt as pyjwt
 import requests
 from flask import current_app
+
+from app.financial_records import categorize_transaction
 
 
 class OpenBankingNotConfigured(RuntimeError):
@@ -359,17 +362,27 @@ def new_reference(user_id):
 def parse_provider_date(value):
     if not value:
         return None
-    try:
-        return datetime.strptime(value[:10], '%Y-%m-%d').date()
-    except ValueError:
-        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    text = str(value).strip()
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%d-%m-%Y', '%Y/%m/%d'):
+        try:
+            return datetime.strptime(text[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def parse_provider_datetime(value):
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
     try:
-        return datetime.fromisoformat(value.replace('Z', '+00:00')).replace(tzinfo=None)
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00')).replace(tzinfo=None)
     except ValueError:
         return None
 
@@ -380,6 +393,10 @@ def transaction_hash(user_id, account_id, transaction):
         or transaction.get('internalTransactionId')
         or transaction.get('transaction_id')
         or transaction.get('entry_reference')
+        or transaction.get('entryReference')
+        or transaction.get('reference_number')
+        or transaction.get('booking_id')
+        or transaction.get('id')
     )
     if not stable_id:
         stable_id = json.dumps(transaction, sort_keys=True, ensure_ascii=True)
@@ -399,14 +416,24 @@ def normalize_transaction(user_id, conta_bancaria_id, provider_account_id, trans
 
 
 def _normalize_gocardless_transaction(user_id, conta_bancaria_id, provider_account_id, transaction):
-    amount_data = transaction.get('transactionAmount') or {}
-    amount = _amount_to_float(amount_data.get('amount'))
+    amount_data = transaction.get('transactionAmount') or transaction.get('transaction_amount') or {}
+    amount = _amount_to_float(
+        amount_data.get('amount') if isinstance(amount_data, dict) else amount_data
+    )
     description = (
         transaction.get('remittanceInformationUnstructured')
+        or transaction.get('remittance_information')
         or transaction.get('additionalInformation')
+        or transaction.get('additional_information')
+        or transaction.get('description')
         or transaction.get('debtorName')
         or transaction.get('creditorName')
         or ''
+    )
+    merchant_name = (
+        transaction.get('creditorName')
+        or transaction.get('debtorName')
+        or transaction.get('merchant_name')
     )
 
     return {
@@ -418,29 +445,65 @@ def _normalize_gocardless_transaction(user_id, conta_bancaria_id, provider_accou
         'booked_at': parse_provider_date(transaction.get('bookingDate')),
         'value_date': parse_provider_date(transaction.get('valueDate')),
         'amount': amount,
-        'currency': amount_data.get('currency') or 'EUR',
+        'currency': _currency_from_amount(amount_data),
         'description': description,
-        'merchant_name': transaction.get('creditorName') or transaction.get('debtorName'),
+        'merchant_name': merchant_name,
+        'categoria': categorize_transaction(description, merchant_name, amount),
         'raw_json': json.dumps(transaction, ensure_ascii=True, sort_keys=True),
     }
 
 
 def _normalize_enable_banking_transaction(user_id, conta_bancaria_id, provider_account_id, transaction):
-    amount_data = transaction.get('transaction_amount') or {}
-    amount = _amount_to_float(amount_data.get('amount'))
-    if transaction.get('credit_debit_indicator') == 'DBIT' and amount > 0:
+    amount_data = (
+        transaction.get('transaction_amount')
+        or transaction.get('transactionAmount')
+        or transaction.get('amount')
+        or {}
+    )
+    amount = _amount_to_float(
+        amount_data.get('amount') if isinstance(amount_data, dict) else amount_data
+    )
+    indicator = str(
+        transaction.get('credit_debit_indicator')
+        or transaction.get('creditDebitIndicator')
+        or ''
+    ).upper()
+    if indicator in ('DBIT', 'DEBIT') and amount > 0:
+        amount *= -1
+    if indicator in ('CRDT', 'CREDIT') and amount < 0:
         amount *= -1
 
-    remittance = transaction.get('remittance_information') or []
+    remittance = (
+        transaction.get('remittance_information')
+        or transaction.get('remittanceInformationUnstructured')
+        or transaction.get('remittanceInformationStructured')
+        or transaction.get('details')
+        or transaction.get('description')
+        or []
+    )
     if isinstance(remittance, list):
         description = ' '.join(str(item) for item in remittance if item)
+    elif isinstance(remittance, dict):
+        description = ' '.join(str(item) for item in remittance.values() if item)
     else:
         description = str(remittance)
     bank_code = transaction.get('bank_transaction_code') or {}
-    description = description or bank_code.get('description') or transaction.get('reference_number') or ''
+    description = (
+        description
+        or bank_code.get('description')
+        or transaction.get('reference_number')
+        or transaction.get('entry_reference')
+        or ''
+    )
 
     creditor = transaction.get('creditor') or {}
     debtor = transaction.get('debtor') or {}
+    merchant_name = (
+        _party_name(creditor)
+        or _party_name(debtor)
+        or transaction.get('merchant_name')
+        or transaction.get('counterparty_name')
+    )
 
     return {
         'user_id': user_id,
@@ -448,18 +511,57 @@ def _normalize_enable_banking_transaction(user_id, conta_bancaria_id, provider_a
         'provider': 'enablebanking',
         'transaction_id': transaction.get('transaction_id') or transaction.get('entry_reference'),
         'transaction_hash': transaction_hash(user_id, provider_account_id, transaction),
-        'booked_at': parse_provider_date(transaction.get('booking_date')),
+        'booked_at': parse_provider_date(transaction.get('booking_date') or transaction.get('bookingDate')),
         'value_date': parse_provider_date(transaction.get('value_date') or transaction.get('transaction_date')),
         'amount': amount,
-        'currency': amount_data.get('currency') or 'EUR',
+        'currency': _currency_from_amount(amount_data),
         'description': description,
-        'merchant_name': creditor.get('name') or debtor.get('name'),
+        'merchant_name': merchant_name,
+        'categoria': categorize_transaction(description, merchant_name, amount, bank_code.get('description')),
         'raw_json': json.dumps(transaction, ensure_ascii=True, sort_keys=True),
     }
 
 
 def _amount_to_float(value):
+    if isinstance(value, dict):
+        value = value.get('amount') or value.get('value')
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip()
+        negative = text.startswith('(') and text.endswith(')')
+        text = text.replace('\xa0', ' ')
+        text = re.sub(r'[^\d,\.\-+]', '', text)
+        if ',' in text and '.' in text:
+            if text.rfind(',') > text.rfind('.'):
+                text = text.replace('.', '').replace(',', '.')
+            else:
+                text = text.replace(',', '')
+        elif ',' in text:
+            text = text.replace(',', '.')
+        if negative and not text.startswith('-'):
+            text = '-' + text
+        value = text
     try:
         return float(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _currency_from_amount(amount_data):
+    if isinstance(amount_data, dict):
+        return amount_data.get('currency') or amount_data.get('currency_code') or 'EUR'
+    return 'EUR'
+
+
+def _party_name(value):
+    if isinstance(value, dict):
+        return (
+            value.get('name')
+            or value.get('merchant_name')
+            or value.get('display_name')
+            or value.get('id')
+        )
+    if value:
+        return str(value)
+    return None

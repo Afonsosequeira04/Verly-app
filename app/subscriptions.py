@@ -9,7 +9,8 @@ from collections import defaultdict
 from datetime import datetime
 from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required, current_user
-from app.models import Fatura, Subscricao
+from app.financial_records import normalize_text
+from app.models import BankTransaction, Fatura, Subscricao
 from app import db
 
 subscriptions_bp = Blueprint('subscriptions', __name__)
@@ -224,6 +225,97 @@ def _guardar_subscricoes_bd(user_id: int, subscriptions: list, fonte: str = 'ext
     db.session.commit()
 
 
+def _bank_transaction_date(transaction):
+    return transaction.booked_at or transaction.value_date
+
+
+def _bank_subscription_key(transaction):
+    text = transaction.merchant_name or transaction.description or ''
+    normalized = normalize_text(text)
+    normalized = re.sub(r'\b\d{2,}\b', ' ', normalized)
+    normalized = re.sub(r'\b(ref|id|seq|aut|pagamento|compra|cartao|mbway|sepa)\b', ' ', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    if len(normalized) < 3:
+        return None
+    return normalized
+
+
+def _amounts_are_recurring(values):
+    if len(values) < 2:
+        return False
+    avg = sum(values) / len(values)
+    tolerance = max(avg * 0.30, 2.0)
+    return max(values) - min(values) <= tolerance
+
+
+def _detetar_subscricoes_banco(user_id: int) -> list:
+    transactions = BankTransaction.query.filter(
+        BankTransaction.user_id == user_id,
+        BankTransaction.amount < 0,
+    ).all()
+
+    grouped = defaultdict(list)
+    display_names = {}
+    for transaction in transactions:
+        tx_date = _bank_transaction_date(transaction)
+        key = _bank_subscription_key(transaction)
+        if not key or not tx_date:
+            continue
+        grouped[key].append(transaction)
+        display_names.setdefault(
+            key,
+            transaction.merchant_name or transaction.description or key.title(),
+        )
+
+    subscriptions = []
+    for key, txs in grouped.items():
+        months = {
+            f'{_bank_transaction_date(tx).year}-{_bank_transaction_date(tx).month:02d}'
+            for tx in txs
+            if _bank_transaction_date(tx)
+        }
+        if len(months) < 2:
+            continue
+
+        values = [abs(float(tx.amount or 0)) for tx in txs if tx.amount]
+        name = display_names.get(key, key.title())
+        known_subscription = _is_subscription(f'{key} {name}')
+        if not known_subscription and not _amounts_are_recurring(values):
+            continue
+
+        preco_mensal = sum(values) / len(values) if values else 0
+        if preco_mensal <= 0:
+            continue
+
+        categoria_sub = _classify_sub(name)
+        meses_pago = len(months)
+        risk = 'danger' if meses_pago >= 3 else 'warning'
+        subscriptions.append({
+            'nome': name[:200],
+            'icone': SUB_ICONS.get(categoria_sub, 'ðŸ“¦'),
+            'categoria': categoria_sub,
+            'meses_pago': meses_pago,
+            'preco_mensal': round(preco_mensal, 2),
+            'total_pago': round(sum(values), 2),
+            'dias_sem_uso': 0,
+            'risk': risk,
+            'risk_label': {'danger': 'Recorrente', 'warning': 'Suspeito'}[risk],
+            'alerta': f'{meses_pago} meses detectados no banco - {preco_mensal:.2f}€/mes',
+            'fonte': 'open_banking',
+        })
+
+    order = {'danger': 0, 'warning': 1, 'ok': 2}
+    subscriptions.sort(key=lambda s: (order.get(s['risk'], 3), -s['preco_mensal']))
+    return subscriptions
+
+
+def sync_bank_subscriptions(user_id: int) -> int:
+    subscriptions = _detetar_subscricoes_banco(user_id)
+    if subscriptions:
+        _guardar_subscricoes_bd(user_id, subscriptions, fonte='open_banking')
+    return len(subscriptions)
+
+
 def detect_subscriptions(user_id: int) -> dict:
     """
     Devolve subscrições combinadas: da BD (extrato+manual) + detetadas nas faturas.
@@ -283,6 +375,13 @@ def detect_subscriptions(user_id: int) -> dict:
             'alerta':       _build_alert(loja, meses_pago, dias_sem_uso, risk),
             'fonte':        'faturas',
         })
+
+    nomes_existentes = {normalize_text(s['nome']) for s in subscriptions}
+    for sub in _detetar_subscricoes_banco(user_id):
+        if normalize_text(sub['nome']) in nomes_existentes:
+            continue
+        subscriptions.append(sub)
+        nomes_existentes.add(normalize_text(sub['nome']))
 
     order = {'danger': 0, 'warning': 1, 'ok': 2}
     subscriptions.sort(key=lambda s: order[s['risk']])

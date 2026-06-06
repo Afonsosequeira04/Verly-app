@@ -13,7 +13,7 @@ import Animated, {
   useSharedValue, useAnimatedStyle, withTiming, withDelay, Easing, FadeInDown,
 } from 'react-native-reanimated';
 import { MotiView } from 'moti';
-import { BarChart2, TrendingUp, Receipt, Star, ShoppingBag } from 'lucide-react-native';
+import { BarChart2, Receipt, Star, ShoppingBag, WalletCards } from 'lucide-react-native';
 import { estatisticasAPI } from '../services/api';
 import { COLORS, RADIUS, FONT } from '../constants/theme';
 
@@ -130,6 +130,8 @@ export default function EstatisticasScreen() {
     ? Math.max(...data.por_mes.map(d => d.total), 1)
     : 1;
   const chartH = 100;
+  const bankTotal = data?.fontes?.find(item => item.fonte === 'open_banking')?.total || 0;
+  const recordCount = data?.num_registos ?? data?.num_faturas ?? 0;
 
   return (
     <ScrollView
@@ -161,15 +163,15 @@ export default function EstatisticasScreen() {
         />
         <StatCard
           icon={<ShoppingBag size={16} color={C.green} />}
-          label="Faturas"
-          value={data?.num_faturas || 0}
+          label="Registos"
+          value={recordCount}
           color={C.green}
           delay={120}
         />
         <StatCard
-          icon={<TrendingUp size={16} color={C.yellow} />}
-          label="Média/fatura"
-          value={`${(data?.media_fatura || 0).toFixed(0)}€`}
+          icon={<WalletCards size={16} color={C.yellow} />}
+          label="Banco"
+          value={`${bankTotal.toFixed(0)}€`}
           color={C.yellow}
           delay={180}
         />
@@ -249,7 +251,7 @@ export default function EstatisticasScreen() {
       )}
 
       {/* Sem dados */}
-      {!data?.num_faturas && (
+      {!recordCount && (
         <MotiView
           from={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -258,7 +260,7 @@ export default function EstatisticasScreen() {
         >
           <Text style={styles.emptyIcon}>📊</Text>
           <Text style={styles.emptyTitle}>Sem dados ainda</Text>
-          <Text style={styles.emptySub}>Adiciona faturas para ver as tuas estatísticas.</Text>
+          <Text style={styles.emptySub}>Adiciona faturas ou liga o banco para ver estatísticas.</Text>
         </MotiView>
       )}
     </ScrollView>

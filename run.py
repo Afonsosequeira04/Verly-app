@@ -23,4 +23,8 @@ with flask_app.app_context():
     from app.tasks import ocr, emails, ai_insights, qdrant_task  # noqa: F401
 
 if __name__ == '__main__':
-    flask_app.run(debug=True)
+    import os
+
+    host = os.getenv('HOST', '127.0.0.1')
+    port = int(os.getenv('PORT', 5000))
+    flask_app.run(host=host, port=port, debug=True)

@@ -15,6 +15,7 @@ from datetime import datetime, date
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_records import get_expense_records, summarize_expenses
 from app.models import Fatura
 from app import db
 
@@ -56,6 +57,19 @@ def estatisticas_geral():
     Usado pela EstatisticasScreen.
     """
     user_id = int(get_jwt_identity())
+    summary = summarize_expenses(user_id)
+    return jsonify({
+        'total_geral':  summary['total_geral'],
+        'num_faturas':  sum(1 for item in summary['records'] if item['source'] == 'fatura'),
+        'num_registos': summary['num_registos'],
+        'media_fatura': round(summary['total_geral'] / summary['num_registos'], 2) if summary['num_registos'] else 0,
+        'por_categoria': summary['por_categoria'],
+        'por_mes': summary['por_mes'],
+        'top_lojas': summary['top_lojas'],
+        'fontes': summary['fontes'],
+        'mes_atual': summary['mes_atual'],
+        'previsao_mensal': summary['previsao_mensal'],
+    })
     faturas = Fatura.query.filter_by(user_id=user_id).all()
 
     por_categoria = defaultdict(float)
@@ -132,6 +146,94 @@ def estatisticas_mensal():
             raise ValueError()
     except (TypeError, ValueError):
         return jsonify({'error': 'ano e mes inválidos'}), 400
+
+    records = get_expense_records(user_id)
+    por_mes_dict: dict[str, list] = defaultdict(list)
+    for record in records:
+        if record['month']:
+            por_mes_dict[record['month']].append(record)
+
+    mes_key = f"{ano}-{mes:02d}"
+    registos_mes = por_mes_dict.get(mes_key, [])
+    total_mes = sum(item['value'] for item in registos_mes)
+    num_registos = len(registos_mes)
+    num_faturas = sum(1 for item in registos_mes if item['source'] == 'fatura')
+
+    por_cat = defaultdict(float)
+    por_loja = defaultdict(float)
+    por_fonte = defaultdict(float)
+    for item in registos_mes:
+        por_cat[item['categoria'] or 'Outros'] += item['value']
+        por_loja[item['merchant'] or 'Desconhecida'] += item['value']
+        por_fonte[item['source']] += item['value']
+
+    top_loja = max(por_loja, key=por_loja.get) if por_loja else None
+    registo_mais_caro = max(registos_mes, key=lambda item: item['value'], default=None)
+
+    mes_ant = mes - 1 if mes > 1 else 12
+    ano_ant = ano if mes > 1 else ano - 1
+    key_ant = f"{ano_ant}-{mes_ant:02d}"
+    total_ant = sum(item['value'] for item in por_mes_dict.get(key_ant, []))
+    delta = total_mes - total_ant
+    pct_delta = round(abs(delta / total_ant * 100), 1) if total_ant > 0 else None
+
+    historico = []
+    for i in range(5, -1, -1):
+        m_ = mes - i
+        a_ = ano
+        while m_ <= 0:
+            m_ += 12
+            a_ -= 1
+        k_ = f"{a_}-{m_:02d}"
+        historico.append({
+            'mes': k_,
+            'total': round(sum(item['value'] for item in por_mes_dict.get(k_, [])), 2),
+        })
+
+    orcamento = getattr(user, 'orcamento_mensal', 0) or 0
+    pct_orcamento = round((total_mes / orcamento * 100), 1) if orcamento > 0 else None
+
+    return jsonify({
+        'ano': ano,
+        'mes': mes,
+        'mes_nome': MESES_PT[mes],
+        'total': round(total_mes, 2),
+        'num_faturas': num_faturas,
+        'num_registos': num_registos,
+        'media_fatura': round(total_mes / num_registos, 2) if num_registos > 0 else 0,
+        'por_categoria': [
+            {'categoria': k, 'total': round(v, 2)}
+            for k, v in sorted(por_cat.items(), key=lambda x: -x[1])
+        ],
+        'por_fonte': [
+            {'fonte': k, 'total': round(v, 2)}
+            for k, v in sorted(por_fonte.items(), key=lambda x: x[0])
+        ],
+        'historico': historico,
+        'top_loja': {
+            'nome': top_loja,
+            'total': round(por_loja[top_loja], 2),
+        } if top_loja else None,
+        'fatura_mais_cara': {
+            'loja': registo_mais_caro['merchant'] or 'Desconhecida',
+            'total': round(registo_mais_caro['value'], 2),
+            'data': registo_mais_caro['date'].isoformat() if registo_mais_caro['date'] else None,
+            'fonte': registo_mais_caro['source'],
+        } if registo_mais_caro else None,
+        'comparacao': {
+            'total_anterior': round(total_ant, 2),
+            'delta': round(delta, 2),
+            'variacao_pct': pct_delta,
+            'subiu': delta > 0,
+        },
+        'meta_orcamento': {
+            'orcamento': round(orcamento, 2),
+            'gasto': round(total_mes, 2),
+            'pct': pct_orcamento,
+            'excedeu': total_mes > orcamento if orcamento > 0 else False,
+        } if orcamento > 0 else None,
+        'meses_disponiveis': sorted(por_mes_dict.keys()),
+    })
 
     faturas_todas = Fatura.query.filter_by(user_id=user_id).all()
 

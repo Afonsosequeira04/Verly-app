@@ -102,6 +102,8 @@ class Config:
 class DevelopmentConfig(Config):
     DEBUG = True
     TESTING = False
+    CACHE_TYPE = 'SimpleCache'
+    CACHE_REDIS_URL = None
     SQLALCHEMY_DATABASE_URI = os.getenv(
         'DATABASE_URL',
         f'sqlite:///{BASE_DIR / "shopping_police.db"}'

@@ -7,7 +7,9 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app import db
 from app.api import api_bp
-from app.models import BankTransaction, ContaBancaria, OpenBankingConnection
+from app.extensions import cache
+from app.financial_records import normalize_text, summarize_expenses
+from app.models import BankTransaction, ContaBancaria, Meta, OpenBankingConnection, User
 from app.open_banking_service import (
     OpenBankingNotConfigured,
     new_reference,
@@ -16,6 +18,7 @@ from app.open_banking_service import (
     open_banking_configured,
     parse_provider_datetime,
 )
+from app.subscriptions import sync_bank_subscriptions
 
 
 def _client_or_error(provider=None):
@@ -65,7 +68,20 @@ def _transaction_to_dict(transaction):
         'description': transaction.description,
         'merchant_name': transaction.merchant_name,
         'categoria': transaction.categoria,
+        'source': 'open_banking',
     }
+
+
+def _invalidate_financial_cache(user_id):
+    for key in (
+        f'dashboard:{user_id}',
+        f'estatisticas:{user_id}',
+        f'insights:{user_id}',
+    ):
+        try:
+            cache.delete(key)
+        except Exception:
+            current_app.logger.debug('Could not delete cache key %s', key, exc_info=True)
 
 
 @api_bp.route('/open-banking/status', methods=['GET'])
@@ -250,6 +266,7 @@ def open_banking_sync():
     }
     clients = {}
     imported = 0
+    subscriptions_detected = 0
 
     try:
         for account in accounts:
@@ -272,6 +289,11 @@ def open_banking_sync():
                     transaction_hash=values['transaction_hash']
                 ).first()
                 if exists:
+                    if (
+                        values.get('categoria')
+                        and (not exists.categoria or exists.categoria == 'Outros')
+                    ):
+                        exists.categoria = values['categoria']
                     continue
                 db.session.add(BankTransaction(**values))
                 imported += 1
@@ -281,7 +303,15 @@ def open_banking_sync():
             'status': 'synced',
         })
         db.session.commit()
-        return jsonify({'imported': imported})
+        try:
+            subscriptions_detected = sync_bank_subscriptions(user_id)
+        except Exception:
+            current_app.logger.warning('Open Banking subscription detection failed', exc_info=True)
+        _invalidate_financial_cache(user_id)
+        return jsonify({
+            'imported': imported,
+            'subscriptions_detected': subscriptions_detected,
+        })
     except Exception as exc:
         db.session.rollback()
         return jsonify({'error': str(exc), 'code': 'OPEN_BANKING_SYNC_FAILED'}), 502
@@ -307,13 +337,91 @@ def open_banking_transactions():
     return jsonify({'transactions': [_transaction_to_dict(item) for item in transactions]})
 
 
+@api_bp.route('/open-banking/summary', methods=['GET'])
+@jwt_required()
+def open_banking_summary():
+    user_id = int(get_jwt_identity())
+    user = User.query.get_or_404(user_id)
+    summary = summarize_expenses(user_id)
+
+    current_total = summary['mes_atual']['total']
+    budget = getattr(user, 'orcamento_mensal', 0) or 0
+    budget_status = None
+    if budget > 0:
+        pct = round((current_total / budget) * 100, 1)
+        budget_status = {
+            'orcamento': round(budget, 2),
+            'gasto': round(current_total, 2),
+            'sobra': round(budget - current_total, 2),
+            'pct': pct,
+            'estado': 'excedido' if pct >= 100 else ('atencao' if pct >= 80 else 'ok'),
+        }
+
+    current_categories = {
+        normalize_text(item['categoria']): item['valor']
+        for item in summary['mes_atual']['por_categoria']
+    }
+    metas = []
+    for meta in Meta.query.filter_by(user_id=user_id).all():
+        gasto = current_categories.get(normalize_text(meta.categoria), 0)
+        pct = round((gasto / meta.valor_limite) * 100, 1) if meta.valor_limite > 0 else 0
+        metas.append({
+            'id': meta.id,
+            'nome': meta.nome or meta.categoria,
+            'categoria': meta.categoria,
+            'limite': round(meta.valor_limite or 0, 2),
+            'gasto': round(gasto, 2),
+            'pct': pct,
+            'estado': 'excedida' if gasto > meta.valor_limite else ('atencao' if pct >= 80 else 'ok'),
+        })
+
+    subscriptions = []
+    try:
+        from app.subscriptions import detect_subscriptions
+        subs_data = detect_subscriptions(user_id)
+        subscriptions = [
+            {
+                'nome': sub.get('nome'),
+                'preco_mensal': sub.get('preco_mensal', 0),
+                'meses_pago': sub.get('meses_pago', 1),
+                'risk': sub.get('risk'),
+                'fonte': sub.get('fonte'),
+            }
+            for sub in subs_data.get('subscriptions', [])
+            if sub.get('fonte') == 'open_banking'
+        ][:5]
+    except Exception:
+        current_app.logger.debug('Could not load Open Banking subscriptions', exc_info=True)
+
+    return jsonify({
+        'success': True,
+        'summary': summary,
+        'budget': budget_status,
+        'metas': metas,
+        'subscriptions': subscriptions,
+    })
+
+
 def _provider_transactions(payload, provider):
-    transactions = payload.get('transactions') or {}
-    if provider == 'enablebanking':
-        return transactions if isinstance(transactions, list) else []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+
+    transactions = payload.get('transactions') or payload.get('items') or payload.get('data') or payload
+    return _flatten_transactions(transactions)
+
+
+def _flatten_transactions(value):
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        return []
+
     items = []
-    for group_name in ('booked', 'pending'):
-        items.extend(transactions.get(group_name, []))
+    for group_name in ('booked', 'pending', 'transactions', 'items', 'data', 'entries'):
+        if group_name in value:
+            items.extend(_flatten_transactions(value.get(group_name)))
     return items
 
 

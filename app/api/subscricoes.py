@@ -12,6 +12,7 @@ from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Subscricao, User, Fatura
+from app.subscriptions import sync_bank_subscriptions
 from app import db
 
 # ── Config RevenueCat ─────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ def listar_subscricoes():
     total_mensal   = sum(s.preco_mensal for s in subs)
     total_anual    = total_mensal * 12
     total_pago     = sum(s.preco_mensal * s.meses_pago for s in subs)
-    high_risk      = [s for s in subs_list if s['risk'] == 'high']
+    high_risk      = [s for s in subs_list if s['risk'] in ('high', 'danger')]
 
     is_pro = _is_pro(user_id)
 
@@ -196,10 +197,17 @@ def detetar_subscricoes():
 
     db.session.commit()
 
+    banco_detetadas = 0
+    try:
+        banco_detetadas = sync_bank_subscriptions(user_id)
+    except Exception as exc:
+        print(f'[Subscricoes] Erro ao detetar Open Banking: {exc}')
+
     return jsonify({
         'success':    True,
         'is_pro':     is_pro,
-        'detetadas':  len(items),
+        'detetadas':  len(items) + banco_detetadas,
+        'detetadas_open_banking': banco_detetadas,
         'limitado':   not is_pro and len(detetadas) > 3,
     })
 

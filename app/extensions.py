@@ -13,11 +13,17 @@ from flask_limiter.util import get_remote_address
 # ── Cache Redis ───────────────────────────────────────────────────────────────
 cache = Cache()
 
+
+def _limiter_storage_uri():
+    if os.getenv('FLASK_ENV', 'development').lower() == 'development':
+        return os.getenv('LIMITER_STORAGE_URI', 'memory://')
+    return os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
 # ── Rate Limiter (Redis, multi-worker safe) ───────────────────────────────────
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri=os.getenv('REDIS_URL', 'redis://localhost:6379/0'),
+    storage_uri=_limiter_storage_uri(),
 )
 
 

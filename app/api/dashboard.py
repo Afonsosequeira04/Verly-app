@@ -12,6 +12,7 @@ from datetime import datetime
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_records import summarize_expenses
 from app.models import Fatura, Conversa
 from app.subscriptions import detect_subscriptions
 from app.dashboard import (
@@ -40,6 +41,7 @@ def dashboard():
         return jsonify(cached)
 
     user = User.query.get_or_404(user_id)
+    real_summary = summarize_expenses(user_id)
 
     faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
     conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
@@ -108,6 +110,8 @@ def dashboard():
 
     result = {
         'total_gasto':       round(total_gasto, 2),
+        'total_gasto_real':  real_summary['mes_atual']['total'],
+        'fontes_reais':      real_summary['fontes'],
         'num_faturas':       num_faturas,
         'top_loja':          top_loja,
         'orcamento':         orcamento,
@@ -157,54 +161,42 @@ def estatisticas():
     if cached:
         return jsonify(cached)
 
-    faturas = Fatura.query.filter_by(user_id=user_id).all()
+    summary = summarize_expenses(user_id)
 
-    if not faturas:
+    if not summary['records']:
         return jsonify({
             'por_categoria': [],
             'por_mes':       [],
             'total_geral':   0,
+            'media_fatura':  0,
             'media_mensal':  0,
             'categoria_top': None,
             'num_faturas':   0,
+            'num_registos':  0,
+            'fontes':        [],
+            'top_lojas':     [],
         })
 
-    cat_totais = defaultdict(float)
-    cat_counts = defaultdict(int)
-    mes_totais = defaultdict(float)
-
-    for f in faturas:
-        cat   = f.categoria or 'Outros'
-        total = f.total or 0
-        cat_totais[cat] += total
-        cat_counts[cat] += 1
-
-        data = _parse_date_str(f.data_compra) or f.data_upload
-        if data:
-            chave_mes = data.strftime('%Y-%m') if hasattr(data, 'strftime') else str(data)[:7]
-            mes_totais[chave_mes] += total
-
-    por_categoria = sorted(
-        [{'categoria': k, 'total': round(v, 2), 'count': cat_counts[k]}
-         for k, v in cat_totais.items()],
-        key=lambda x: x['total'], reverse=True
-    )
-
-    por_mes = sorted(
-        [{'mes': k, 'total': round(v, 2)} for k, v in mes_totais.items()],
-        key=lambda x: x['mes']
-    )
-
-    total_geral  = sum(f.total or 0 for f in faturas)
-    media_mensal = total_geral / len(mes_totais) if mes_totais else 0
+    por_categoria = summary['por_categoria']
+    por_mes = summary['por_mes']
+    total_geral = summary['total_geral']
+    meses_com_dados = len([item for item in por_mes if item['total'] > 0])
+    media_mensal = total_geral / meses_com_dados if meses_com_dados else 0
+    num_faturas = sum(1 for record in summary['records'] if record['source'] == 'fatura')
 
     result = {
         'por_categoria': por_categoria,
         'por_mes':       por_mes,
         'total_geral':   round(total_geral, 2),
+        'media_fatura':  round(total_geral / summary['num_registos'], 2) if summary['num_registos'] else 0,
         'media_mensal':  round(media_mensal, 2),
         'categoria_top': por_categoria[0]['categoria'] if por_categoria else None,
-        'num_faturas':   len(faturas),
+        'num_faturas':   num_faturas,
+        'num_registos':  summary['num_registos'],
+        'fontes':        summary['fontes'],
+        'top_lojas':     summary['top_lojas'],
+        'mes_atual':     summary['mes_atual'],
+        'previsao_mensal': summary['previsao_mensal'],
     }
 
     cache.set(cache_key, result, timeout=300)   # 5 min

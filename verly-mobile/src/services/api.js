@@ -4,6 +4,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 
 let SecureStore = null;
 try {
@@ -13,7 +14,18 @@ try {
 }
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
-const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+const PROD_BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
+const DEV_BASE_URL = Platform.select({
+  android: 'http://10.0.2.2:5000/api/v1',
+  ios: 'http://localhost:5000/api/v1',
+  web: 'http://localhost:5000/api/v1',
+  default: PROD_BASE_URL,
+});
+const ENV_BASE_URL =
+  typeof process !== 'undefined'
+    ? process.env?.EXPO_PUBLIC_API_URL
+    : null;
+const BASE_URL = ENV_BASE_URL || (__DEV__ ? DEV_BASE_URL : PROD_BASE_URL);
 export const OPEN_BANKING_CALLBACK_URL = `${BASE_URL}/open-banking/callback`;
 
 const ACCESS_TOKEN_KEY = 'verly_access_token';
@@ -446,6 +458,8 @@ export const openBankingAPI = {
     }),
 
   accounts: () => apiFetch('/open-banking/accounts'),
+
+  summary: () => apiFetch('/open-banking/summary'),
 
   sync: () => apiFetch('/open-banking/sync', { method: 'POST' }),
 

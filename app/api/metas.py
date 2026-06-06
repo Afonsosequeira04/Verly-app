@@ -9,12 +9,31 @@ DELETE /api/v1/metas/<id>     → apaga meta
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_records import normalize_text, summarize_expenses
 from app.models import Meta, Fatura, CATEGORIAS
 from app import db
 from datetime import datetime
 
 
 def _gastos_mes_atual(user_id):
+    summary = summarize_expenses(user_id)
+    return {
+        item['categoria']: item['valor']
+        for item in summary['mes_atual']['por_categoria']
+    }
+
+
+def _gasto_categoria(gastos, categoria):
+    if categoria in gastos:
+        return gastos[categoria]
+    categoria_key = normalize_text(categoria)
+    for key, value in gastos.items():
+        if normalize_text(key) == categoria_key:
+            return value
+    return 0
+
+
+def _gastos_mes_atual_faturas(user_id):
     hoje = datetime.now()
     faturas = Fatura.query.filter_by(user_id=user_id).all()
     gastos = {}
@@ -44,7 +63,7 @@ def listar_metas():
 
     result = []
     for m in metas:
-        gasto = gastos.get(m.categoria, 0)
+        gasto = _gasto_categoria(gastos, m.categoria)
         pct = min(round((gasto / m.valor_limite) * 100) if m.valor_limite > 0 else 0, 100)
         result.append({
             'id':        m.id,
@@ -90,7 +109,7 @@ def criar_meta():
     db.session.commit()
 
     gastos = _gastos_mes_atual(user_id)
-    gasto = gastos.get(meta.categoria, 0)
+    gasto = _gasto_categoria(gastos, meta.categoria)
 
     return jsonify({
         'success': True,

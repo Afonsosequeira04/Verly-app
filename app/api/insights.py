@@ -13,6 +13,7 @@ from datetime import datetime
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_records import normalize_text, summarize_expenses
 from app.models import Fatura, User, Meta
 from app.extensions import cache
 
@@ -53,6 +54,122 @@ def _build_context(user_id: int) -> dict:
     faturas = Fatura.query.filter_by(user_id=user_id).all()
     metas = Meta.query.filter_by(user_id=user_id).all()
     user = User.query.get(user_id)
+
+    summary = summarize_expenses(user_id, today=hoje.date())
+    total_mes = summary['mes_atual']['total']
+    total_mes_anterior = summary['mes_anterior']['total']
+    top_cats = [
+        (item['categoria'], item['valor'])
+        for item in summary['mes_atual']['por_categoria'][:6]
+    ]
+
+    current_month_key = f'{ano_atual}-{mes_atual:02d}'
+    registos_mes = [
+        record for record in summary['records']
+        if record['month'] == current_month_key
+    ]
+    registos_mes_payload = [
+        {
+            'loja': item['merchant'] or 'Desconhecida',
+            'categoria': item['categoria'],
+            'valor': round(item['value'], 2),
+            'data': item['date'].strftime('%d/%m/%Y') if item['date'] else None,
+            'fonte': item['source'],
+        }
+        for item in registos_mes[:8]
+    ]
+
+    gastos_mes = {
+        normalize_text(item['categoria']): item['valor']
+        for item in summary['mes_atual']['por_categoria']
+    }
+
+    metas_info = []
+    for m in metas:
+        cat_lower = normalize_text(m.categoria)
+        gasto = gastos_mes.get(cat_lower, 0)
+        pct = (gasto / m.valor_limite * 100) if m.valor_limite > 0 else 0
+        metas_info.append({
+            'categoria': m.categoria,
+            'limite': round(m.valor_limite, 2),
+            'gasto': round(gasto, 2),
+            'pct': round(pct, 1),
+            'ultrapassou': gasto > m.valor_limite,
+        })
+
+    try:
+        from app.subscriptions import detect_subscriptions
+        subs_data = detect_subscriptions(user_id)
+        subscricoes_detetadas = [
+            {
+                'nome': sub['nome'],
+                'valor_mensal': round(sub.get('preco_mensal', 0), 2),
+                'meses_detetados': sub.get('meses_pago', 1),
+                'fonte': sub.get('fonte'),
+            }
+            for sub in subs_data.get('subscriptions', [])[:5]
+        ]
+    except Exception:
+        subscricoes_detetadas = []
+
+    total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
+
+    rendimento = getattr(user, 'rendimento_mensal', None) or 0
+    orcamento = getattr(user, 'orcamento_mensal', None) or 0
+    nome = getattr(user, 'nome', 'utilizador') or 'utilizador'
+    objetivo = getattr(user, 'objetivo', 'controlar') or 'controlar'
+    personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+
+    regra_5030_20 = None
+    if rendimento > 0:
+        regra_5030_20 = {
+            'necessidades_ideal': round(rendimento * 0.50, 2),
+            'desejos_ideal': round(rendimento * 0.30, 2),
+            'poupanca_ideal': round(rendimento * 0.20, 2),
+            'gasto_atual': round(total_mes, 2),
+            'pct_rendimento': round((total_mes / rendimento) * 100, 1),
+        }
+
+    risco_concentracao = None
+    if top_cats and total_mes > 0:
+        top_cat_nome, top_cat_val = top_cats[0]
+        top_cat_pct = round((top_cat_val / total_mes) * 100, 1)
+        if top_cat_pct > 40:
+            risco_concentracao = {
+                'categoria': top_cat_nome,
+                'pct': top_cat_pct,
+                'valor': round(top_cat_val, 2),
+            }
+
+    itens_por_categoria = dict(summary['mes_atual']['itens_por_categoria'])
+    for categoria, _valor in top_cats:
+        itens_por_categoria[categoria.lower()] = itens_por_categoria.get(
+            normalize_text(categoria),
+            [],
+        )
+
+    return {
+        'nome': nome.split()[0] if nome else 'utilizador',
+        'personalidade': personalidade,
+        'objetivo': objetivo,
+        'rendimento_mensal': round(rendimento, 2),
+        'orcamento_mensal': round(orcamento, 2),
+        'total_gasto_mes': round(total_mes, 2),
+        'total_gasto_mes_anterior': round(total_mes_anterior, 2),
+        'variacao_pct': summary['variacao_pct'],
+        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
+        'metas': metas_info,
+        'num_faturas_mes': len(registos_mes),
+        'faturas_recentes': registos_mes_payload,
+        'previsao_mensal': summary['previsao_mensal'],
+        'subscricoes_detetadas': subscricoes_detetadas,
+        'total_subscricoes': round(total_subscricoes, 2),
+        'historico_mensal': summary['historico_mensal'],
+        'dia_atual': dia_atual,
+        'regra_5030_20': regra_5030_20,
+        'risco_concentracao': risco_concentracao,
+        'itens_por_categoria': itens_por_categoria,
+    }
 
     gastos_mes = defaultdict(float)
     gastos_mes_anterior = defaultdict(float)
