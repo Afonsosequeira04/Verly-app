@@ -129,7 +129,7 @@ function BudgetBar({ pct = 0, color = C.brand }) {
 }
 
 // ─── Bar chart interativo com Reanimated 4 ────────────────────────────────────
-function BarItem({ item, idx, onSelect, isSelected, max }) {
+function BarItem({ item, idx, onSelect, isSelected, max, is3d }) {
   const val   = item.valor || item.total || 0;
   const pct   = val / max;
   const color = CHART_COLORS[idx % CHART_COLORS.length];
@@ -138,6 +138,7 @@ function BarItem({ item, idx, onSelect, isSelected, max }) {
   const barWidth  = useSharedValue(4);
   const bgOpacity = useSharedValue(0);
   const barHeight = useSharedValue(isSelected ? 7 : 5);
+  const depth     = useSharedValue(is3d ? 1 : 0);
 
   useEffect(() => {
     barWidth.value = withDelay(100 + idx * 80, withTiming(Math.max(BAR_W * pct, 4), {
@@ -151,13 +152,26 @@ function BarItem({ item, idx, onSelect, isSelected, max }) {
     barHeight.value = withSpring(isSelected ? 8 : 5, { damping: 20, stiffness: 300 });
   }, [isSelected]);
 
+  useEffect(() => {
+    depth.value = withSpring(is3d ? 1 : 0, { damping: 18, stiffness: 180 });
+  }, [is3d]);
+
   const barStyle   = useAnimatedStyle(() => ({ width: barWidth.value, height: barHeight.value }));
-  const rowStyle   = useAnimatedStyle(() => ({ backgroundColor: `${color}${Math.round(bgOpacity.value * 18).toString(16).padStart(2,'0')}` }));
+  const rowStyle   = useAnimatedStyle(() => ({
+    backgroundColor: `${color}${Math.round(bgOpacity.value * 18).toString(16).padStart(2,'0')}`,
+    transform: [
+      { perspective: 700 },
+      { rotateX: `${interpolate(depth.value, [0, 1], [0, isSelected ? -8 : -4])}deg` },
+      { rotateY: `${interpolate(depth.value, [0, 1], [0, idx % 2 === 0 ? 4 : -4])}deg` },
+      { translateY: interpolate(depth.value, [0, 1], [0, isSelected ? -2 : 0]) },
+      { scale: interpolate(depth.value, [0, 1], [1, isSelected ? 1.02 : 1.005]) },
+    ],
+  }));
 
   return (
     <Animated.View
       entering={FadeInDown.delay(idx * 60).duration(350).springify()}
-      style={rowStyle}
+      style={[is3d && s.chartDepthRow, rowStyle]}
     >
       <Pressable
         onPress={() => onSelect?.(isSelected ? null : idx)}
@@ -175,12 +189,14 @@ function BarItem({ item, idx, onSelect, isSelected, max }) {
           </Text>
         </View>
         <View style={{ backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-          <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]} />
+          <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]}>
+            {is3d && <View style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, backgroundColor: '#00000022' }} />}
+          </Animated.View>
         </View>
         {isSelected && (
           <Animated.View entering={FadeIn.duration(200)}>
             <Text style={[s.microText, { marginTop: 5, color }]}>
-              {Math.round(pct * 100)}% do total gasto
+              {Math.round(pct * 100)}% do total gasto - toca novamente para fechar
             </Text>
           </Animated.View>
         )}
@@ -189,19 +205,19 @@ function BarItem({ item, idx, onSelect, isSelected, max }) {
   );
 }
 
-function InteractiveBarChart({ items = [], onSelect, selectedIdx }) {
+function InteractiveBarChart({ items = [], onSelect, selectedIdx, is3d }) {
   const max = Math.max(...items.map(i => i.valor || i.total || 0), 1);
   return (
     <View style={{ gap: 6 }}>
       {items.slice(0, 6).map((item, idx) => (
-        <BarItem key={idx} item={item} idx={idx} onSelect={onSelect} isSelected={selectedIdx === idx} max={max} />
+        <BarItem key={idx} item={item} idx={idx} onSelect={onSelect} isSelected={selectedIdx === idx} max={max} is3d={is3d} />
       ))}
     </View>
   );
 }
 
 // ─── Monthly chart ────────────────────────────────────────────────────────────
-function MonthBar({ item, idx, total, onPress, isSelected }) {
+function MonthBar({ item, idx, total, onPress, isSelected, is3d }) {
   const max = total;
   const pct = (item.total || 0) / max;
   const CHART_H = 72;
@@ -214,6 +230,7 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
 
   const barH    = useSharedValue(0);
   const opacity = useSharedValue(isSelected ? 1 : 0.6);
+  const depth   = useSharedValue(is3d ? 1 : 0);
 
   useEffect(() => {
     barH.value    = withDelay(150 + idx * 60, withTiming(h, { duration: 500, easing: Easing.out(Easing.cubic) }));
@@ -223,7 +240,20 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
     opacity.value = withTiming(isSelected ? 1 : 0.6, { duration: 200 });
   }, [isSelected]);
 
-  const barStyle = useAnimatedStyle(() => ({ height: barH.value, opacity: opacity.value }));
+  useEffect(() => {
+    depth.value = withSpring(is3d ? 1 : 0, { damping: 18, stiffness: 180 });
+  }, [is3d]);
+
+  const barStyle = useAnimatedStyle(() => ({
+    height: barH.value,
+    opacity: opacity.value,
+    transform: [
+      { perspective: 620 },
+      { rotateX: `${interpolate(depth.value, [0, 1], [0, -12])}deg` },
+      { rotateY: `${interpolate(depth.value, [0, 1], [0, idx % 2 === 0 ? 6 : -6])}deg` },
+      { translateY: interpolate(depth.value, [0, 1], [0, isSelected ? -3 : 0]) },
+    ],
+  }));
 
   return (
     <Pressable
@@ -239,7 +269,7 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
       ) : (
         <Text style={{ fontSize: 9, marginBottom: 3, opacity: 0 }}>-</Text>
       )}
-      <Animated.View style={[{ width: '75%', backgroundColor: color, borderRadius: 4, marginBottom: 6 }, barStyle]} />
+      <Animated.View style={[{ width: '75%', backgroundColor: color, borderRadius: 4, marginBottom: 6 }, is3d && s.monthDepthBar, barStyle]} />
       <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
         {label}
       </Text>
@@ -247,7 +277,7 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
   );
 }
 
-function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
+function MonthlyChart({ data = [], onMonthSelect, selectedMonth, is3d }) {
   if (!data.length) return null;
   const max = Math.max(...data.map(d => d.total || 0), 1);
   const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
@@ -260,6 +290,7 @@ function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
             key={idx} item={item} idx={idx} total={max}
             onPress={() => onMonthSelect?.(selectedMonth === idx ? null : idx)}
             isSelected={selectedMonth === idx}
+            is3d={is3d}
           />
         ))}
       </View>
@@ -287,6 +318,7 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
   const [tab, setTab] = useState('categorias');
   const [selectedBar, setSelectedBar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
+  const [is3d, setIs3d] = useState(false);
 
   const hasCats  = Array.isArray(porCategoria) && porCategoria.length > 0;
   const hasMeses = Array.isArray(porMes) && porMes.length > 0;
@@ -334,7 +366,7 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
       <SectionHeader title="Os teus gastos" />
       <View style={s.card}>
         {/* Tabs */}
-        <View style={{ flexDirection: 'row', padding: 12, gap: 8 }}>
+        <View style={{ flexDirection: 'row', padding: 12, gap: 8, alignItems: 'center' }}>
           {hasCats && (
             <Pressable onPress={() => handleTab('categorias')} style={[s.tab, tab === 'categorias' && s.tabActive]}>
               <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>Por categoria</Text>
@@ -345,6 +377,10 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
               <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>Evolução</Text>
             </Pressable>
           )}
+          <Pressable onPress={() => setIs3d(v => !v)} style={[s.chartModeBtn, is3d && s.chartModeBtnActive]}>
+            <Zap size={12} color={is3d ? C.yellow : C.textMid} />
+            <Text style={[s.chartModeText, is3d && { color: C.yellow }]}>3D</Text>
+          </Pressable>
         </View>
 
         {tab === 'categorias' && hasCats && (
@@ -362,7 +398,7 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
                 </Text>
               </View>
             )}
-            <InteractiveBarChart items={porCategoria} onSelect={setSelectedBar} selectedIdx={selectedBar} />
+            <InteractiveBarChart items={porCategoria} onSelect={setSelectedBar} selectedIdx={selectedBar} is3d={is3d} />
             <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca numa categoria para ver detalhes</Text>
           </Animated.View>
         )}
@@ -381,7 +417,7 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
                 </Text>
               </View>
             )}
-            <MonthlyChart data={porMes} onMonthSelect={setSelectedMonth} selectedMonth={selectedMonth} />
+            <MonthlyChart data={porMes} onMonthSelect={setSelectedMonth} selectedMonth={selectedMonth} is3d={is3d} />
             <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca num mês para ver o valor</Text>
           </Animated.View>
         )}
@@ -1681,6 +1717,38 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
   tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
   tabTextActive: { color: C.brand },
+  chartModeBtn: {
+    marginLeft: 'auto',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+  },
+  chartModeBtnActive: {
+    borderColor: C.yellow + '55',
+    backgroundColor: C.yellow + '12',
+  },
+  chartModeText: { fontSize: 11, fontWeight: '900', color: C.textMid },
+  chartDepthRow: {
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  monthDepthBar: {
+    shadowColor: C.brand,
+    shadowOffset: { width: 4, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    elevation: 5,
+  },
   dragIndicator: {
     position: 'absolute', right: 20, top: '50%',
     transform: [{ translateY: -10 }],

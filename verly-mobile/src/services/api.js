@@ -307,6 +307,8 @@ export const chatAPI = {
 
 export const subscricoesAPI = {
   listar: () => apiFetch('/subscricoes'),
+  detetar: () => apiFetch('/subscricoes/detetar', { method: 'POST' }),
+  apagar: (id) => apiFetch(`/subscricoes/${id}`, { method: 'DELETE' }),
 };
 
 // ── Metas ──────────────────────────────────────────────────────────────────────

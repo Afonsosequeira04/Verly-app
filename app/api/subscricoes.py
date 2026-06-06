@@ -11,8 +11,8 @@ import requests
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
-from app.models import Subscricao, User, Fatura
-from app.subscriptions import sync_bank_subscriptions
+from app.models import Subscricao, Fatura
+from app.subscriptions import detect_subscriptions, sync_bank_subscriptions
 from app import db
 
 # ── Config RevenueCat ─────────────────────────────────────────────────────────
@@ -51,30 +51,18 @@ def listar_subscricoes():
     """
     user_id = int(get_jwt_identity())
 
-    subs = Subscricao.query.filter_by(user_id=user_id, ativa=True).order_by(
-        Subscricao.preco_mensal.desc()
-    ).all()
-
-    subs_list = [
-        {
-            'id':           s.id,
-            'nome':         s.nome,
-            'categoria':    s.categoria,
-            'icone':        s.icone,
-            'preco_mensal': s.preco_mensal,
-            'meses_pago':   s.meses_pago,
-            'risk':         s.risk,
-            'fonte':        s.fonte,
-        }
-        for s in subs
-    ]
-
-    total_mensal   = sum(s.preco_mensal for s in subs)
-    total_anual    = total_mensal * 12
-    total_pago     = sum(s.preco_mensal * s.meses_pago for s in subs)
-    high_risk      = [s for s in subs_list if s['risk'] in ('high', 'danger')]
-
     is_pro = _is_pro(user_id)
+    detected = detect_subscriptions(user_id)
+    subs_list = detected.get('subscriptions', [])
+
+    if not is_pro:
+        subs_list = subs_list[:3]
+
+    totals_by_currency = detected.get('totais_por_moeda', [])
+    primary_currency = totals_by_currency[0]['currency'] if totals_by_currency else 'EUR'
+    total_mensal = sum(float(s.get('preco_mensal') or 0) for s in subs_list)
+    total_pago = sum(float(s.get('total_pago') or 0) for s in subs_list)
+    high_risk = [s for s in subs_list if s.get('risk') in ('high', 'danger', 'warning')]
 
     return jsonify({
         'success':      True,
@@ -82,10 +70,17 @@ def listar_subscricoes():
         'subscricoes':  subs_list,
         'resumo': {
             'total_mensal':  round(total_mensal, 2),
-            'total_anual':   round(total_anual, 2),
+            'total_anual':   round(total_mensal * 12, 2),
             'total_pago':    round(total_pago, 2),
             'count':         len(subs_list),
             'high_risk':     len(high_risk),
+            'count_danger':  detected.get('count_danger', 0),
+            'count_warning': detected.get('count_warning', 0),
+            'count_ok':      detected.get('count_ok', 0),
+            'moeda_principal': primary_currency,
+            'totais_por_moeda': totals_by_currency,
+            'total_mensal_desperdicado': detected.get('total_mensal_desperdicado', 0),
+            'total_anual_desperdicado': detected.get('total_anual_desperdicado', 0),
         },
     })
 

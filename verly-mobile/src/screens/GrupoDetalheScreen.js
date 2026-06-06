@@ -171,6 +171,20 @@ export default function GrupoDetalheScreen({ route, navigation }) {
     return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
   };
 
+  const tipoDesafioLabel = (tipo) => ({
+    gastar_menos: 'Gastar menos',
+    categoria_limite: 'Limite por categoria',
+    poupar_valor: 'Poupar valor',
+    streak_dias: 'Streak',
+  }[tipo] || 'Desafio');
+
+  const desafioProgress = (d) => {
+    const alvo = Number(d.valor_alvo || 0);
+    const progresso = Number(d.meu_progresso || d.ranking?.[0]?.progresso || 0);
+    if (alvo <= 0) return { pct: d.ranking?.length ? 55 : 8, progresso, alvo };
+    return { pct: Math.min(100, Math.max(5, (progresso / alvo) * 100)), progresso, alvo };
+  };
+
   if (loading) {
     return <View style={s.center}><ActivityIndicator size="large" color={C.brand} /></View>;
   }
@@ -302,15 +316,25 @@ export default function GrupoDetalheScreen({ route, navigation }) {
           >
             {desafios.length === 0 && (
               <View style={s.vazioCard}>
-                <Text style={{ fontSize: 40, textAlign: 'center' }}>⚡</Text>
+                <Text style={{ fontSize: 40, textAlign: 'center' }}>!</Text>
                 <Text style={s.vazioTxt}>Sem desafios ainda.</Text>
-                <Text style={s.vazioSub}>Cria um ou deixa a IA sugerir!</Text>
+                <Text style={s.vazioSub}>Cria um desafio baseado nos gastos reais do grupo.</Text>
+                <View style={s.emptyActions}>
+                  <Pressable onPress={() => setModalDesafio(true)} style={s.emptyPrimary}>
+                    <Text style={s.emptyPrimaryTxt}>Criar desafio</Text>
+                  </Pressable>
+                  <Pressable onPress={() => { setModalDesafio(true); setTimeout(pedirDesafioIA, 80); }} style={s.emptyGhost}>
+                    <Text style={s.emptyGhostTxt}>Sugerir com IA</Text>
+                  </Pressable>
+                </View>
               </View>
             )}
             {desafios.map((d, i) => {
               const fim = new Date(d.fim);
               const segsRestantes = Math.max(0, Math.floor((fim - agora) / 1000));
               const terminado = d.estado === 'terminado';
+              const prog = desafioProgress(d);
+              const leader = d.ranking?.[0];
               return (
                 <Animated.View key={d.id} entering={FadeInDown.delay(i * 60)}>
                   <Pressable
@@ -321,12 +345,36 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                       <Text style={s.desafioTitulo}>{d.titulo}</Text>
                       {d.gerado_ia && <Text style={s.iaBadge}>🤖 IA</Text>}
                     </View>
+                    {!!d.descricao && <Text style={s.desafioDesc} numberOfLines={2}>{d.descricao}</Text>}
+                    <View style={s.desafioMetaRow}>
+                      <Text style={s.desafioChip}>{tipoDesafioLabel(d.tipo)}</Text>
+                      <Text style={s.desafioChip}>{d.total_participantes || d.ranking?.length || 0} membros</Text>
+                      {!!d.valor_alvo && <Text style={s.desafioChip}>{formatMoney(d.valor_alvo, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>}
+                    </View>
                     {!terminado && (
                       <View style={s.countdownRow}>
                         <Text style={s.countdownTxt}>⏱️ {formatarContagem(segsRestantes)}</Text>
                       </View>
                     )}
                     {terminado && <Text style={s.terminadoTxt}>🏁 Terminado</Text>}
+                    <View style={s.progressHead}>
+                      <Text style={s.progressLabel}>O teu progresso</Text>
+                      <Text style={s.progressValue}>
+                        {formatMoney(prog.progresso, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}
+                      </Text>
+                    </View>
+                    <View style={s.progressTrack}>
+                      <View style={[s.progressFill, { width: `${prog.pct}%` }]} />
+                    </View>
+                    {!!leader && (
+                      <View style={s.leaderRow}>
+                        <Text style={s.leaderLabel}>A liderar</Text>
+                        <Text style={s.leaderValue} numberOfLines={1}>{leader.nome} - {formatMoney(leader.progresso || 0, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>
+                      </View>
+                    )}
+                    {!!d.financial_context?.excluded_count && (
+                      <Text style={s.contextTxt}>{d.financial_context.excluded_count} movimento(s) ignorados como poupanca/transferencia.</Text>
+                    )}
                     <View style={s.rankRow}>
                       {(d.ranking || []).slice(0, 3).map((r, pos) => (
                         <View key={r.user_id} style={s.rankItem}>
@@ -449,6 +497,11 @@ const s = StyleSheet.create({
   vazioCard:      { alignItems: 'center', paddingVertical: 40 },
   vazioTxt:       { fontSize: 16, fontWeight: '700', color: COLORS.text, marginTop: 12 },
   vazioSub:       { fontSize: 13, color: COLORS.textMid, marginTop: 4 },
+  emptyActions:   { flexDirection: 'row', gap: 8, marginTop: 16 },
+  emptyPrimary:   { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingHorizontal: 14, paddingVertical: 9 },
+  emptyPrimaryTxt:{ color: '#fff', fontSize: 12, fontWeight: '800' },
+  emptyGhost:     { backgroundColor: COLORS.surface2, borderRadius: RADIUS.md, paddingHorizontal: 14, paddingVertical: 9, borderWidth: 1, borderColor: COLORS.border },
+  emptyGhostTxt:  { color: COLORS.brand, fontSize: 12, fontWeight: '800' },
   feedCard:       { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
   feedEmoji:      { fontSize: 22, marginRight: 10, marginTop: 2 },
   feedDesc:       { fontSize: 14, color: COLORS.text },
@@ -473,9 +526,21 @@ const s = StyleSheet.create({
   desafioTop:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   desafioTitulo:  { fontSize: 15, fontWeight: '700', color: COLORS.text, flex: 1 },
   iaBadge:        { fontSize: 12, backgroundColor: '#A29BFE22', color: '#A29BFE', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, fontWeight: '700', overflow: 'hidden' },
+  desafioDesc:    { color: COLORS.textMid, fontSize: 12, lineHeight: 17, marginBottom: 10 },
+  desafioMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  desafioChip:    { backgroundColor: COLORS.surface2, borderWidth: 1, borderColor: COLORS.border, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, color: COLORS.textMid, fontSize: 10, fontWeight: '800', overflow: 'hidden' },
   countdownRow:   { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   countdownTxt:   { fontSize: 14, fontWeight: '700', color: COLORS.brand },
   terminadoTxt:   { fontSize: 12, color: COLORS.textMid, marginBottom: 8 },
+  progressHead:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
+  progressLabel:  { color: COLORS.textMid, fontSize: 11, fontWeight: '700' },
+  progressValue:  { color: COLORS.text, fontSize: 12, fontWeight: '900' },
+  progressTrack:  { height: 7, borderRadius: 999, backgroundColor: COLORS.surface2, overflow: 'hidden', marginTop: 7 },
+  progressFill:   { height: '100%', borderRadius: 999, backgroundColor: COLORS.brand },
+  leaderRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, backgroundColor: COLORS.surface2, borderRadius: RADIUS.md, padding: 9 },
+  leaderLabel:    { color: COLORS.textMid, fontSize: 11, fontWeight: '700' },
+  leaderValue:    { color: COLORS.text, fontSize: 12, fontWeight: '800', maxWidth: '68%' },
+  contextTxt:     { color: COLORS.textMid, fontSize: 10, marginTop: 8, lineHeight: 14 },
   rankRow:        { flexDirection: 'row', marginTop: 8 },
   rankItem:       { flex: 1, alignItems: 'center' },
   rankPos:        { fontSize: 18 },
