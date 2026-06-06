@@ -16,9 +16,11 @@ try {
 const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
 export const OPEN_BANKING_CALLBACK_URL = `${BASE_URL}/open-banking/callback`;
 
-const ACCESS_TOKEN_KEY = '@verly_access_token';
-const REFRESH_TOKEN_KEY = '@verly_refresh_token';
+const ACCESS_TOKEN_KEY = 'verly_access_token';
+const REFRESH_TOKEN_KEY = 'verly_refresh_token';
 const LEGACY_TOKEN_KEY = '@verly_token';
+const LEGACY_ACCESS_TOKEN_KEY = '@verly_access_token';
+const LEGACY_REFRESH_TOKEN_KEY = '@verly_refresh_token';
 
 // ── Token ──────────────────────────────────────────────────────────────────────
 
@@ -50,6 +52,8 @@ export const saveTokens = async ({ access_token, refresh_token }) => {
   if (access_token) await setStoredItem(ACCESS_TOKEN_KEY, access_token);
   if (refresh_token) await setStoredItem(REFRESH_TOKEN_KEY, refresh_token);
   await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+  await AsyncStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
+  await AsyncStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY);
 };
 
 export const saveToken = async (token) => saveTokens({ access_token: token });
@@ -62,6 +66,8 @@ export const getToken = async () => {
   if (legacyToken) {
     await setStoredItem(ACCESS_TOKEN_KEY, legacyToken);
     await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+    await AsyncStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
+    await AsyncStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY);
   }
   return legacyToken;
 };
@@ -72,6 +78,8 @@ export const removeTokens = async () => {
   await removeStoredItem(ACCESS_TOKEN_KEY);
   await removeStoredItem(REFRESH_TOKEN_KEY);
   await AsyncStorage.removeItem(LEGACY_TOKEN_KEY);
+  await AsyncStorage.removeItem(LEGACY_ACCESS_TOKEN_KEY);
+  await AsyncStorage.removeItem(LEGACY_REFRESH_TOKEN_KEY);
 };
 
 export const removeToken = removeTokens;
