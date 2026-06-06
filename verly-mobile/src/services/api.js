@@ -4,7 +4,6 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 
 let SecureStore = null;
 try {
@@ -15,12 +14,7 @@ try {
 
 // ⚠️ Muda para o IP da tua máquina quando testares em dispositivo físico
 const PROD_BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';
-const DEV_BASE_URL = Platform.select({
-  android: 'http://10.0.2.2:5000/api/v1',
-  ios: 'http://localhost:5000/api/v1',
-  web: 'http://localhost:5000/api/v1',
-  default: PROD_BASE_URL,
-});
+const DEV_BASE_URL = 'http://10.0.2.2:5000/api/v1';
 const ENV_BASE_URL =
   typeof process !== 'undefined'
     ? process.env?.EXPO_PUBLIC_API_URL

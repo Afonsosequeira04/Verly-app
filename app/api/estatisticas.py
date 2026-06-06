@@ -57,7 +57,7 @@ def estatisticas_geral():
     Usado pela EstatisticasScreen.
     """
     user_id = int(get_jwt_identity())
-    summary = summarize_expenses(user_id)
+    summary = summarize_expenses(user_id, currency=request.args.get('currency'))
     return jsonify({
         'total_geral':  summary['total_geral'],
         'num_faturas':  sum(1 for item in summary['records'] if item['source'] == 'fatura'),
@@ -67,8 +67,13 @@ def estatisticas_geral():
         'por_mes': summary['por_mes'],
         'top_lojas': summary['top_lojas'],
         'fontes': summary['fontes'],
+        'fontes_por_moeda': summary['fontes_por_moeda'],
         'mes_atual': summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
+        'currency': summary['currency'],
+        'available_currencies': summary['available_currencies'],
+        'other_currencies': summary['other_currencies'],
+        'excluded': summary['excluded'],
     })
     faturas = Fatura.query.filter_by(user_id=user_id).all()
 
@@ -147,7 +152,9 @@ def estatisticas_mensal():
     except (TypeError, ValueError):
         return jsonify({'error': 'ano e mes inválidos'}), 400
 
-    records = get_expense_records(user_id)
+    selected_summary = summarize_expenses(user_id, currency=request.args.get('currency'))
+    selected_currency = selected_summary['currency']
+    records = get_expense_records(user_id, currency=selected_currency)
     por_mes_dict: dict[str, list] = defaultdict(list)
     for record in records:
         if record['month']:
@@ -188,35 +195,43 @@ def estatisticas_mensal():
         historico.append({
             'mes': k_,
             'total': round(sum(item['value'] for item in por_mes_dict.get(k_, [])), 2),
+            'currency': selected_currency,
         })
 
     orcamento = getattr(user, 'orcamento_mensal', 0) or 0
-    pct_orcamento = round((total_mes / orcamento * 100), 1) if orcamento > 0 else None
+    pct_orcamento = (
+        round((total_mes / orcamento * 100), 1)
+        if orcamento > 0 and selected_currency == 'EUR'
+        else None
+    )
 
     return jsonify({
         'ano': ano,
         'mes': mes,
         'mes_nome': MESES_PT[mes],
+        'currency': selected_currency,
         'total': round(total_mes, 2),
         'num_faturas': num_faturas,
         'num_registos': num_registos,
         'media_fatura': round(total_mes / num_registos, 2) if num_registos > 0 else 0,
         'por_categoria': [
-            {'categoria': k, 'total': round(v, 2)}
+            {'categoria': k, 'total': round(v, 2), 'currency': selected_currency}
             for k, v in sorted(por_cat.items(), key=lambda x: -x[1])
         ],
         'por_fonte': [
-            {'fonte': k, 'total': round(v, 2)}
+            {'fonte': k, 'total': round(v, 2), 'currency': selected_currency}
             for k, v in sorted(por_fonte.items(), key=lambda x: x[0])
         ],
         'historico': historico,
         'top_loja': {
             'nome': top_loja,
             'total': round(por_loja[top_loja], 2),
+            'currency': selected_currency,
         } if top_loja else None,
         'fatura_mais_cara': {
             'loja': registo_mais_caro['merchant'] or 'Desconhecida',
             'total': round(registo_mais_caro['value'], 2),
+            'currency': selected_currency,
             'data': registo_mais_caro['date'].isoformat() if registo_mais_caro['date'] else None,
             'fonte': registo_mais_caro['source'],
         } if registo_mais_caro else None,
@@ -229,8 +244,11 @@ def estatisticas_mensal():
         'meta_orcamento': {
             'orcamento': round(orcamento, 2),
             'gasto': round(total_mes, 2),
+            'currency': 'EUR',
+            'active_currency': selected_currency,
+            'currency_mismatch': selected_currency != 'EUR',
             'pct': pct_orcamento,
-            'excedeu': total_mes > orcamento if orcamento > 0 else False,
+            'excedeu': total_mes > orcamento if orcamento > 0 and selected_currency == 'EUR' else False,
         } if orcamento > 0 else None,
         'meses_disponiveis': sorted(por_mes_dict.keys()),
     })

@@ -9,7 +9,7 @@ import json
 import logging
 from collections import defaultdict
 from datetime import datetime
-from flask import jsonify
+from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.financial_records import summarize_expenses
@@ -42,11 +42,16 @@ def dashboard():
 
     user = User.query.get_or_404(user_id)
     real_summary = summarize_expenses(user_id)
+    budget_summary = (
+        real_summary if real_summary['currency'] == 'EUR'
+        else summarize_expenses(user_id, currency='EUR')
+    )
 
     faturas   = Fatura.query.filter_by(user_id=user_id).order_by(Fatura.data_upload.desc()).all()
     conversas = Conversa.query.filter_by(user_id=user_id).order_by(Conversa.timestamp.desc()).limit(5).all()
 
-    total_gasto   = sum(f.total or 0 for f in faturas)
+    total_faturas = sum(f.total or 0 for f in faturas)
+    total_gasto   = budget_summary['mes_atual']['total']
     num_faturas   = len(faturas)
     orcamento     = getattr(user, 'orcamento_mensal', 0) or 0
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
@@ -58,7 +63,11 @@ def dashboard():
     lojas = defaultdict(float)
     for f in faturas:
         lojas[f.loja or 'Desconhecida'] += f.total or 0
-    top_loja = max(lojas, key=lojas.get) if lojas else None
+    top_loja = (
+        real_summary['top_lojas'][0]['loja']
+        if real_summary.get('top_lojas') else
+        max(lojas, key=lojas.get) if lojas else None
+    )
 
     hoje = datetime.now()
     alertas = []
@@ -89,7 +98,10 @@ def dashboard():
     streak       = _atualizar_streak(user, faturas, orcamento)
     feed_verly   = _gerar_feed_verly(faturas, conversas, orcamento, subs_data, personalidade, metas_info)
     comparacao   = _comparacao_mensal(faturas)
-    trend_labels, trend_values = _evolucao_mensal_real(faturas)
+    trend_labels = [item['mes'] for item in real_summary.get('historico_mensal', [])]
+    trend_values = [item['valor'] for item in real_summary.get('historico_mensal', [])]
+    if not trend_labels:
+        trend_labels, trend_values = _evolucao_mensal_real(faturas)
 
     ultima_fatura = faturas[0] if faturas else None
     score_ultima  = _score_ultima_fatura(ultima_fatura)
@@ -109,9 +121,20 @@ def dashboard():
         }
 
     result = {
+        'currency':          budget_summary['currency'],
+        'active_currency':   real_summary['currency'],
         'total_gasto':       round(total_gasto, 2),
         'total_gasto_real':  real_summary['mes_atual']['total'],
-        'fontes_reais':      real_summary['fontes'],
+        'total_faturas':     round(total_faturas, 2),
+        'fontes_reais':      real_summary['fontes_por_moeda'],
+        'real_summary':      real_summary,
+        'budget_summary':    budget_summary,
+        'banking': {
+            'active_currency': real_summary['currency'],
+            'available_currencies': real_summary['available_currencies'],
+            'other_currencies': real_summary['other_currencies'],
+            'excluded': real_summary['excluded'],
+        },
         'num_faturas':       num_faturas,
         'top_loja':          top_loja,
         'orcamento':         orcamento,
@@ -122,11 +145,30 @@ def dashboard():
         'comparacao':        comparacao,
         'score_ultima':      score_ultima,
         'desperdicado_mes':  round(desperdicado_mes, 2),
-        'categorias':        [{'nome': k, 'total': round(v, 2)} for k, v in categorias.items()],
-        'lojas':             [{'nome': k, 'total': round(v, 2)} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
+        'categorias': [
+            {
+                'nome': item['categoria'],
+                'categoria': item['categoria'],
+                'total': item['valor'],
+                'currency': item.get('currency', real_summary['currency']),
+            }
+            for item in (
+                real_summary['mes_atual']['por_categoria']
+                or real_summary['por_categoria']
+            )
+        ],
+        'lojas': [
+            {
+                'nome': item['loja'],
+                'total': item['total'],
+                'currency': item.get('currency', real_summary['currency']),
+            }
+            for item in real_summary['top_lojas'][:6]
+        ] or [{'nome': k, 'total': round(v, 2), 'currency': 'EUR'} for k, v in sorted(lojas.items(), key=lambda x: -x[1])[:6]],
         'evolucao':          {'labels': trend_labels, 'values': trend_values},
         'subscricoes': {
             'total_mensal':   round(subs_data['total_mensal_desperdicado'], 2),
+            'totais_por_moeda': subs_data.get('totais_por_moeda', []),
             'count_danger':   subs_data['count_danger'],
             'count_warning':  subs_data['count_warning'],
             'top3':           subs_data['subscriptions'][:3],
@@ -161,7 +203,7 @@ def estatisticas():
     if cached:
         return jsonify(cached)
 
-    summary = summarize_expenses(user_id)
+    summary = summarize_expenses(user_id, currency=request.args.get('currency'))
 
     if not summary['records']:
         return jsonify({
@@ -175,6 +217,10 @@ def estatisticas():
             'num_registos':  0,
             'fontes':        [],
             'top_lojas':     [],
+            'currency':      summary['currency'],
+            'available_currencies': summary['available_currencies'],
+            'other_currencies': summary['other_currencies'],
+            'excluded':      summary['excluded'],
         })
 
     por_categoria = summary['por_categoria']
@@ -194,9 +240,14 @@ def estatisticas():
         'num_faturas':   num_faturas,
         'num_registos':  summary['num_registos'],
         'fontes':        summary['fontes'],
+        'fontes_por_moeda': summary['fontes_por_moeda'],
         'top_lojas':     summary['top_lojas'],
         'mes_atual':     summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
+        'currency':      summary['currency'],
+        'available_currencies': summary['available_currencies'],
+        'other_currencies': summary['other_currencies'],
+        'excluded':      summary['excluded'],
     }
 
     cache.set(cache_key, result, timeout=300)   # 5 min

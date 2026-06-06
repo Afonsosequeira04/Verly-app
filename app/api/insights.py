@@ -56,6 +56,10 @@ def _build_context(user_id: int) -> dict:
     user = User.query.get(user_id)
 
     summary = summarize_expenses(user_id, today=hoje.date())
+    budget_summary = (
+        summary if summary['currency'] == 'EUR'
+        else summarize_expenses(user_id, today=hoje.date(), currency='EUR')
+    )
     total_mes = summary['mes_atual']['total']
     total_mes_anterior = summary['mes_anterior']['total']
     top_cats = [
@@ -73,6 +77,7 @@ def _build_context(user_id: int) -> dict:
             'loja': item['merchant'] or 'Desconhecida',
             'categoria': item['categoria'],
             'valor': round(item['value'], 2),
+            'currency': item['currency'],
             'data': item['date'].strftime('%d/%m/%Y') if item['date'] else None,
             'fonte': item['source'],
         }
@@ -81,7 +86,7 @@ def _build_context(user_id: int) -> dict:
 
     gastos_mes = {
         normalize_text(item['categoria']): item['valor']
-        for item in summary['mes_atual']['por_categoria']
+        for item in budget_summary['mes_atual']['por_categoria']
     }
 
     metas_info = []
@@ -93,6 +98,7 @@ def _build_context(user_id: int) -> dict:
             'categoria': m.categoria,
             'limite': round(m.valor_limite, 2),
             'gasto': round(gasto, 2),
+            'currency': 'EUR',
             'pct': round(pct, 1),
             'ultrapassou': gasto > m.valor_limite,
         })
@@ -122,12 +128,16 @@ def _build_context(user_id: int) -> dict:
 
     regra_5030_20 = None
     if rendimento > 0:
+        gasto_orcamento = budget_summary['mes_atual']['total']
         regra_5030_20 = {
             'necessidades_ideal': round(rendimento * 0.50, 2),
             'desejos_ideal': round(rendimento * 0.30, 2),
             'poupanca_ideal': round(rendimento * 0.20, 2),
-            'gasto_atual': round(total_mes, 2),
-            'pct_rendimento': round((total_mes / rendimento) * 100, 1),
+            'gasto_atual': round(gasto_orcamento, 2),
+            'currency': 'EUR',
+            'active_currency': summary['currency'],
+            'currency_mismatch': summary['currency'] != 'EUR',
+            'pct_rendimento': round((gasto_orcamento / rendimento) * 100, 1),
         }
 
     risco_concentracao = None
@@ -156,8 +166,15 @@ def _build_context(user_id: int) -> dict:
         'orcamento_mensal': round(orcamento, 2),
         'total_gasto_mes': round(total_mes, 2),
         'total_gasto_mes_anterior': round(total_mes_anterior, 2),
+        'currency': summary['currency'],
+        'available_currencies': summary['available_currencies'],
+        'outras_moedas': summary['other_currencies'],
+        'movimentos_excluidos': summary['excluded'],
         'variacao_pct': summary['variacao_pct'],
-        'top_categorias': [{'categoria': c, 'valor': round(v, 2)} for c, v in top_cats],
+        'top_categorias': [
+            {'categoria': c, 'valor': round(v, 2), 'currency': summary['currency']}
+            for c, v in top_cats
+        ],
         'metas': metas_info,
         'num_faturas_mes': len(registos_mes),
         'faturas_recentes': registos_mes_payload,

@@ -7,6 +7,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { desafiosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { formatMoney } from '../utils/money';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
 const C = COLORS;
@@ -50,8 +51,9 @@ export default function DesafioDetalheScreen({ route, navigation }) {
         meu_progresso: res.progresso,
         minha_posicao: res.minha_posicao,
         ranking: res.ranking,
+        currency: res.currency || prev?.currency,
       }));
-      Alert.alert('✅ Atualizado!', `Progresso: ${res.progresso.toFixed(2)}€  ·  #${res.minha_posicao}`);
+      Alert.alert('✅ Atualizado!', `Progresso: ${formatMoney(res.progresso, res.currency || desafio?.currency || 'EUR')}  ·  #${res.minha_posicao}`);
     } catch (e) {
       Alert.alert('Erro', e.message);
     } finally {
@@ -71,7 +73,7 @@ export default function DesafioDetalheScreen({ route, navigation }) {
             const v = res.vencedor;
             Alert.alert(
               '🏆 Desafio terminado!',
-              v ? `${v.nome} venceu com ${v.progresso.toFixed(2)}€!` : 'Nenhum participante.',
+              v ? `${v.nome} venceu com ${formatMoney(v.progresso, res.currency || desafio?.currency || 'EUR')}!` : 'Nenhum participante.',
               [{ text: 'OK', onPress: carregar }]
             );
           } catch (e) {
@@ -111,6 +113,7 @@ export default function DesafioDetalheScreen({ route, navigation }) {
 
   const { texto: contagemTxt, urgente } = formatarContagem(desafio.fim);
   const terminado = desafio.estado === 'terminado';
+  const currency = desafio.currency || 'EUR';
   const progressoPct = desafio.valor_alvo
     ? Math.min(100, (desafio.meu_progresso / desafio.valor_alvo) * 100) : 0;
 
@@ -135,7 +138,7 @@ export default function DesafioDetalheScreen({ route, navigation }) {
         {desafio.descricao ? <Text style={s.descricao}>{desafio.descricao}</Text> : null}
         <View style={s.infoRow}>
           <Text style={s.chip}>{tipoLabel(desafio.tipo)}</Text>
-          {desafio.valor_alvo && <Text style={s.chip}>Alvo: {desafio.valor_alvo}€</Text>}
+          {desafio.valor_alvo && <Text style={s.chip}>Alvo: {formatMoney(desafio.valor_alvo, currency)}</Text>}
           <Text style={s.chip}>👥 {desafio.total_participantes}</Text>
         </View>
         {!terminado && (
@@ -154,7 +157,7 @@ export default function DesafioDetalheScreen({ route, navigation }) {
       <Animated.View entering={FadeInDown.delay(100)} style={s.card}>
         <Text style={s.secTitulo}>O meu progresso</Text>
         <View style={s.progressoRow}>
-          <Text style={s.progressoVal}>{desafio.meu_progresso?.toFixed(2) || '0.00'}€</Text>
+          <Text style={s.progressoVal}>{formatMoney(desafio.meu_progresso || 0, currency)}</Text>
           {desafio.minha_posicao && (
             <Text style={s.posicaoTxt}>{MEDALHAS[desafio.minha_posicao - 1] || `#${desafio.minha_posicao}`}</Text>
           )}
@@ -181,7 +184,7 @@ export default function DesafioDetalheScreen({ route, navigation }) {
           <View key={p.user_id} style={[s.rankRow, i === 0 && s.rankRow1]}>
             <Text style={s.rankMedalha}>{MEDALHAS[i] || `#${i + 1}`}</Text>
             <Text style={s.rankNome} numberOfLines={1}>{p.nome}</Text>
-            <Text style={s.rankVal}>{p.progresso.toFixed(2)}€</Text>
+            <Text style={s.rankVal}>{formatMoney(p.progresso || 0, currency)}</Text>
             {p.ganhou && <Text style={{ fontSize: 18 }}>🏆</Text>}
           </View>
         ))}

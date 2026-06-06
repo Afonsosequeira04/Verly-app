@@ -8,6 +8,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { gruposAPI, desafiosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { formatMoney } from '../utils/money';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
 const C = COLORS;
@@ -331,7 +332,7 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                         <View key={r.user_id} style={s.rankItem}>
                           <Text style={s.rankPos}>{['🥇','🥈','🥉'][pos]}</Text>
                           <Text style={s.rankNome} numberOfLines={1}>{r.nome}</Text>
-                          <Text style={s.rankVal}>{r.progresso.toFixed(0)}€</Text>
+                          <Text style={s.rankVal}>{formatMoney(r.progresso || 0, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>
                         </View>
                       ))}
                     </View>
@@ -404,7 +405,7 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                 ))}
               </View>
               <View style={{ flexDirection: 'row' }}>
-                <TextInput style={[s.field, { flex: 1, marginRight: 6 }]} placeholder="Valor alvo (€)" placeholderTextColor={C.textMid}
+                <TextInput style={[s.field, { flex: 1, marginRight: 6 }]} placeholder="Valor alvo" placeholderTextColor={C.textMid}
                   keyboardType="numeric" value={formDesafio.valor_alvo} onChangeText={v => setFormDesafio(p => ({ ...p, valor_alvo: v }))} />
                 <TextInput style={[s.field, { flex: 1 }]} placeholder="Duração (dias)" placeholderTextColor={C.textMid}
                   keyboardType="numeric" value={formDesafio.dias} onChangeText={v => setFormDesafio(p => ({ ...p, dias: v }))} />

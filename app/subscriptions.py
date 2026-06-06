@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import datetime
 from flask import Blueprint, render_template, jsonify, request
 from flask_login import login_required, current_user
-from app.financial_records import normalize_text
+from app.financial_records import clean_currency, normalize_text
 from app.models import BankTransaction, Fatura, Subscricao
 from app import db
 
@@ -162,6 +162,7 @@ def _detetar_subscricoes_extrato(movimentos: list) -> dict:
             'icone':        SUB_ICONS.get(categoria_sub, '📦'),
             'categoria':    categoria_sub,
             'meses_pago':   meses_pago,
+            'currency':     'EUR',
             'preco_mensal': round(preco_mensal, 2),
             'total_pago':   round(sum(valores), 2),
             'dias_sem_uso': 0,
@@ -256,12 +257,16 @@ def _detetar_subscricoes_banco(user_id: int) -> list:
 
     grouped = defaultdict(list)
     display_names = {}
+    currencies = {}
     for transaction in transactions:
         tx_date = _bank_transaction_date(transaction)
-        key = _bank_subscription_key(transaction)
-        if not key or not tx_date:
+        base_key = _bank_subscription_key(transaction)
+        if not base_key or not tx_date:
             continue
+        currency = clean_currency(transaction.currency)
+        key = f'{base_key}:{currency}'
         grouped[key].append(transaction)
+        currencies[key] = currency
         display_names.setdefault(
             key,
             transaction.merchant_name or transaction.description or key.title(),
@@ -279,6 +284,7 @@ def _detetar_subscricoes_banco(user_id: int) -> list:
 
         values = [abs(float(tx.amount or 0)) for tx in txs if tx.amount]
         name = display_names.get(key, key.title())
+        currency = currencies.get(key, 'EUR')
         known_subscription = _is_subscription(f'{key} {name}')
         if not known_subscription and not _amounts_are_recurring(values):
             continue
@@ -295,12 +301,13 @@ def _detetar_subscricoes_banco(user_id: int) -> list:
             'icone': SUB_ICONS.get(categoria_sub, 'ðŸ“¦'),
             'categoria': categoria_sub,
             'meses_pago': meses_pago,
+            'currency': currency,
             'preco_mensal': round(preco_mensal, 2),
             'total_pago': round(sum(values), 2),
             'dias_sem_uso': 0,
             'risk': risk,
             'risk_label': {'danger': 'Recorrente', 'warning': 'Suspeito'}[risk],
-            'alerta': f'{meses_pago} meses detectados no banco - {preco_mensal:.2f}€/mes',
+            'alerta': f'{meses_pago} meses detectados no banco - {preco_mensal:.2f} {currency}/mes',
             'fonte': 'open_banking',
         })
 
@@ -388,19 +395,32 @@ def detect_subscriptions(user_id: int) -> dict:
 
     total_mensal_desperdicado = 0.0
     total_mensal_ok = 0.0
+    totais_por_moeda = defaultdict(lambda: {'desperdicado': 0.0, 'ok': 0.0})
     for s in subscriptions:
+        currency = clean_currency(s.get('currency'))
         if s['risk'] == 'danger':
             total_mensal_desperdicado += s['preco_mensal']
+            totais_por_moeda[currency]['desperdicado'] += s['preco_mensal']
         elif s['risk'] == 'warning':
             total_mensal_desperdicado += s['preco_mensal'] * 0.5
+            totais_por_moeda[currency]['desperdicado'] += s['preco_mensal'] * 0.5
         else:
             total_mensal_ok += s['preco_mensal']
+            totais_por_moeda[currency]['ok'] += s['preco_mensal']
 
     return {
         'subscriptions':             subscriptions,
         'total_mensal_desperdicado': round(total_mensal_desperdicado, 2),
         'total_mensal_ok':           round(total_mensal_ok, 2),
         'total_anual_desperdicado':  round(total_mensal_desperdicado * 12, 2),
+        'totais_por_moeda': [
+            {
+                'currency': currency,
+                'desperdicado': round(values['desperdicado'], 2),
+                'ok': round(values['ok'], 2),
+            }
+            for currency, values in sorted(totais_por_moeda.items())
+        ],
         'count_danger':              sum(1 for s in subscriptions if s['risk'] == 'danger'),
         'count_warning':             sum(1 for s in subscriptions if s['risk'] == 'warning'),
         'count_ok':                  sum(1 for s in subscriptions if s['risk'] == 'ok'),

@@ -32,6 +32,7 @@ import { MotiView } from 'moti';
 
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { OPEN_BANKING_CALLBACK_URL, openBankingAPI } from '../services/api';
+import { formatCompactMoney, formatMoney } from '../utils/money';
 
 const C = COLORS;
 function parseCallbackUrl(url) {
@@ -44,11 +45,7 @@ function parseCallbackUrl(url) {
 }
 
 function formatAmount(value, currency = 'EUR') {
-  const amount = Number(value || 0);
-  return new Intl.NumberFormat('pt-PT', {
-    style: 'currency',
-    currency,
-  }).format(amount);
+  return formatMoney(value, currency);
 }
 
 function EmptyState({ configured }) {
@@ -78,10 +75,8 @@ function Stat({ label, value }) {
   );
 }
 
-function formatShortAmount(value) {
-  const amount = Math.abs(Number(value || 0));
-  if (amount >= 1000) return `${(amount / 1000).toFixed(1)}k€`;
-  return `${amount.toFixed(0)}€`;
+function formatShortAmount(value, currency = 'EUR') {
+  return formatCompactMoney(value, currency);
 }
 
 function formatDate(value) {
@@ -95,11 +90,27 @@ function sourceLabel(source) {
   return source === 'open_banking' ? 'Banco' : 'Fatura';
 }
 
+function movementKindLabel(kind, isSpending) {
+  if (kind === 'savings') return 'Poupanca';
+  if (kind === 'transfer') return 'Transferencia';
+  if (kind === 'income') return 'Entrada';
+  return isSpending ? 'Gasto' : 'Movimento';
+}
+
+function normalizeKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
 function BudgetBanner({ budget }) {
   if (!budget) return null;
+  const mismatch = budget.currency_mismatch || budget.estado === 'moeda_diferente';
   const danger = budget.estado === 'excedido';
   const warning = budget.estado === 'atencao';
-  const color = danger ? C.red : warning ? C.yellow : C.green;
+  const color = mismatch ? C.yellow : danger ? C.red : warning ? C.yellow : C.green;
   const pct = Math.min(Number(budget.pct || 0), 140);
 
   return (
@@ -112,22 +123,29 @@ function BudgetBanner({ budget }) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.budgetTitle}>
-            {danger ? 'Orçamento ultrapassado' : warning ? 'Aproxima-se do orçamento' : 'Dentro do orçamento'}
+            {mismatch ? 'Orcamento noutra moeda' : danger ? 'Orçamento ultrapassado' : warning ? 'Aproxima-se do orçamento' : 'Dentro do orçamento'}
           </Text>
           <Text style={styles.budgetText}>
-            {formatAmount(budget.gasto)} de {formatAmount(budget.orcamento)} este mês
+            {mismatch
+              ? `${budget.currency} definido; movimentos ativos em ${budget.active_currency}`
+              : `${formatAmount(budget.gasto, budget.currency)} de ${formatAmount(budget.orcamento, budget.currency)} este mês`}
           </Text>
         </View>
-        <Text style={[styles.budgetPct, { color }]}>{Math.round(budget.pct)}%</Text>
+        <Text style={[styles.budgetPct, { color }]}>
+          {mismatch ? budget.active_currency : `${Math.round(budget.pct)}%`}
+        </Text>
       </View>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: color }]} />
-      </View>
+      {!mismatch && (
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: color }]} />
+        </View>
+      )}
     </Animated.View>
   );
 }
 
-function MonthlyBars({ data = [] }) {
+function MonthlyBars({ data = [], currency = 'EUR' }) {
+  const [selected, setSelected] = useState(null);
   if (!data.length) return null;
   const max = Math.max(...data.map(item => Number(item.total || 0)), 1);
   const visible = data.slice(-6);
@@ -145,8 +163,12 @@ function MonthlyBars({ data = [] }) {
           const height = Math.max((Number(item.total || 0) / max) * 90, 8);
           const month = String(item.mes || '').split('-')[1] || item.mes;
           return (
-            <View key={`${item.mes}-${index}`} style={styles.monthCol}>
-              <Text style={styles.monthValue}>{formatShortAmount(item.total)}</Text>
+            <Pressable
+              key={`${item.mes}-${index}`}
+              onPress={() => setSelected(selected === index ? null : index)}
+              style={[styles.monthCol, selected === index && styles.monthColSelected]}
+            >
+              <Text style={styles.monthValue}>{formatShortAmount(item.total, item.currency || currency)}</Text>
               <MotiView
                 from={{ height: 4, opacity: 0.4 }}
                 animate={{ height, opacity: 1 }}
@@ -154,15 +176,23 @@ function MonthlyBars({ data = [] }) {
                 style={styles.monthBar}
               />
               <Text style={styles.monthLabel}>{month}</Text>
-            </View>
+            </Pressable>
           );
         })}
       </View>
+      {selected != null && visible[selected] && (
+        <View style={styles.chartDetail}>
+          <Text style={styles.chartDetailText}>
+            {visible[selected].mes}: {formatAmount(visible[selected].total, visible[selected].currency || currency)}
+          </Text>
+        </View>
+      )}
     </Animated.View>
   );
 }
 
-function CategoryBars({ data = [] }) {
+function CategoryBars({ data = [], currency = 'EUR', itemsByCategory = {} }) {
+  const [selected, setSelected] = useState(null);
   const visible = data.slice(0, 5);
   if (!visible.length) return null;
   const max = Math.max(...visible.map(item => Number(item.valor ?? item.total ?? 0)), 1);
@@ -179,11 +209,17 @@ function CategoryBars({ data = [] }) {
         {visible.map((item, index) => {
           const total = Number(item.valor ?? item.total ?? 0);
           const pct = max > 0 ? Math.max((total / max) * 100, 4) : 4;
+          const active = selected === index;
+          const details = itemsByCategory[normalizeKey(item.categoria)] || [];
           return (
-            <View key={`${item.categoria}-${index}`} style={styles.categoryRow}>
+            <Pressable
+              key={`${item.categoria}-${index}`}
+              onPress={() => setSelected(active ? null : index)}
+              style={[styles.categoryRow, active && styles.categoryRowActive]}
+            >
               <View style={styles.categoryTop}>
                 <Text style={styles.categoryName} numberOfLines={1}>{item.categoria}</Text>
-                <Text style={styles.categoryAmount}>{formatAmount(total)}</Text>
+                <Text style={styles.categoryAmount}>{formatAmount(total, item.currency || currency)}</Text>
               </View>
               <View style={styles.categoryTrack}>
                 <MotiView
@@ -193,7 +229,15 @@ function CategoryBars({ data = [] }) {
                   style={styles.categoryFill}
                 />
               </View>
-            </View>
+              {active && details.slice(0, 3).map((detail, detailIndex) => (
+                <View key={`${detail.loja}-${detailIndex}`} style={styles.categoryDetailRow}>
+                  <Text style={styles.categoryDetailName} numberOfLines={1}>{detail.loja}</Text>
+                  <Text style={styles.categoryDetailAmount}>
+                    {formatAmount(detail.valor, detail.currency || item.currency || currency)}
+                  </Text>
+                </View>
+              ))}
+            </Pressable>
           );
         })}
       </View>
@@ -201,9 +245,15 @@ function CategoryBars({ data = [] }) {
   );
 }
 
-function RecurringCard({ subscriptions = [] }) {
+function RecurringCard({ subscriptions = [], currency = 'EUR' }) {
   if (!subscriptions.length) return null;
-  const total = subscriptions.reduce((sum, item) => sum + Number(item.preco_mensal || 0), 0);
+  const totalsByCurrency = subscriptions.reduce((acc, item) => {
+    const code = item.currency || currency;
+    acc[code] = (acc[code] || 0) + Number(item.preco_mensal || 0);
+    return acc;
+  }, {});
+  const total = totalsByCurrency[currency] ?? Object.values(totalsByCurrency)[0] ?? 0;
+  const totalCurrency = totalsByCurrency[currency] != null ? currency : Object.keys(totalsByCurrency)[0] || currency;
   const visible = subscriptions.slice(0, 3);
 
   return (
@@ -213,7 +263,7 @@ function RecurringCard({ subscriptions = [] }) {
           <Repeat size={15} color={C.brand} />
           <Text style={styles.sectionTitle}>Subscrições recorrentes</Text>
         </View>
-        <Text style={styles.sectionBadge}>{formatShortAmount(total)}/mês</Text>
+        <Text style={styles.sectionBadge}>{formatShortAmount(total, totalCurrency)}/mês</Text>
       </View>
       <View style={styles.recurringCard}>
         {visible.map((item, index) => (
@@ -225,11 +275,58 @@ function RecurringCard({ subscriptions = [] }) {
               <Text style={styles.recurringName} numberOfLines={1}>{item.nome}</Text>
               <Text style={styles.recurringMeta}>{item.meses_pago || 1} meses detetados</Text>
             </View>
-            <Text style={styles.recurringAmount}>{formatAmount(item.preco_mensal)}</Text>
+            <Text style={styles.recurringAmount}>{formatAmount(item.preco_mensal, item.currency || currency)}</Text>
           </View>
         ))}
-        <Text style={styles.recurringFoot}>Impacto anual estimado: {formatAmount(total * 12)}</Text>
+        <Text style={styles.recurringFoot}>Impacto anual estimado: {formatAmount(total * 12, totalCurrency)}</Text>
       </View>
+    </Animated.View>
+  );
+}
+
+function CurrencyStrip({ summary }) {
+  const currencies = summary?.available_currencies || [];
+  if (!currencies.length) return null;
+  return (
+    <View style={styles.currencyRow}>
+      {currencies.slice(0, 3).map(item => {
+        const active = item.currency === summary.currency;
+        return (
+          <View key={item.currency} style={[styles.currencyPill, active && styles.currencyPillActive]}>
+            <Text style={[styles.currencyCode, active && styles.currencyCodeActive]}>{item.currency}</Text>
+            <Text style={styles.currencyTotal}>{formatShortAmount(item.total, item.currency)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function ExcludedMovementsCard({ excluded }) {
+  if (!excluded?.count) return null;
+  return (
+    <Animated.View entering={FadeInDown.delay(130).duration(360).springify()} style={styles.excludedCard}>
+      <View style={styles.excludedHeader}>
+        <View style={styles.sectionTitleRow}>
+          <ShieldCheck size={15} color={C.green} />
+          <Text style={styles.sectionTitle}>Movimentos fora dos gastos</Text>
+        </View>
+        <Text style={styles.excludedCount}>{excluded.count}</Text>
+      </View>
+      <View style={styles.excludedTotals}>
+        {(excluded.total_by_currency || []).map(item => (
+          <View key={item.currency} style={styles.excludedPill}>
+            <Text style={styles.excludedPillText}>{formatShortAmount(item.total, item.currency)}</Text>
+          </View>
+        ))}
+      </View>
+      {(excluded.examples || []).slice(0, 3).map((item, index) => (
+        <View key={`${item.loja}-${index}`} style={styles.excludedRow}>
+          <Text style={styles.excludedName} numberOfLines={1}>{item.loja}</Text>
+          <Text style={styles.excludedMeta}>{movementKindLabel(item.tipo, false)}</Text>
+          <Text style={styles.excludedAmount}>{formatAmount(item.valor, item.currency)}</Text>
+        </View>
+      ))}
     </Animated.View>
   );
 }
@@ -249,6 +346,7 @@ export default function OpenBankingScreen() {
   const configured = status?.configured;
   const financialSummary = summary?.summary;
   const monthSummary = financialSummary?.mes_atual || {};
+  const activeCurrency = monthSummary.currency || financialSummary?.currency || 'EUR';
   const categoryData = monthSummary.por_categoria?.length
     ? monthSummary.por_categoria
     : financialSummary?.por_categoria || [];
@@ -417,13 +515,13 @@ export default function OpenBankingScreen() {
                   <View style={styles.heroTop}>
                     <View>
                       <Text style={styles.heroLabel}>Gastos reais este mês</Text>
-                      <Text style={styles.heroAmount}>{formatAmount(monthSummary.total || 0)}</Text>
+                      <Text style={styles.heroAmount}>{formatAmount(monthSummary.total || 0, activeCurrency)}</Text>
                     </View>
                     <View style={styles.heroTrend}>
                       <TrendingUp size={15} color={C.brand} />
                       <Text style={styles.heroTrendText}>
                         {financialSummary.previsao_mensal
-                          ? `~${formatShortAmount(financialSummary.previsao_mensal)} previsto`
+                          ? `~${formatShortAmount(financialSummary.previsao_mensal, financialSummary.previsao_currency || activeCurrency)} previsto`
                           : 'sem previsão'}
                       </Text>
                     </View>
@@ -431,11 +529,11 @@ export default function OpenBankingScreen() {
                   <View style={styles.sourceRow}>
                     <View style={styles.sourcePill}>
                       <WalletCards size={13} color={C.brand} />
-                      <Text style={styles.sourceText}>Banco {formatShortAmount(bankSource?.total || 0)}</Text>
+                      <Text style={styles.sourceText}>Banco {formatShortAmount(bankSource?.total || 0, bankSource?.currency || activeCurrency)}</Text>
                     </View>
                     <View style={styles.sourcePill}>
                       <CalendarDays size={13} color={C.green} />
-                      <Text style={styles.sourceText}>Faturas {formatShortAmount(invoiceSource?.total || 0)}</Text>
+                      <Text style={styles.sourceText}>Faturas {formatShortAmount(invoiceSource?.total || 0, invoiceSource?.currency || activeCurrency)}</Text>
                     </View>
                     {summary?.metas?.some(meta => meta.estado !== 'ok') && (
                       <View style={[styles.sourcePill, { borderColor: C.yellow + '55' }]}>
@@ -446,10 +544,16 @@ export default function OpenBankingScreen() {
                   </View>
                 </Animated.View>
 
+                <CurrencyStrip summary={financialSummary} />
                 <BudgetBanner budget={summary?.budget} />
-                <MonthlyBars data={monthlyData} />
-                <CategoryBars data={categoryData} />
-                <RecurringCard subscriptions={summary?.subscriptions || []} />
+                <ExcludedMovementsCard excluded={financialSummary.excluded} />
+                <MonthlyBars data={monthlyData} currency={activeCurrency} />
+                <CategoryBars
+                  data={categoryData}
+                  currency={activeCurrency}
+                  itemsByCategory={monthSummary.itens_por_categoria || {}}
+                />
+                <RecurringCard subscriptions={summary?.subscriptions || []} currency={activeCurrency} />
               </>
             )}
 
@@ -526,7 +630,8 @@ export default function OpenBankingScreen() {
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Últimos movimentos</Text>
                 {transactions.map(item => {
-                  const isExpense = Number(item.amount) < 0;
+                  const isExpense = item.is_spending ?? Number(item.amount) < 0;
+                  const kindLabel = movementKindLabel(item.kind, isExpense);
                   return (
                     <View key={item.id} style={styles.transactionRow}>
                       <View style={{ flex: 1 }}>
@@ -542,6 +647,9 @@ export default function OpenBankingScreen() {
                           )}
                           <View style={styles.sourceMiniPill}>
                             <Text style={styles.sourceMiniText}>{sourceLabel(item.source)}</Text>
+                          </View>
+                          <View style={styles.kindMiniPill}>
+                            <Text style={styles.kindMiniText}>{kindLabel}</Text>
                           </View>
                         </View>
                       </View>
@@ -633,6 +741,22 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
   },
   sourceText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
+  currencyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: SPACE.sm, marginBottom: SPACE.xs },
+  currencyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  currencyPillActive: { borderColor: C.brand + '66', backgroundColor: C.brand + '14' },
+  currencyCode: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900' },
+  currencyCodeActive: { color: C.brand },
+  currencyTotal: { color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
   budgetCard: {
     backgroundColor: C.surface,
     borderRadius: RADIUS.md,
@@ -687,9 +811,20 @@ const styles = StyleSheet.create({
     padding: SPACE.md,
   },
   monthCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', minHeight: 110 },
+  monthColSelected: { backgroundColor: C.brand + '10', borderRadius: RADIUS.sm },
   monthValue: { color: C.textMid, fontSize: 9, fontWeight: '800', minHeight: 14 },
   monthBar: { width: '72%', maxWidth: 24, minHeight: 8, borderRadius: 5, backgroundColor: C.brand, marginTop: 4 },
   monthLabel: { color: C.textMid, fontSize: 10, fontWeight: '700', marginTop: 6 },
+  chartDetail: {
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.sm,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: 8,
+    marginTop: SPACE.sm,
+  },
+  chartDetailText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
   categoryCard: {
     backgroundColor: C.surface,
     borderRadius: RADIUS.md,
@@ -697,12 +832,16 @@ const styles = StyleSheet.create({
     borderColor: C.border,
     padding: SPACE.md,
   },
-  categoryRow: { marginBottom: SPACE.sm },
+  categoryRow: { marginBottom: SPACE.sm, borderRadius: RADIUS.sm, padding: 6 },
+  categoryRowActive: { backgroundColor: C.surface2 },
   categoryTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.sm, marginBottom: 6 },
   categoryName: { color: C.text, fontSize: FONT.sm, fontWeight: '700', flex: 1 },
   categoryAmount: { color: C.text, fontSize: FONT.sm, fontWeight: '800' },
   categoryTrack: { height: 7, borderRadius: 4, backgroundColor: C.surface3, overflow: 'hidden' },
   categoryFill: { height: '100%', borderRadius: 4, backgroundColor: C.green },
+  categoryDetailRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, marginTop: 8 },
+  categoryDetailName: { flex: 1, color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
+  categoryDetailAmount: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
   recurringCard: {
     backgroundColor: C.surface,
     borderRadius: RADIUS.md,
@@ -724,6 +863,28 @@ const styles = StyleSheet.create({
   recurringMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 1 },
   recurringAmount: { color: C.brand, fontSize: FONT.sm, fontWeight: '800' },
   recurringFoot: { color: C.textMid, fontSize: FONT.xs, marginTop: SPACE.sm, textAlign: 'right' },
+  excludedCard: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.green + '35',
+    padding: SPACE.md,
+    marginTop: SPACE.sm,
+  },
+  excludedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  excludedCount: { color: C.green, fontSize: FONT.sm, fontWeight: '900' },
+  excludedTotals: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 8 },
+  excludedPill: {
+    backgroundColor: C.green + '12',
+    borderRadius: RADIUS.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  excludedPillText: { color: C.green, fontSize: FONT.xs, fontWeight: '800' },
+  excludedRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, paddingTop: 8 },
+  excludedName: { flex: 1, color: C.text, fontSize: FONT.xs, fontWeight: '700' },
+  excludedMeta: { color: C.textMid, fontSize: 10, fontWeight: '700' },
+  excludedAmount: { color: C.textMid, fontSize: FONT.xs, fontWeight: '800' },
   iconButton: {
     width: 36,
     height: 36,
@@ -807,6 +968,13 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   sourceMiniText: { color: C.textMid, fontSize: 10, fontWeight: '700' },
+  kindMiniPill: {
+    borderRadius: RADIUS.pill,
+    backgroundColor: C.green + '14',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  kindMiniText: { color: C.green, fontSize: 10, fontWeight: '800' },
   transactionAmount: { fontSize: FONT.sm, fontWeight: '800' },
   empty: {
     alignItems: 'center',

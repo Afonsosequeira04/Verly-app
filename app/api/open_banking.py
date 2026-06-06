@@ -8,7 +8,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app import db
 from app.api import api_bp
 from app.extensions import cache
-from app.financial_records import normalize_text, summarize_expenses
+from app.financial_records import classify_bank_movement, normalize_text, summarize_expenses
 from app.models import BankTransaction, ContaBancaria, Meta, OpenBankingConnection, User
 from app.open_banking_service import (
     OpenBankingNotConfigured,
@@ -58,6 +58,13 @@ def _account_to_dict(account):
 
 
 def _transaction_to_dict(transaction):
+    kind = classify_bank_movement(
+        transaction.description,
+        transaction.merchant_name,
+        transaction.amount,
+        categoria=transaction.categoria,
+    )
+    is_spending = (transaction.amount or 0) < 0 and kind == 'spending'
     return {
         'id': transaction.id,
         'account_id': transaction.conta_bancaria_id,
@@ -65,9 +72,12 @@ def _transaction_to_dict(transaction):
         'value_date': transaction.value_date.isoformat() if transaction.value_date else None,
         'amount': transaction.amount,
         'currency': transaction.currency,
+        'signed_amount': transaction.amount,
         'description': transaction.description,
         'merchant_name': transaction.merchant_name,
         'categoria': transaction.categoria,
+        'kind': kind,
+        'is_spending': is_spending,
         'source': 'open_banking',
     }
 
@@ -342,24 +352,43 @@ def open_banking_transactions():
 def open_banking_summary():
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
-    summary = summarize_expenses(user_id)
+    requested_currency = request.args.get('currency')
+    summary = summarize_expenses(user_id, currency=requested_currency)
+    budget_currency = 'EUR'
+    budget_summary = (
+        summary if summary['currency'] == budget_currency
+        else summarize_expenses(user_id, currency=budget_currency)
+    )
 
-    current_total = summary['mes_atual']['total']
+    current_total = budget_summary['mes_atual']['total']
     budget = getattr(user, 'orcamento_mensal', 0) or 0
     budget_status = None
     if budget > 0:
-        pct = round((current_total / budget) * 100, 1)
+        currency_mismatch = (
+            summary['currency'] != budget_currency
+            and summary['mes_atual']['total'] > 0
+            and budget_summary['mes_atual']['num_registos'] == 0
+        )
+        pct = round((current_total / budget) * 100, 1) if not currency_mismatch else None
         budget_status = {
             'orcamento': round(budget, 2),
             'gasto': round(current_total, 2),
             'sobra': round(budget - current_total, 2),
             'pct': pct,
-            'estado': 'excedido' if pct >= 100 else ('atencao' if pct >= 80 else 'ok'),
+            'currency': budget_currency,
+            'active_currency': summary['currency'],
+            'currency_mismatch': currency_mismatch,
+            'estado': (
+                'moeda_diferente' if currency_mismatch
+                else 'excedido' if pct >= 100
+                else 'atencao' if pct >= 80
+                else 'ok'
+            ),
         }
 
     current_categories = {
         normalize_text(item['categoria']): item['valor']
-        for item in summary['mes_atual']['por_categoria']
+        for item in budget_summary['mes_atual']['por_categoria']
     }
     metas = []
     for meta in Meta.query.filter_by(user_id=user_id).all():
@@ -371,6 +400,7 @@ def open_banking_summary():
             'categoria': meta.categoria,
             'limite': round(meta.valor_limite or 0, 2),
             'gasto': round(gasto, 2),
+            'currency': budget_currency,
             'pct': pct,
             'estado': 'excedida' if gasto > meta.valor_limite else ('atencao' if pct >= 80 else 'ok'),
         })
@@ -383,6 +413,7 @@ def open_banking_summary():
             {
                 'nome': sub.get('nome'),
                 'preco_mensal': sub.get('preco_mensal', 0),
+                'currency': sub.get('currency') or summary['currency'],
                 'meses_pago': sub.get('meses_pago', 1),
                 'risk': sub.get('risk'),
                 'fonte': sub.get('fonte'),

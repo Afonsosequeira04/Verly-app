@@ -6,6 +6,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.api  import api_bp
 from app      import db
+from app.financial_records import normalize_text, summarize_expenses
 from app.models import User
 from app.models_social import (
     Grupo, grupo_membro, Desafio, DesafioParticipante, Recompensa,
@@ -315,7 +316,7 @@ def listar_desafios(grupo_id):
     _assert_membro(grupo, user.id)
 
     desafios = grupo.desafios.order_by(Desafio.criado_em.desc()).all()
-    return jsonify([d.to_dict(user.id) for d in desafios])
+    return jsonify([_desafio_payload(d, user) for d in desafios])
 
 
 @api_bp.route('/grupos/<int:grupo_id>/desafios', methods=['POST'])
@@ -362,7 +363,7 @@ def criar_desafio(grupo_id):
         f'{user.nome} criou o desafio "{titulo}"', emoji='⚡')
 
     db.session.commit()
-    return jsonify(desafio.to_dict(user.id)), 201
+    return jsonify(_desafio_payload(desafio, user)), 201
 
 
 @api_bp.route('/grupos/<int:grupo_id>/desafios/ia', methods=['POST'])
@@ -373,29 +374,34 @@ def criar_desafio_ia(grupo_id):
     grupo = Grupo.query.get_or_404(grupo_id)
     _assert_membro(grupo, user.id)
 
-    from app.models import Fatura
     import json, os
 
     # Recolher dados de gasto dos membros nos últimos 30 dias
     membros = grupo.membros.all()
-    inicio_analise = datetime.utcnow() - timedelta(days=30)
+    inicio_analise = datetime.utcnow().date() - timedelta(days=30)
 
     resumo_membros = []
     for membro in membros:
-        faturas = Fatura.query.filter(
-            Fatura.user_id == membro.id,
-            Fatura.data >= inicio_analise
-        ).all()
+        summary = summarize_expenses(membro.id)
+        registos = [
+            item for item in summary['records']
+            if item['date'] and item['date'] >= inicio_analise
+        ]
 
         categorias = {}
-        for f in faturas:
-            cat = f.categoria or 'Outros'
-            categorias[cat] = categorias.get(cat, 0) + f.valor
+        for item in registos:
+            cat = item['categoria'] or 'Outros'
+            categorias[cat] = categorias.get(cat, 0) + item['value']
 
         resumo_membros.append({
             'nome': membro.nome,
-            'total_gasto': sum(f.valor for f in faturas),
-            'top_categorias': sorted(categorias.items(), key=lambda x: x[1], reverse=True)[:3],
+            'currency': summary['currency'],
+            'total_gasto': round(sum(item['value'] for item in registos), 2),
+            'top_categorias': [
+                [cat, round(valor, 2)]
+                for cat, valor in sorted(categorias.items(), key=lambda x: x[1], reverse=True)[:3]
+            ],
+            'movimentos_excluidos': summary['excluded']['count'],
         })
 
     # Chamar IA (Groq)
@@ -480,7 +486,7 @@ def detalhe_desafio(desafio_id):
     desafio = Desafio.query.get_or_404(desafio_id)
     grupo   = Grupo.query.get(desafio.grupo_id)
     _assert_membro(grupo, user.id)
-    return jsonify(desafio.to_dict(user.id))
+    return jsonify(_desafio_payload(desafio, user))
 
 
 @api_bp.route('/desafios/<int:desafio_id>/progresso', methods=['POST'])
@@ -513,6 +519,7 @@ def atualizar_progresso(desafio_id):
 
     return jsonify({
         'progresso': progresso,
+        'currency': summarize_expenses(user.id)['currency'],
         'minha_posicao': minha_posicao,
         'ranking': [{'user_id': p.user_id, 'nome': p.user.nome, 'progresso': p.progresso} for p in ranking],
     })
@@ -560,6 +567,7 @@ def terminar_desafio(desafio_id):
 
     return jsonify({
         'ok': True,
+        'currency': summarize_expenses(user.id)['currency'],
         'vencedor': {
             'user_id': ranking[0].user_id,
             'nome': ranking[0].user.nome,
@@ -644,31 +652,49 @@ def _registar_atividade(grupo_id, user_id, tipo, descricao, emoji='📌', valor=
     ))
 
 
-def _calcular_progresso(desafio, user):
-    from app.models import Fatura
+def _desafio_payload(desafio, user):
+    payload = desafio.to_dict(user.id)
+    try:
+        summary = summarize_expenses(user.id)
+        payload['currency'] = summary['currency']
+        payload['financial_context'] = {
+            'available_currencies': summary['available_currencies'],
+            'excluded_count': summary['excluded']['count'],
+        }
+    except Exception:
+        payload['currency'] = 'EUR'
+        payload['financial_context'] = {
+            'available_currencies': [],
+            'excluded_count': 0,
+        }
+    return payload
 
-    faturas = Fatura.query.filter(
-        Fatura.user_id == user.id,
-        Fatura.data >= desafio.inicio,
-        Fatura.data <= desafio.fim,
-    ).all()
+
+def _calcular_progresso(desafio, user):
+    inicio = desafio.inicio.date() if hasattr(desafio.inicio, 'date') else desafio.inicio
+    fim = desafio.fim.date() if hasattr(desafio.fim, 'date') else desafio.fim
+    summary = summarize_expenses(user.id)
+    registos = [
+        item for item in summary['records']
+        if item['date'] and inicio <= item['date'] <= fim
+    ]
 
     if desafio.tipo == 'gastar_menos':
-        total_gasto = sum(f.valor for f in faturas if f.valor > 0)
+        total_gasto = sum(item['value'] for item in registos)
         alvo = desafio.valor_alvo or 500
         return max(0, alvo - total_gasto)
 
     elif desafio.tipo == 'categoria_limite':
-        cat = (desafio.categoria or '').lower()
+        cat = normalize_text(desafio.categoria or '')
         total_cat = sum(
-            f.valor for f in faturas
-            if f.valor > 0 and (f.categoria or '').lower() == cat
+            item['value'] for item in registos
+            if normalize_text(item['categoria']) == cat
         )
         alvo = desafio.valor_alvo or 100
         return max(0, alvo - total_cat)
 
     elif desafio.tipo == 'poupar_valor':
-        total_gasto = sum(f.valor for f in faturas if f.valor > 0)
+        total_gasto = sum(item['value'] for item in registos)
         orcamento   = user.orcamento_mensal or 0
         return max(0, orcamento - total_gasto)
 

@@ -32,7 +32,7 @@ import {
   Receipt, Camera, Upload, FileText, Zap,
   ChevronRight, ChevronDown, ChevronUp, RefreshCw,
   AlertCircle, Target, BarChart2,
-  Shield, Flame, Calendar, Download, GripVertical,
+  Shield, Flame, Calendar, Download, GripVertical, WalletCards,
 } from 'lucide-react-native';
 import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -44,6 +44,7 @@ import {
   AnimatedCounter, GlowPulse,
 } from '../components/UI';
 import { haptic } from '../utils/haptics';
+import { formatCompactMoney, formatMoney } from '../utils/money';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -69,15 +70,40 @@ const CHART_COLORS = [
 ];
 
 function normalizeDashboardData(data) {
-  if (!data) return { porCategoria: [], porMes: [] };
-  const porCategoria = Array.isArray(data.categorias)
-    ? data.categorias.map(c => ({ categoria: c.nome || c.categoria || 'Outros', total: c.total || 0 }))
+  if (!data) return { porCategoria: [], porMes: [], chartCurrency: 'EUR' };
+  const summary = data.real_summary || {};
+  const chartCurrency = summary.currency || data.active_currency || data.currency || 'EUR';
+  const summaryCategories = summary.mes_atual?.por_categoria?.length
+    ? summary.mes_atual.por_categoria
+    : summary.por_categoria;
+  const porCategoria = Array.isArray(summaryCategories)
+    ? summaryCategories.map(c => ({
+        categoria: c.categoria || c.nome || 'Outros',
+        total: c.valor ?? c.total ?? 0,
+        currency: c.currency || chartCurrency,
+      }))
+    : Array.isArray(data.categorias)
+      ? data.categorias.map(c => ({
+          categoria: c.nome || c.categoria || 'Outros',
+          total: c.total || 0,
+          currency: c.currency || chartCurrency,
+        }))
     : [];
   let porMes = [];
-  if (data.evolucao?.labels && data.evolucao?.values) {
-    porMes = data.evolucao.labels.map((label, i) => ({ mes: label, total: data.evolucao.values[i] || 0 }));
+  if (Array.isArray(summary.historico_mensal) && summary.historico_mensal.length) {
+    porMes = summary.historico_mensal.map(item => ({
+      mes: item.mes,
+      total: item.valor ?? item.total ?? 0,
+      currency: item.currency || chartCurrency,
+    }));
+  } else if (data.evolucao?.labels && data.evolucao?.values) {
+    porMes = data.evolucao.labels.map((label, i) => ({
+      mes: label,
+      total: data.evolucao.values[i] || 0,
+      currency: chartCurrency,
+    }));
   }
-  return { porCategoria, porMes };
+  return { porCategoria, porMes, chartCurrency };
 }
 
 // ─── Budget Bar animada com Reanimated 4 ─────────────────────────────────────
@@ -144,7 +170,9 @@ function BarItem({ item, idx, onSelect, isSelected, max }) {
           >
             {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
           </Text>
-          <Text style={[s.microText, { color, fontWeight: '800' }]}>{fmt(val)} €</Text>
+          <Text style={[s.microText, { color, fontWeight: '800' }]}>
+            {formatMoney(val, item.currency || 'EUR')}
+          </Text>
         </View>
         <View style={{ backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
           <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]} />
@@ -179,8 +207,9 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
   const CHART_H = 72;
   const h = Math.max(pct * CHART_H, 4);
   const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
-  const label = meses[m] ?? item.mes?.slice(-2) ?? '';
+  const rawMes = String(item.mes || '');
+  const m = rawMes.includes('-') ? parseInt(rawMes.split('-')[1], 10) - 1 : NaN;
+  const label = Number.isFinite(m) ? (meses[m] || rawMes) : rawMes;
   const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '55';
 
   const barH    = useSharedValue(0);
@@ -204,7 +233,7 @@ function MonthBar({ item, idx, total, onPress, isSelected }) {
       {isSelected ? (
         <Animated.View entering={FadeIn.duration(150)}>
           <Text style={[s.microText, { fontSize: 9, marginBottom: 3, color: CHART_COLORS[0], fontWeight: '800' }]}>
-            {(item.total || 0) >= 1000 ? `${((item.total) / 1000).toFixed(1)}k` : fmt(item.total || 0)}€
+            {formatCompactMoney(item.total || 0, item.currency || 'EUR')}
           </Text>
         </Animated.View>
       ) : (
@@ -236,11 +265,12 @@ function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
       </View>
       {selectedMonth != null && data[data.length - 6 + selectedMonth] && (() => {
         const item = data[data.length - 6 + selectedMonth];
-        const m = parseInt((item.mes || '').split('-')[1], 10) - 1;
+        const rawMes = String(item.mes || '');
+        const m = rawMes.includes('-') ? parseInt(rawMes.split('-')[1], 10) - 1 : NaN;
         return (
           <Animated.View entering={FadeInDown.duration(250)} style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
             <Text style={[s.microText, { color: C.text, fontWeight: '800' }]}>
-              {meses[m] || item.mes} — {fmt(item.total)} €
+              {(Number.isFinite(m) ? meses[m] : rawMes) || item.mes} - {formatMoney(item.total, item.currency || 'EUR')}
             </Text>
             {item.num_faturas != null && (
               <Text style={[s.microText, { marginTop: 3 }]}>{item.num_faturas} fatura(s) registada(s)</Text>
@@ -253,7 +283,7 @@ function MonthlyChart({ data = [], onMonthSelect, selectedMonth }) {
 }
 
 // ─── Charts section ───────────────────────────────────────────────────────────
-function ChartsSection({ porCategoria, porMes, navigation }) {
+function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR' }) {
   const [tab, setTab] = useState('categorias');
   const [selectedBar, setSelectedBar] = useState(null);
   const [selectedMonth, setSelectedMonth] = useState(null);
@@ -326,7 +356,9 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
                   Categoria principal:{' '}
                   <Text style={{ color: C.text, fontWeight: '800' }}>{topCat.categoria || topCat.label}</Text>
                   {' '}com{' '}
-                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>{fmt(topCat.valor || topCat.total)} €</Text>
+                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>
+                    {formatMoney(topCat.valor || topCat.total, topCat.currency || chartCurrency)}
+                  </Text>
                 </Text>
               </View>
             )}
@@ -362,6 +394,7 @@ function ChartsSection({ porCategoria, porMes, navigation }) {
 function HeroCard({ data, onSearchPress }) {
   const spent    = data?.total_gasto || 0;
   const budget   = data?.orcamento   || 0;
+  const currency = data?.currency || 'EUR';
   const pct      = budget > 0 ? (spent / budget) * 100 : 0;
   const barColor = pct > 90 ? C.red : pct > 70 ? C.yellow : C.green;
 
@@ -376,12 +409,12 @@ function HeroCard({ data, onSearchPress }) {
             <Text style={s.label}>Gasto este mês</Text>
             <AnimatedCounter
               value={spent}
-              suffix=" €"
+              suffix={` ${currency}`}
               decimals={2}
               duration={1100}
               style={[s.bigNum, { marginTop: 4 }]}
             />
-            {budget > 0 && <Text style={s.subText}>de {fmt(budget)} € orçamentados</Text>}
+            {budget > 0 && <Text style={s.subText}>de {formatMoney(budget, currency)} orçamentados</Text>}
           </View>
           <Animated.View entering={FadeIn.delay(200)}>
             <Pressable onPress={onSearchPress} style={s.iconBtn} hitSlop={8}>
@@ -396,7 +429,9 @@ function HeroCard({ data, onSearchPress }) {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 6 }}>
               <Text style={s.microText}>{Math.round(pct)}% utilizado</Text>
               <Text style={[s.microText, { color: barColor }]}>
-                {pct > 100 ? `+${fmt(spent - budget)} € acima` : `${fmt(budget - spent)} € restante`}
+                {pct > 100
+                  ? `+${formatMoney(spent - budget, currency)} acima`
+                  : `${formatMoney(budget - spent, currency)} restante`}
               </Text>
             </View>
           </View>
@@ -450,6 +485,43 @@ function MetricsRow({ data }) {
 }
 
 // ─── InsightsSection ──────────────────────────────────────────────────────────
+function BankingContext({ data }) {
+  const banking = data?.banking;
+  const currencies = banking?.available_currencies || data?.real_summary?.available_currencies || [];
+  const excluded = banking?.excluded || data?.real_summary?.excluded;
+  if (!currencies.length && !excluded?.count) return null;
+
+  return (
+    <Reveal delay={120} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <Pressable style={[s.card, { padding: 14 }]} onPress={() => haptic.light()}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <View style={[s.iconBox, { backgroundColor: C.brand + '18' }]}>
+            <WalletCards size={16} color={C.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.bodyText}>Banco ligado aos gastos</Text>
+            <Text style={[s.microText, { marginTop: 2 }]}>Moedas e movimentos reais sincronizados</Text>
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {currencies.slice(0, 3).map(item => (
+            <View key={item.currency} style={{ borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 }}>
+              <Text style={[s.microText, { color: item.currency === banking?.active_currency ? C.brand : C.textMid, fontWeight: '900' }]}>
+                {item.currency} · {formatCompactMoney(item.total, item.currency)}
+              </Text>
+            </View>
+          ))}
+        </View>
+        {excluded?.count > 0 && (
+          <Text style={[s.microText, { marginTop: 10, color: C.green, fontWeight: '700' }]}>
+            {excluded.count} transferencias/poupancas fora dos gastos
+          </Text>
+        )}
+      </Pressable>
+    </Reveal>
+  );
+}
+
 function InsightsSection({ mood, feed }) {
   const hasMood   = !!mood?.frase;
   const feedItems = Array.isArray(feed)
@@ -1244,7 +1316,7 @@ export default function DashboardScreen({ navigation, route }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const { porCategoria, porMes } = normalizeDashboardData(data);
+  const { porCategoria, porMes, chartCurrency } = normalizeDashboardData(data);
 
 
   // Renderiza cada card pelo seu id
@@ -1253,14 +1325,23 @@ export default function DashboardScreen({ navigation, route }) {
       case 'hero':
         return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
       case 'metricas':
-        return <MetricsRow key="metricas" data={data} />;
+        return (
+          <React.Fragment key="metricas">
+            <MetricsRow data={data} />
+            <BankingContext data={data} />
+          </React.Fragment>
+        );
       case 'previsao':
         return prefs.mostrarPrevisao ? <PrevisaoCard key="previsao" previsao={previsao} orcamento={orcamento} navigation={navigation} /> : null;
       case 'quicklinks':
         return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
       case 'graficos':
-        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} /> : null;
-      case 'subscricoes':
+        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} chartCurrency={chartCurrency} /> : null;
+      case 'subscricoes': {
+        const subTotals = data?.subscricoes?.totais_por_moeda || [];
+        const subMain = subTotals.find(item => item.desperdicado > 0) || null;
+        const subValue = subMain?.desperdicado ?? data?.subscricoes?.total_mensal ?? 0;
+        const subCurrency = subMain?.currency || data?.currency || 'EUR';
         return (prefs.mostrarSubscricoes && data?.subscricoes?.count_danger > 0) ? (
           <Animated.View key="subscricoes" entering={FadeInDown.delay(200).duration(400).springify()} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
             <Pressable
@@ -1272,12 +1353,13 @@ export default function DashboardScreen({ navigation, route }) {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={s.bodyText}>{data.subscricoes.count_danger} subscricao(oes) a desperdicar</Text>
-                <Text style={[s.microText, { marginTop: 2 }]}>{fmt(data.subscricoes.total_mensal)} €/mes</Text>
+                <Text style={[s.microText, { marginTop: 2 }]}>{formatMoney(subValue, subCurrency)}/mes</Text>
               </View>
               <ChevronRight size={14} color={C.red} />
             </Pressable>
           </Animated.View>
         ) : null;
+      }
       case 'feedaccess':
         return <QuickActions key="feedaccess" navigation={navigation} />;
       case 'faturas':

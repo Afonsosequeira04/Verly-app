@@ -16,7 +16,7 @@ from datetime import datetime
 
 
 def _gastos_mes_atual(user_id):
-    summary = summarize_expenses(user_id)
+    summary = summarize_expenses(user_id, currency='EUR')
     return {
         item['categoria']: item['valor']
         for item in summary['mes_atual']['por_categoria']
@@ -71,6 +71,7 @@ def listar_metas():
             'categoria': m.categoria,
             'limite':    m.valor_limite,
             'gasto':     round(gasto, 2),
+            'currency':  'EUR',
             'pct':       pct,
             'sobra':     round(max(m.valor_limite - gasto, 0), 2),
             'ultrapassou': gasto > m.valor_limite,
@@ -119,6 +120,7 @@ def criar_meta():
             'categoria': meta.categoria,
             'limite':    meta.valor_limite,
             'gasto':     round(gasto, 2),
+            'currency':  'EUR',
             'pct':       min(round((gasto / meta.valor_limite) * 100) if meta.valor_limite > 0 else 0, 100),
             'sobra':     round(max(meta.valor_limite - gasto, 0), 2),
             'ultrapassou': gasto > meta.valor_limite,
