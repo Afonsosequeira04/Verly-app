@@ -533,6 +533,7 @@ def gmail_sync():
 
         messages = results.get('messages', [])
         faturas_criadas = 0
+        novas_faturas = []
         emails_processados = 0
 
         for msg_ref in messages:
@@ -609,11 +610,20 @@ def gmail_sync():
                 fonte='gmail',
             )
             db.session.add(fatura)
+            novas_faturas.append(fatura)
             faturas_criadas += 1
 
         conn.ultima_sync = datetime.utcnow()
         conn.faturas_importadas = (conn.faturas_importadas or 0) + faturas_criadas
         db.session.commit()
+        if novas_faturas:
+            try:
+                from app.tasks.qdrant_task import indexar_fatura_task
+                for fatura in novas_faturas:
+                    if fatura.id:
+                        indexar_fatura_task.delay(fatura.id)
+            except Exception:
+                logger.warning('Qdrant Gmail invoice indexing dispatch failed', exc_info=True)
 
         # ── Auto-deteção de subscrições após sync ─────────────────────────────
         try:

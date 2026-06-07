@@ -280,6 +280,8 @@ def open_banking_sync():
     clients = {}
     imported = 0
     subscriptions_detected = 0
+    imported_transactions = []
+    semantic_category_cache = {}
 
     try:
         for account in accounts:
@@ -298,6 +300,25 @@ def open_banking_sync():
                     raw_transaction,
                     client.provider,
                 )
+                if not values.get('categoria') or values.get('categoria') == 'Outros':
+                    semantic_key = (
+                        values.get('merchant_name')
+                        or values.get('description')
+                        or values.get('transaction_id')
+                        or ''
+                    ).strip().lower()[:160]
+                    if semantic_key:
+                        if semantic_key not in semantic_category_cache:
+                            try:
+                                from app.semantic_finance import suggest_category_from_memory
+                                semantic_category_cache[semantic_key] = suggest_category_from_memory(
+                                    user_id,
+                                    f"{values.get('merchant_name') or ''} {values.get('description') or ''}",
+                                )
+                            except Exception:
+                                semantic_category_cache[semantic_key] = None
+                        if semantic_category_cache.get(semantic_key):
+                            values['categoria'] = semantic_category_cache[semantic_key]
                 exists = BankTransaction.query.filter_by(
                     transaction_hash=values['transaction_hash']
                 ).first()
@@ -308,7 +329,9 @@ def open_banking_sync():
                     ):
                         exists.categoria = values['categoria']
                     continue
-                db.session.add(BankTransaction(**values))
+                transaction = BankTransaction(**values)
+                db.session.add(transaction)
+                imported_transactions.append(transaction)
                 imported += 1
 
         OpenBankingConnection.query.filter_by(user_id=user_id).update({
@@ -316,6 +339,14 @@ def open_banking_sync():
             'status': 'synced',
         })
         db.session.commit()
+        if imported_transactions:
+            try:
+                from app.tasks.qdrant_task import indexar_movimentos_bancarios_task
+                transaction_ids = [transaction.id for transaction in imported_transactions if transaction.id]
+                if transaction_ids:
+                    indexar_movimentos_bancarios_task.delay(transaction_ids)
+            except Exception:
+                current_app.logger.warning('Qdrant bank transaction indexing dispatch failed', exc_info=True)
         try:
             subscriptions_detected = sync_bank_subscriptions(user_id)
         except Exception:

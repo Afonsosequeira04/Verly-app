@@ -120,6 +120,12 @@ def _build_context(user_id: int) -> dict:
         subs_data = {}
         subscricoes_detetadas = []
 
+    try:
+        from app.semantic_finance import semantic_examples_for_insights
+        memoria_semantica = semantic_examples_for_insights(user_id)
+    except Exception:
+        memoria_semantica = []
+
     total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
 
     rendimento = getattr(user, 'rendimento_mensal', None) or 0
@@ -188,6 +194,7 @@ def _build_context(user_id: int) -> dict:
         'regra_5030_20': regra_5030_20,
         'risco_concentracao': risco_concentracao,
         'itens_por_categoria': itens_por_categoria,
+        'memoria_semantica': memoria_semantica,
         'financial_intelligence': build_financial_intelligence(user, summary, budget_summary, subs_data),
     }
 
@@ -432,6 +439,18 @@ Cita estudos académicos e frameworks financeiros reconhecidos (CFPB, Fed Reserv
         concentracao_txt = f"\nALERTA: {r['pct']}% dos gastos concentrados em '{r['categoria']}' ({r['valor']}€)"
 
     top_cats_txt = '\n'.join([f"  - {c['categoria']}: {c['valor']}€" for c in ctx['top_categorias']])
+    memoria_txt = ''
+    if ctx.get('memoria_semantica'):
+        linhas = []
+        for item in ctx['memoria_semantica'][:6]:
+            titulo = item.get('title') or item.get('merchant') or item.get('loja') or 'Registo'
+            valor = item.get('amount')
+            moeda = item.get('currency') or ctx.get('currency', 'EUR')
+            categoria = item.get('categoria') or 'Outros'
+            fonte = 'banco' if item.get('source_type') == 'bank_transaction' else 'fatura'
+            valor_txt = f"{valor} {moeda}" if valor is not None else ''
+            linhas.append(f"  - {fonte}: {titulo} | {valor_txt} | {categoria}")
+        memoria_txt = '\nExemplos reais encontrados por memoria semantica:\n' + '\n'.join(linhas)
 
     user_prompt = f"""Dados financeiros de {ctx['nome']} este mês:
 
@@ -440,7 +459,7 @@ Número de faturas: {ctx['num_faturas_mes']}
 Objetivo do utilizador: {ctx['objetivo']}{rendimento_txt}{orcamento_txt}{variacao_txt}{previsao_txt}{regra_txt}
 
 Top categorias de gasto:
-{top_cats_txt}{metas_txt}{subscricoes_txt}{concentracao_txt}
+{top_cats_txt}{metas_txt}{subscricoes_txt}{concentracao_txt}{memoria_txt}
 
 Gera exatamente 5 insights personalizados e muito relevantes com base nestes dados reais.
 Tipos: alerta, tendencia, positivo, dica, previsao.
@@ -593,9 +612,11 @@ def get_insights():
             'historico_mensal':    ctx['historico_mensal'],
             'regra_5030_20':       ctx['regra_5030_20'],
             'itens_por_categoria': ctx['itens_por_categoria'],
+            'memoria_semantica':   ctx.get('memoria_semantica', []),
             'financial_intelligence': ctx['financial_intelligence'],
         },
         'financial_intelligence': ctx['financial_intelligence'],
+        'memoria_semantica': ctx.get('memoria_semantica', []),
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
     }

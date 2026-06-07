@@ -386,6 +386,11 @@ def criar_desafio_ia(grupo_id):
     for membro in membros:
         summary = summarize_expenses(membro.id)
         intelligence = build_financial_intelligence(membro, summary)
+        try:
+            from app.semantic_finance import semantic_examples_for_insights
+            memoria_semantica = semantic_examples_for_insights(membro.id)[:4]
+        except Exception:
+            memoria_semantica = []
         registos = [
             item for item in summary['records']
             if item['date'] and item['date'] >= inicio_analise
@@ -407,6 +412,16 @@ def criar_desafio_ia(grupo_id):
             'movimentos_excluidos': summary['excluded']['count'],
             'acao_principal': intelligence.get('primary_action'),
             'desafios_sugeridos': intelligence.get('social_challenges', [])[:2],
+            'exemplos_semanticos': [
+                {
+                    'fonte': item.get('source_type'),
+                    'titulo': item.get('title'),
+                    'categoria': item.get('categoria'),
+                    'valor': item.get('amount'),
+                    'currency': item.get('currency'),
+                }
+                for item in memoria_semantica
+            ],
         })
         sugestoes_inteligentes.extend(intelligence.get('social_challenges', [])[:2])
 

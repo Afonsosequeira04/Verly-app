@@ -135,11 +135,17 @@ def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
     faturas_ctx   = _build_faturas_context(faturas)
     metas_ctx     = _build_metas_context(user_id)
     historico     = _get_historico_recente(user_id, limite=10)
+    try:
+        from app.semantic_finance import semantic_context
+        memoria_semantica = semantic_context(user_id, mensagem, top_k=6)
+    except Exception:
+        memoria_semantica = ''
 
     system_content = (
         f"{system_prompt}\n\n"
         f"DADOS REAIS DO UTILIZADOR:\n{faturas_ctx}"
-        f"{metas_ctx}\n\n"
+        f"{metas_ctx}"
+        f"{memoria_semantica}\n\n"
         "MEMÓRIA: Tens acesso ao histórico desta conversa. Usa-o para respostas coerentes. "
         "Não te apresentes novamente se já o fizeste."
     )

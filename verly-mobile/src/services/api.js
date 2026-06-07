@@ -308,6 +308,14 @@ export const chatAPI = {
 
 // ── Subscrições ────────────────────────────────────────────────────────────────
 
+export const semanticAPI = {
+  search: (query, limit = 8) =>
+    apiFetch(`/semantic/search?q=${encodeURIComponent(query || '')}&limit=${limit}`),
+
+  reindex: () =>
+    apiFetch('/semantic/reindex', { method: 'POST' }),
+};
+
 export const subscricoesAPI = {
   listar: () => apiFetch('/subscricoes'),
   detetar: () => apiFetch('/subscricoes/detetar', { method: 'POST' }),

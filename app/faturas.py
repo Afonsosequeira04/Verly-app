@@ -159,6 +159,11 @@ def upload():
         )
         db.session.add(fatura)
         db.session.commit()
+        try:
+            from app.tasks.qdrant_task import indexar_fatura_task
+            indexar_fatura_task.delay(fatura.id)
+        except Exception:
+            logger.warning('Qdrant invoice indexing dispatch failed', exc_info=True)
 
         logger.info(
             f'Fatura criada — user_id={current_user.id} '
@@ -214,6 +219,11 @@ def editar_fatura(fatura_id):
 
     try:
         db.session.commit()
+        try:
+            from app.tasks.qdrant_task import indexar_fatura_task
+            indexar_fatura_task.delay(fatura.id)
+        except Exception:
+            logger.warning('Qdrant invoice reindex dispatch failed', exc_info=True)
         return jsonify({'success': True})
     except Exception:
         db.session.rollback()
