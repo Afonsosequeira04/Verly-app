@@ -6,6 +6,7 @@ import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity,
   ActivityIndicator, Alert,
 } from 'react-native';
+import { Gauge } from 'lucide-react-native';
 import { faturasAPI } from '../services/api';
 import { COLORS } from '../constants/theme';
 
@@ -26,11 +27,16 @@ function InfoRow({ label, value, valueColor }) {
 }
 
 export default function FaturaDetalheScreen({ route, navigation }) {
-  const { id } = route.params;
+  const id = route.params?.id ?? route.params?.faturaId;
   const [fatura, setFatura]   = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!id) {
+      Alert.alert('Erro', 'Fatura inválida.');
+      navigation.goBack();
+      return;
+    }
     faturasAPI.detalhe(id)
       .then(data => setFatura(data))
       .catch(e => { Alert.alert('Erro', e.message); navigation.goBack(); })
@@ -50,6 +56,17 @@ export default function FaturaDetalheScreen({ route, navigation }) {
         },
       },
     ]);
+  };
+
+  const handleScore = () => {
+    navigation.navigate('Score', {
+      faturaId: fatura.id,
+      prefill: {
+        item: fatura.loja || fatura.nome_ficheiro,
+        categoria: fatura.categoria,
+        preco: fatura.total,
+      },
+    });
   };
 
   if (loading) {
@@ -81,6 +98,10 @@ export default function FaturaDetalheScreen({ route, navigation }) {
         <View style={styles.heroCatBadge}>
           <Text style={styles.heroCatText}>{fatura.categoria}</Text>
         </View>
+        <TouchableOpacity style={styles.scoreBtn} onPress={handleScore} activeOpacity={0.85}>
+          <Gauge size={16} color="#fff" strokeWidth={2.4} />
+          <Text style={styles.scoreBtnText}>Analisar compra</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Info */}
@@ -138,6 +159,8 @@ const styles = StyleSheet.create({
   heroTotal: { fontSize: 36, fontWeight: '800', color: COLORS.brand, marginBottom: 10 },
   heroCatBadge: { backgroundColor: 'rgba(83,74,183,0.15)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 5, borderWidth: 1, borderColor: 'rgba(83,74,183,0.3)' },
   heroCatText: { color: COLORS.brand, fontSize: 13, fontWeight: '700' },
+  scoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: COLORS.brand, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 11, marginTop: 16 },
+  scoreBtnText: { color: '#fff', fontSize: 14, fontWeight: '800' },
   section: { marginBottom: 20 },
   sectionTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
   infoBox: { backgroundColor: COLORS.surface, borderRadius: 14, padding: 4, borderWidth: 1, borderColor: COLORS.border },

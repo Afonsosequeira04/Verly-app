@@ -9,10 +9,12 @@ POST /api/v1/chat/limpar     → apaga histórico
 import os
 import logging
 import requests
+import re
+import unicodedata
 from flask import request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
-from app.models import Conversa, Fatura, User, Meta
+from app.models import Conversa, Fatura, User, Meta, CATEGORIAS
 from app import db
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,172 @@ def _get_historico_recente(user_id, limite=10):
     return historico
 
 
+def _normalizar_texto(texto: str) -> str:
+    texto = unicodedata.normalize('NFKD', texto or '').encode('ascii', 'ignore').decode('ascii')
+    return texto.lower()
+
+
+def _categoria_da_mensagem(texto: str):
+    normalizado = _normalizar_texto(texto)
+    for categoria in CATEGORIAS:
+        if _normalizar_texto(categoria) in normalizado:
+            return categoria
+
+    aliases = {
+        'alimentacao': 'Alimentação',
+        'comida': 'Alimentação',
+        'restaurante': 'Alimentação',
+        'supermercado': 'Alimentação',
+        'tecnologia': 'Tecnologia',
+        'roupa': 'Vestuário',
+        'vestuario': 'Vestuário',
+        'casa': 'Casa & Decoração',
+        'decoracao': 'Casa & Decoração',
+        'saude': 'Saúde & Beleza',
+        'beleza': 'Saúde & Beleza',
+        'desporto': 'Desporto',
+        'entretenimento': 'Entretenimento',
+        'transportes': 'Transportes',
+        'transporte': 'Transportes',
+        'educacao': 'Educação',
+    }
+    for key, categoria in aliases.items():
+        if key in normalizado:
+            return categoria
+    return None
+
+
+def _valor_da_mensagem(texto: str):
+    matches = re.findall(r'(\d+(?:[.,]\d{1,2})?)\s*(?:€|eur|euros)?', _normalizar_texto(texto))
+    if not matches:
+        return None
+    try:
+        valor = float(matches[-1].replace(',', '.'))
+        return round(valor, 2) if valor > 0 else None
+    except ValueError:
+        return None
+
+
+def _chat_actions(mensagem: str, user_id: int):
+    texto = _normalizar_texto(mensagem)
+    faturas_count = Fatura.query.filter_by(user_id=user_id).count()
+    metas_count = Meta.query.filter_by(user_id=user_id).count()
+    actions = []
+
+    def add(action):
+        if action['id'] not in {item['id'] for item in actions}:
+            actions.append(action)
+
+    if any(k in texto for k in ['upload', 'carregar fatura', 'adicionar fatura', 'nova fatura', 'recibo']):
+        add({
+            'id': 'open_upload',
+            'type': 'navigate',
+            'label': 'Carregar fatura',
+            'description': 'Abrir upload com IA',
+            'route': 'Dashboard',
+            'params': {'openUpload': True},
+        })
+
+    if any(k in texto for k in ['fatura', 'faturas', 'recibo', 'recibos', 'compras']):
+        add({
+            'id': 'view_faturas',
+            'type': 'navigate',
+            'label': 'Ver faturas',
+            'route': 'Faturas',
+        })
+
+    if any(k in texto for k in ['garantia', 'garantias', 'devolucao', 'devolucoes', 'devolver']):
+        add({
+            'id': 'view_garantias',
+            'type': 'navigate',
+            'label': 'Ver garantias',
+            'route': 'Garantias',
+        })
+
+    if any(k in texto for k in ['score', 'analisar compra', 'boa compra', 'vale a pena', 'comprar']):
+        add({
+            'id': 'open_score',
+            'type': 'navigate',
+            'label': 'Analisar compra',
+            'route': 'Score',
+        })
+
+    if any(k in texto for k in ['dividir', 'despesa partilhada', 'tricount', 'grupo', 'amigos devem', 'acerto']):
+        add({
+            'id': 'open_groups',
+            'type': 'navigate',
+            'label': 'Dividir despesas',
+            'route': 'Grupos',
+        })
+
+    if any(k in texto for k in ['banco', 'open banking', 'transacoes', 'transacoes bancarias', 'sincronizar']):
+        add({
+            'id': 'open_banking',
+            'type': 'navigate',
+            'label': 'Ligar banco',
+            'route': 'OpenBanking',
+        })
+
+    if any(k in texto for k in ['grafico', 'estatistica', 'estatisticas', 'tendencia', 'categorias']):
+        add({
+            'id': 'open_stats',
+            'type': 'navigate',
+            'label': 'Ver estatísticas',
+            'route': 'Estatisticas',
+        })
+
+    if any(k in texto for k in ['meta', 'limite', 'orcamento', 'orçamento']):
+        categoria = _categoria_da_mensagem(mensagem)
+        valor = _valor_da_mensagem(mensagem)
+        wants_create = any(k in texto for k in ['cria', 'criar', 'define', 'definir', 'mete', 'coloca', 'faz'])
+        if wants_create and categoria and valor:
+            add({
+                'id': f'create_meta_{_normalizar_texto(categoria).replace(" ", "_")}',
+                'type': 'create_meta',
+                'label': f'Criar meta de {categoria}',
+                'description': f'Limite mensal de {valor:.2f} EUR',
+                'payload': {
+                    'nome': categoria,
+                    'categoria': categoria,
+                    'limite': valor,
+                },
+                'requires_confirmation': True,
+            })
+        add({
+            'id': 'open_goals',
+            'type': 'navigate',
+            'label': 'Ver metas',
+            'route': 'Metas',
+        })
+
+    if any(k in texto for k in ['limpar chat', 'apagar conversa', 'limpar conversa']):
+        add({
+            'id': 'clear_chat',
+            'type': 'clear_chat',
+            'label': 'Limpar conversa',
+            'description': 'Apaga o histórico deste chat',
+            'requires_confirmation': True,
+        })
+
+    if faturas_count == 0:
+        add({
+            'id': 'open_upload_first',
+            'type': 'navigate',
+            'label': 'Adicionar primeira fatura',
+            'route': 'Dashboard',
+            'params': {'openUpload': True},
+        })
+    elif metas_count == 0 and any(k in texto for k in ['poupar', 'organizar', 'começar', 'comecar']):
+        add({
+            'id': 'open_goals_first',
+            'type': 'navigate',
+            'label': 'Criar primeira meta',
+            'route': 'Metas',
+        })
+
+    return actions[:3]
+
+
 # ── Groq chat direto (sem índice — funciona mesmo sem ficheiros carregados) ────
 
 def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
@@ -147,7 +315,9 @@ def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
         f"{metas_ctx}"
         f"{memoria_semantica}\n\n"
         "MEMÓRIA: Tens acesso ao histórico desta conversa. Usa-o para respostas coerentes. "
-        "Não te apresentes novamente se já o fizeste."
+        "Não te apresentes novamente se já o fizeste. "
+        "Se o utilizador pedir uma ação na app, responde curto e confirma o que faria; "
+        "os botões de ação são tratados pela interface."
     )
 
     messages = [{"role": "system", "content": system_content}] + historico + [
@@ -192,6 +362,7 @@ def chat_mensagem():
 
     try:
         resposta = _chat_groq_direto(mensagem, user_id, personalidade)
+        actions = _chat_actions(mensagem, user_id)
     except Exception as e:
         logger.error(f'Erro no chat API: {e}')
         return jsonify({'error': 'Erro ao processar a mensagem.'}), 500
@@ -200,7 +371,7 @@ def chat_mensagem():
     db.session.add(conversa)
     db.session.commit()
 
-    return jsonify({'resposta': resposta, 'id': conversa.id})
+    return jsonify({'resposta': resposta, 'id': conversa.id, 'actions': actions})
 
 
 @api_bp.route('/chat/historico', methods=['GET'])
@@ -220,6 +391,7 @@ def chat_historico():
             'id':        c.id,
             'pergunta':  c.pergunta,
             'resposta':  c.resposta,
+            'actions':   _chat_actions(c.pergunta, user_id),
             'timestamp': c.timestamp.isoformat() if c.timestamp else None,
         }
         for c in reversed(conversas)

@@ -3,11 +3,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, Pressable, FlatList,
   KeyboardAvoidingView, Platform, ActivityIndicator,
-  StyleSheet, Animated, Easing,
+  StyleSheet, Animated, Easing, Alert,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Send, Zap } from 'lucide-react-native';
-import { chatAPI, dashboardAPI } from '../services/api';
+import { Send, Zap, ChevronRight, Check, Trash2 } from 'lucide-react-native';
+import { chatAPI, dashboardAPI, metasAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
@@ -18,10 +18,48 @@ const SUGESTOES_FALLBACK = [
   'Quanto gastei este mês?',
   'Qual a minha categoria mais cara?',
   'Tenho garantias a expirar?',
-  'Estou a cumprir as minhas metas?',
+  'Ajuda-me a criar uma meta',
 ];
 
-function Bubble({ item, userInitials }) {
+function ActionCard({ action, onAction, executing }) {
+  const isDanger = action.type === 'clear_chat';
+  const isApi = action.type === 'create_meta';
+  return (
+    <Pressable
+      onPress={() => onAction(action)}
+      disabled={executing}
+      style={({ pressed }) => [
+        s.actionCard,
+        isDanger && s.actionDanger,
+        pressed && { opacity: 0.78 },
+        executing && { opacity: 0.55 },
+      ]}
+    >
+      <View style={[s.actionIcon, isDanger && { backgroundColor: C.redDim }]}>
+        {isDanger
+          ? <Trash2 size={13} color={C.red} />
+          : isApi
+            ? <Check size={13} color={C.green} />
+            : <Zap size={13} color={C.brand} />
+        }
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[s.actionLabel, isDanger && { color: C.red }]} numberOfLines={1}>
+          {action.label}
+        </Text>
+        {!!action.description && (
+          <Text style={s.actionDesc} numberOfLines={1}>{action.description}</Text>
+        )}
+      </View>
+      {executing
+        ? <ActivityIndicator size="small" color={isDanger ? C.red : C.brand} />
+        : <ChevronRight size={14} color={C.textMid} />
+      }
+    </Pressable>
+  );
+}
+
+function Bubble({ item, userInitials, onAction, executingActionId }) {
   const isUser = item.role === 'user';
   const opacity  = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(8)).current;
@@ -47,6 +85,18 @@ function Bubble({ item, userInitials }) {
 
       <View style={[s.bubble, isUser ? s.bubbleUser : s.bubbleAI]}>
         <Text style={[s.bubbleText, isUser && { color: '#fff' }]}>{item.content}</Text>
+        {!isUser && Array.isArray(item.actions) && item.actions.length > 0 && (
+          <View style={s.actionsWrap}>
+            {item.actions.map(action => (
+              <ActionCard
+                key={action.id}
+                action={action}
+                onAction={onAction}
+                executing={executingActionId === action.id}
+              />
+            ))}
+          </View>
+        )}
       </View>
 
       {isUser && (
@@ -58,13 +108,14 @@ function Bubble({ item, userInitials }) {
   );
 }
 
-export default function ChatScreen() {
+export default function ChatScreen({ navigation }) {
   const { user } = useAuth();
   const [messages,  setMessages]  = useState([]);
   const [input,     setInput]     = useState('');
   const [sending,   setSending]   = useState(false);
   const [focused,   setFocused]   = useState(false);
   const [sugestoes, setSugestoes] = useState(SUGESTOES_FALLBACK);
+  const [executingActionId, setExecutingActionId] = useState(null);
 
   useEffect(() => {
     dashboardAPI.get().then(data => {
@@ -72,14 +123,20 @@ export default function ChatScreen() {
       const totalGasto = data.total_gasto || 0;
       const orcamento  = data.orcamento || 0;
       const pctOrc     = orcamento > 0 ? (totalGasto / orcamento) * 100 : 0;
-      const topCat     = data.categorias?.[0]?.nome;
+      const topCatData = data.categorias?.[0];
+      const topCat     = topCatData?.nome || topCatData?.categoria;
+      const topTotal   = Number(topCatData?.total || topCatData?.valor || 0);
       const numFat     = data.num_faturas || 0;
       if (totalGasto > 0) s.push(`Gastei ${totalGasto.toFixed(0)}€ este mês. Está bem?`);
       if (pctOrc >= 80) s.push(`Usei ${Math.round(pctOrc)}% do orçamento. O que cortar?`);
       if (topCat) s.push(`Qual a tendência em ${topCat}?`);
+      if (topCat && topTotal > 0) {
+        const suggestedLimit = Math.max(20, Math.ceil((topTotal * 0.9) / 10) * 10);
+        s.push(`Cria uma meta de ${topCat} de ${suggestedLimit}€`);
+      }
       if (numFat === 0) s.push('Como começo a usar a Verly?');
       else s.push('Tenho garantias a expirar?');
-      s.push('Estou a cumprir as minhas metas?');
+      s.push('Quero dividir uma despesa com amigos');
       setSugestoes(s.slice(0, 4));
     }).catch(() => {});
   }, []);
@@ -93,13 +150,64 @@ export default function ChatScreen() {
   const loadHistory = async () => {
     try {
       const d = await chatAPI.historico();
-      const msgs = (d.conversas || []).flatMap(c => [
+      const rows = d.historico || d.conversas || [];
+      const msgs = rows.flatMap(c => [
         { id: `u-${c.id}`, role: 'user',      content: c.pergunta },
-        { id: `a-${c.id}`, role: 'assistant', content: c.resposta },
+        { id: `a-${c.id}`, role: 'assistant', content: c.resposta, actions: c.actions || [] },
       ]);
       setMessages(msgs);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 100);
     } catch (_) {}
+  };
+
+  const appendAssistant = (content) => {
+    setMessages(prev => [...prev, {
+      id: `sys-${Date.now()}`,
+      role: 'assistant',
+      content,
+    }]);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+  };
+
+  const executeAction = async (action) => {
+    if (!action) return;
+
+    const run = async () => {
+      setExecutingActionId(action.id);
+      try {
+        if (action.type === 'navigate') {
+          navigation?.navigate(action.route, action.params || {});
+          return;
+        }
+
+        if (action.type === 'create_meta') {
+          const payload = action.payload || {};
+          await metasAPI.criar(payload.nome || payload.categoria, payload.limite, payload.categoria);
+          appendAssistant(`Feito. Criei a meta de ${payload.categoria} com limite de ${Number(payload.limite).toFixed(2)}€.`);
+          return;
+        }
+
+        if (action.type === 'clear_chat') {
+          await chatAPI.limpar();
+          setMessages([]);
+          return;
+        }
+      } catch (e) {
+        appendAssistant(e.message || 'Não consegui executar essa ação.');
+      } finally {
+        setExecutingActionId(null);
+      }
+    };
+
+    if (action.requires_confirmation) {
+      Alert.alert(action.label, action.description || 'Queres executar esta ação?', [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Executar', onPress: run },
+      ]);
+      return;
+    }
+
+    await run();
   };
 
   const send = async (text) => {
@@ -114,7 +222,12 @@ export default function ChatScreen() {
 
     try {
       const d = await chatAPI.enviar(msg);
-      const aiMsg = { id: `a-${Date.now()}`, role: 'assistant', content: d.resposta || d.response || '—' };
+      const aiMsg = {
+        id: `a-${Date.now()}`,
+        role: 'assistant',
+        content: d.resposta || d.response || 'Não consegui encontrar uma resposta útil.',
+        actions: d.actions || [],
+      };
       setMessages(prev => [...prev, aiMsg]);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     } catch (e) {
@@ -155,7 +268,14 @@ export default function ChatScreen() {
             </View>
           </View>
         ) : null}
-        renderItem={({ item }) => <Bubble item={item} userInitials={userInitials} />}
+        renderItem={({ item }) => (
+          <Bubble
+            item={item}
+            userInitials={userInitials}
+            onAction={executeAction}
+            executingActionId={executingActionId}
+          />
+        )}
       />
 
       {/* Sugestões (só quando vazio) */}
@@ -217,6 +337,29 @@ const s = StyleSheet.create({
     borderBottomLeftRadius: 4,
   },
   bubbleText: { fontSize: FONT.md, color: C.text, lineHeight: 21 },
+  actionsWrap: { marginTop: 10, gap: 8 },
+  actionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  actionDanger: { borderColor: `${C.red}35`, backgroundColor: C.redDim },
+  actionIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    backgroundColor: C.brandDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionLabel: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  actionDesc: { color: C.textMid, fontSize: FONT.xs, marginTop: 1 },
 
   aiAvatar: {
     width: 30, height: 30, borderRadius: 10,

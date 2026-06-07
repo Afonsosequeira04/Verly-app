@@ -26,7 +26,6 @@ const DEFAULT_PREFS = {
   mostrarGraficos: true,
   mostrarInsights: true,
   mostrarFaturas:  true,
-  mostrarSubscricoes: true,
 };
 
 // ─── Linha de definição simples ───────────────────────────────────────────────
@@ -248,7 +247,6 @@ export default function ConfiguracoesScreen({ navigation }) {
             { key: 'mostrarPrevisao',    label: 'Previsão do mês',      sub: 'Estimativa de gastos até fim do mês' },
             { key: 'mostrarGraficos',    label: 'Gráficos',             sub: 'Gastos por categoria e por mês' },
             { key: 'mostrarInsights',    label: 'Insights da IA',       sub: 'Análise automática dos teus hábitos' },
-            { key: 'mostrarSubscricoes', label: 'Alerta subscrições',   sub: 'Subscrições a desperdiçar' },
             { key: 'mostrarFaturas',     label: 'Faturas recentes',     sub: 'Últimas faturas no dashboard' },
           ].map(({ key, label, sub }, i, arr) => (
             <React.Fragment key={key}>

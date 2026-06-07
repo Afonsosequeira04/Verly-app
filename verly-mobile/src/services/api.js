@@ -526,6 +526,12 @@ export const gruposAPI = {
   convidar: (id, user_id) => apiFetch(`/grupos/${id}/convidar`, { method: 'POST', body: JSON.stringify({ user_id }) }),
   sair:     (id) => apiFetch(`/grupos/${id}/sair`, { method: 'POST' }),
 
+  despesas: (grupoId) => apiFetch(`/grupos/${grupoId}/despesas`),
+  criarDespesa: (grupoId, data) =>
+    apiFetch(`/grupos/${grupoId}/despesas`, { method: 'POST', body: JSON.stringify(data) }),
+  apagarDespesa: (grupoId, despesaId) =>
+    apiFetch(`/grupos/${grupoId}/despesas/${despesaId}`, { method: 'DELETE' }),
+
   // ── Chat de grupo ──────────────────────────────────────────────────────────
   // GET  /grupos/:id/chat?limite=50&antes_de=<msg_id>
   chatHistorico: (grupoId, params = {}) => {
@@ -555,44 +561,4 @@ export const gruposAPI = {
   // POST /grupos/:id/streak/check-in
   streakCheckIn: (grupoId) =>
     apiFetch(`/grupos/${grupoId}/streak/check-in`, { method: 'POST' }),
-};
-
-// ── Desafios ───────────────────────────────────────────────────────────────────
-
-export const desafiosAPI = {
-  // Listar desafios de um grupo
-  listar: (grupo_id) => apiFetch(`/grupos/${grupo_id}/desafios`),
-
-  // Criar desafio manual num grupo
-  criar: (grupo_id, data) =>
-    apiFetch(`/grupos/${grupo_id}/desafios`, { method: 'POST', body: JSON.stringify(data) }),
-
-  // Criar desafio gerado por IA para o grupo
-  // POST /grupos/:id/desafios/ia   { tipo?, dificuldade? }
-  criarComIA: (grupo_id, opcoes = {}) =>
-    apiFetch(`/grupos/${grupo_id}/desafios/ia`, { method: 'POST', body: JSON.stringify(opcoes) }),
-
-  // Detalhe + ranking de um desafio
-  detalhe: (id) => apiFetch(`/desafios/${id}`),
-
-  // Atualizar progresso (incrementa ou define valor)
-  // POST /desafios/:id/progresso   { valor? }
-  progresso: (id, valor = null) =>
-    apiFetch(`/desafios/${id}/progresso`, {
-      method: 'POST',
-      body: JSON.stringify(valor !== null ? { valor } : {}),
-    }),
-
-  // Terminar/fechar desafio (dono ou admin do grupo)
-  terminar: (id) => apiFetch(`/desafios/${id}/terminar`, { method: 'POST' }),
-};
-
-// ── Recompensas & Badges ───────────────────────────────────────────────────────
-
-export const recompensasAPI = {
-  // Todas as recompensas do utilizador (badges, XP, histórico de desafios)
-  listar: () => apiFetch('/recompensas'),
-
-  // Apenas as recompensas desbloqueadas recentemente (para notificação/badge novo)
-  novas: () => apiFetch('/recompensas/novas'),
 };

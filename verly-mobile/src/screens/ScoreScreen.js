@@ -10,7 +10,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert, Platform,
+  TouchableOpacity, ActivityIndicator, Alert,
   Dimensions, Modal,
 } from 'react-native';
 import * as Location from 'expo-location';
@@ -22,6 +22,7 @@ import Animated, {
 import { MotiView } from 'moti';
 import { scoreAPI } from '../services/api';
 import { COLORS } from '../constants/theme';
+import { getMapComponents } from '../utils/maps';
 import {
   ScoreGauge, AnimatedBar, useToast, PressCard,
   AnimatedListItem, ShimmerCard,
@@ -106,12 +107,10 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
 
   React.useEffect(() => {
     if (!visible) return;
-    try {
-      const maps = require('react-native-maps');
-      setMapView(() => maps.default);
-      setMarker(() => maps.Marker);
-      setMapReady(true);
-    } catch { setMapReady(false); }
+    const maps = getMapComponents();
+    setMapView(() => maps.MapView);
+    setMarker(() => maps.Marker);
+    setMapReady(!!maps.supported);
   }, [visible]);
 
   return (
@@ -202,7 +201,7 @@ const m = StyleSheet.create({
 
 // ── Ecrã principal ────────────────────────────────────────────────────────────
 
-export default function ScoreScreen() {
+export default function ScoreScreen({ route }) {
   const [item, setItem]           = useState('');
   const [preco, setPreco]         = useState('');
   const [categoria, setCategoria] = useState(CATEGORIAS[0]);
@@ -217,6 +216,17 @@ export default function ScoreScreen() {
 
   const scrollRef = useRef(null);
   const { showToast, ToastComponent } = useToast();
+
+  useEffect(() => {
+    const prefill = route?.params?.prefill;
+    if (!prefill) return;
+
+    if (prefill.item) setItem(String(prefill.item));
+    if (prefill.preco != null) setPreco(String(prefill.preco).replace('.', ','));
+    if (prefill.categoria && CATEGORIAS.includes(prefill.categoria)) {
+      setCategoria(prefill.categoria);
+    }
+  }, [route?.params?.prefill]);
 
   // ── Analisar ──────────────────────────────────────────────────────────────
 

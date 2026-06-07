@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NavigationContainer }      from '@react-navigation/native';
 import { createStackNavigator }     from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { LinearGradient }           from 'expo-linear-gradient';
 import Svg, {
   Path, Line, Polyline, Circle, Rect,
 } from 'react-native-svg';
@@ -22,7 +23,6 @@ import DashboardScreen         from '../screens/DashboardScreen';
 import FaturasScreen           from '../screens/FaturasScreen';
 import FaturaDetalheScreen     from '../screens/FaturaDetalheScreen';
 import ChatScreen              from '../screens/ChatScreen';
-import SubscricoesScreen       from '../screens/SubscricoesScreen';
 import MinhasSubscricoesScreen from '../screens/MinhasSubscricoesScreen';
 import PerfilScreen            from '../screens/PerfilScreen';
 import NotificacoesScreen      from '../screens/NotificacoesScreen';
@@ -44,26 +44,9 @@ import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
 import OpenBankingScreen       from '../screens/OpenBankingScreen';
 import GruposScreen            from '../screens/GruposScreen';
 import GrupoDetalheScreen      from '../screens/GrupoDetalheScreen';
-import DesafioDetalheScreen    from '../screens/DesafioDetalheScreen';
-import RecompensasScreen        from '../screens/RecompensasScreen';
+import { COLORS as THEME_COLORS, RADIUS } from '../constants/theme';
 
-export const COLORS = {
-  brand:    '#7C6FE0',
-  brandMid: '#9D93E8',
-  brandDim: 'rgba(124,111,224,0.12)',
-  bg:       '#080810',
-  surface:  '#0F0F1A',
-  surface2: '#161624',
-  surface3: '#1E1E30',
-  border:   'rgba(255,255,255,0.06)',
-  borderHi: 'rgba(255,255,255,0.11)',
-  text:     '#EEEEF8',
-  textMid:  '#8888B0',
-  textSub:  '#50507A',
-  green:    '#00D68F',
-  red:      '#FF4D6D',
-  yellow:   '#FFB300',
-};
+export const COLORS = THEME_COLORS;
 
 const C = COLORS;
 
@@ -299,26 +282,11 @@ function MenuScreen({ navigation }) {
       ],
     },
     {
-      label: 'Social',
-      items: [
-        { label: 'Amigos',               screen: 'Amigos',      icon: 'users'    },
-        { label: 'Playlists de compras',  screen: 'CriarEm',    icon: 'playlist' },
-      ],
-    },
-    {
-      label: 'Análise',
+      label: 'Organização',
       items: [
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
-        { label: 'Estatísticas', screen: 'Estatisticas', icon: 'barchart'  },
-        { label: 'Relatório',    screen: 'Relatorio',    icon: 'filereport'},
-      ],
-    },
-    {
-      label: 'Ferramentas',
-      items: [
-        { label: 'Score de compra', screen: 'Score',            icon: 'star'   },
-        { label: 'As minhas subscrições', screen: 'MinhasSubscricoes', icon: 'shield' },
-        { label: 'Premium',           screen: 'Premium',           icon: 'star'   },
+        { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
+        { label: 'Dividir despesas', screen: 'Grupos',    icon: 'users'     },
       ],
     },
     {
@@ -442,7 +410,7 @@ const ms = StyleSheet.create({
 // ─── Tab Bar customizada ──────────────────────────────────────────────────────
 function CustomTabBar({ state, descriptors, navigation }) {
   return (
-    <View style={tb.container}>
+    <LinearGradient colors={['rgba(13,18,32,0.96)', 'rgba(5,8,18,0.98)']} style={tb.container}>
       {state.routes.map((route, idx) => {
         const focused = state.index === idx;
         const { options } = descriptors[route.key];
@@ -459,36 +427,83 @@ function CustomTabBar({ state, descriptors, navigation }) {
           if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
         };
 
-        const color = focused ? C.brand : C.textMid;
+        const color = focused ? '#fff' : C.textMid;
 
         return (
           <Pressable key={route.key} onPress={onPress} style={tb.tab}>
-            <Animated.View style={[tb.tabInner, { transform: [{ scale }] }, focused && tb.tabActive]}>
-              <TabIcon name={route.name} color={color} focused={focused} />
+            <Animated.View style={[tb.tabInner, { transform: [{ scale }] }, focused && tb.tabInnerActive]}>
+              {focused ? (
+                <LinearGradient colors={C.gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={tb.activeIconBg}>
+                  <TabIcon name={route.name} color={color} focused={focused} />
+                </LinearGradient>
+              ) : (
+                <View style={tb.inactiveIconBg}>
+                  <TabIcon name={route.name} color={color} focused={focused} />
+                </View>
+              )}
             </Animated.View>
-            <Text style={[tb.label, focused && { color: C.brand }]}>{label}</Text>
+            <Text style={[tb.label, focused && tb.labelActive]}>{label}</Text>
           </Pressable>
         );
       })}
-    </View>
+    </LinearGradient>
   );
 }
 
 const tb = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    backgroundColor: C.surface,
-    borderTopWidth: 1, borderTopColor: C.border,
-    paddingBottom: 20, paddingTop: 10,
-    paddingHorizontal: 8,
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+    paddingBottom: 20,
+    paddingTop: 10,
+    paddingHorizontal: 10,
   },
-  tab:       { flex: 1, alignItems: 'center', gap: 4 },
-  tabInner:  {
-    width: 42, height: 36, borderRadius: 12,
-    justifyContent: 'center', alignItems: 'center',
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 5,
   },
-  tabActive: { backgroundColor: C.brandDim },
-  label:     { fontSize: 10, fontWeight: '700', color: C.textMid, letterSpacing: 0.2 },
+  tabInner: {
+    width: 44,
+    height: 36,
+    borderRadius: RADIUS.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tabInnerActive: {
+    shadowColor: C.brand,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.26,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  activeIconBg: {
+    width: 42,
+    height: 34,
+    borderRadius: RADIUS.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.20)',
+  },
+  inactiveIconBg: {
+    width: 42,
+    height: 34,
+    borderRadius: RADIUS.md,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  label: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: C.textMid,
+    letterSpacing: 0,
+  },
+  labelActive: {
+    color: C.text,
+    fontWeight: '900',
+  },
 });
 
 // ─── Tabs principais ──────────────────────────────────────────────────────────
@@ -561,7 +576,6 @@ function MainStackNav() {
       <MainStack.Screen name="FaturaDetalhe" component={FaturaDetalheScreen} options={{ ...hdr, headerTitle: 'Fatura' }} />
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...hdr, headerTitle: 'Notificações' }} />
       <MainStack.Screen name="Metas"         component={MetasScreen}         options={{ ...hdr, headerTitle: 'Metas' }} />
-      <MainStack.Screen name="Premium"        component={SubscricoesScreen}        options={{ ...hdr, headerTitle: 'Premium' }} />
       <MainStack.Screen name="MinhasSubscricoes" component={MinhasSubscricoesScreen} options={{ ...hdr, headerTitle: 'Subscrições' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...hdr, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Score de compra' }} />
@@ -579,8 +593,6 @@ function MainStackNav() {
       <MainStack.Screen name="FinancialGraph"   component={FinancialGraphScreen}   options={{ headerShown: false }} />
       <MainStack.Screen name="Grupos"          component={GruposScreen}          options={{ headerShown: false }} />
       <MainStack.Screen name="GrupoDetalhe"    component={GrupoDetalheScreen}    options={{ headerShown: false }} />
-      <MainStack.Screen name="DesafioDetalhe"  component={DesafioDetalheScreen}  options={{ headerShown: false }} />
-      <MainStack.Screen name="Recompensas"     component={RecompensasScreen}     options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

@@ -1,6 +1,6 @@
 # app/models_social.py — Modelos para Grupos, Desafios, Recompensas, Chat, Feed, Streaks
 
-from datetime import datetime
+from datetime import datetime, date
 from app import db
 
 
@@ -33,6 +33,7 @@ class Grupo(db.Model):
     desafios = db.relationship('Desafio', backref='grupo', lazy='dynamic')
     mensagens = db.relationship('MensagemGrupo', backref='grupo', lazy='dynamic')
     atividades = db.relationship('AtividadeGrupo', backref='grupo', lazy='dynamic')
+    despesas = db.relationship('DespesaGrupo', backref='grupo', lazy='dynamic')
 
     def to_dict(self, user_id=None):
         membros_list = []
@@ -53,6 +54,84 @@ class Grupo(db.Model):
             'criado_em': self.criado_em.isoformat(),
             'sou_admin': user_id == self.criador_id,
             'streak_dias': self.streak_dias or 0,
+        }
+
+
+# ── Despesas partilhadas ──────────────────────────────────────────────────────
+
+class DespesaGrupo(db.Model):
+    __tablename__ = 'despesas_grupo'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    grupo_id      = db.Column(db.Integer, db.ForeignKey('grupos.id'), nullable=False)
+    pagador_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    criado_por_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    descricao     = db.Column(db.String(180), nullable=False)
+    categoria     = db.Column(db.String(80), default='Geral')
+    valor         = db.Column(db.Float, nullable=False)
+    data          = db.Column(db.Date, nullable=False, default=date.today)
+    notas         = db.Column(db.String(500))
+    ativo         = db.Column(db.Boolean, default=True)
+    criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    pagador = db.relationship('User', foreign_keys=[pagador_id])
+    criado_por = db.relationship('User', foreign_keys=[criado_por_id])
+    participantes = db.relationship(
+        'DespesaGrupoParticipante',
+        backref='despesa',
+        lazy='dynamic',
+        cascade='all, delete-orphan',
+    )
+
+    def to_dict(self, user_id=None):
+        participantes = self.participantes.all()
+        minha_parte = next((p.valor for p in participantes if p.user_id == user_id), 0)
+        return {
+            'id': self.id,
+            'grupo_id': self.grupo_id,
+            'descricao': self.descricao,
+            'categoria': self.categoria or 'Geral',
+            'valor': round(float(self.valor or 0), 2),
+            'data': self.data.isoformat() if self.data else None,
+            'notas': self.notas,
+            'pagador_id': self.pagador_id,
+            'pagador': {
+                'id': self.pagador.id,
+                'nome': self.pagador.nome,
+                'avatar': self.pagador.avatar,
+            } if self.pagador else None,
+            'criado_por_id': self.criado_por_id,
+            'participantes': [p.to_dict() for p in participantes],
+            'total_participantes': len(participantes),
+            'minha_parte': round(float(minha_parte or 0), 2),
+            'eu_paguei': self.pagador_id == user_id,
+            'pode_apagar': self.criado_por_id == user_id or self.pagador_id == user_id,
+            'criado_em': self.criado_em.isoformat() if self.criado_em else None,
+        }
+
+
+class DespesaGrupoParticipante(db.Model):
+    __tablename__ = 'despesa_grupo_participantes'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    despesa_id = db.Column(db.Integer, db.ForeignKey('despesas_grupo.id'), nullable=False)
+    user_id    = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    valor      = db.Column(db.Float, nullable=False)
+    liquidado  = db.Column(db.Boolean, default=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (db.UniqueConstraint('despesa_id', 'user_id'),)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'nome': self.user.nome if self.user else '?',
+            'avatar': self.user.avatar if self.user else None,
+            'valor': round(float(self.valor or 0), 2),
+            'liquidado': bool(self.liquidado),
         }
 
 

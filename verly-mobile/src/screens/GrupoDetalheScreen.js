@@ -1,578 +1,811 @@
 // src/screens/GrupoDetalheScreen.js
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, FlatList, Pressable, TextInput,
+  View, Text, ScrollView, Pressable, TextInput,
   Alert, ActivityIndicator, StyleSheet, RefreshControl,
   KeyboardAvoidingView, Platform, Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { gruposAPI, desafiosAPI } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import { formatMoney } from '../utils/money';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
+import { gruposAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { COLORS, RADIUS, FONT, SPACE, SHADOWS } from '../constants/theme';
+import { formatMoney } from '../utils/money';
+
 const C = COLORS;
-const TABS = ['Feed', 'Chat', 'Desafios', 'Streak'];
-const REACAO_EMOJIS = ['👀', '🔥', '💸', '💪', '😅', '🏆'];
+const TABS = ['Resumo', 'Despesas', 'Acertos'];
+const CATEGORIAS = ['Geral', 'Casa', 'Viagem', 'Supermercado', 'Restaurante', 'Transporte'];
+
+const initials = (name = '') =>
+  name.split(' ').slice(0, 2).map(part => part[0] || '').join('').toUpperCase() || '?';
+
+const parseAmount = (value) => Number(String(value || '').replace(',', '.'));
+
+const formatDate = (value) => {
+  if (!value) return '';
+  try {
+    return new Date(value).toLocaleDateString('pt-PT', { day: '2-digit', month: 'short' });
+  } catch (_) {
+    return value;
+  }
+};
+
+function Avatar({ nome, size = 34, accent = C.brand }) {
+  return (
+    <View style={[styles.avatar, {
+      width: size,
+      height: size,
+      borderRadius: size * 0.34,
+      backgroundColor: `${accent}18`,
+      borderColor: `${accent}55`,
+    }]}>
+      <Text style={[styles.avatarText, { fontSize: size * 0.32, color: accent }]}>{initials(nome)}</Text>
+    </View>
+  );
+}
+
+function EmptyState({ title, subtitle, action, onPress }) {
+  return (
+    <Animated.View entering={FadeIn} style={styles.empty}>
+      <View style={styles.emptyIllustration}>
+        <LinearGradient colors={['rgba(139,92,246,0.26)', 'rgba(34,212,253,0.08)']} style={styles.emptyShapeBack} />
+        <LinearGradient colors={['rgba(255,255,255,0.13)', 'rgba(255,255,255,0.05)']} style={styles.emptyShape}>
+          <Text style={styles.emptyIcon}>€</Text>
+          <View style={styles.emptyLine} />
+          <View style={[styles.emptyLine, { width: 36, opacity: 0.55 }]} />
+        </LinearGradient>
+      </View>
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptySub}>{subtitle}</Text>
+      {!!action && (
+        <Pressable onPress={onPress} style={({ pressed }) => [styles.primaryBtn, pressed && styles.pressed]}>
+          <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryBtnGradient}>
+            <Text style={styles.primaryBtnText}>{action}</Text>
+          </LinearGradient>
+        </Pressable>
+      )}
+    </Animated.View>
+  );
+}
 
 export default function GrupoDetalheScreen({ route, navigation }) {
   const { grupoId } = route.params;
+  const { user } = useAuth();
+  const currentUserId = Number(user?.id);
 
-  const [grupo, setGrupo]             = useState(null);
-  const [tab, setTab]                 = useState('Feed');
-  const [loading, setLoading]         = useState(true);
-  const [refreshing, setRefreshing]   = useState(false);
-  const [feed, setFeed]               = useState([]);
-  const [mensagens, setMensagens]     = useState([]);
-  const [texto, setTexto]             = useState('');
-  const [enviando, setEnviando]       = useState(false);
-  const [mostrarReacoes, setMostrarReacoes] = useState(null);
-  const chatRef = useRef(null);
-  const [desafios, setDesafios]       = useState([]);
-  const [modalDesafio, setModalDesafio] = useState(false);
-  const [sugestaoIA, setSugestaoIA]   = useState(null);
-  const [loadingIA, setLoadingIA]     = useState(false);
-  const [formDesafio, setFormDesafio] = useState({
-    titulo: '', descricao: '', tipo: 'gastar_menos',
-    valor_alvo: '', dias: '14', recompensa: '🏆 Vencedor',
+  const [grupo, setGrupo] = useState(null);
+  const [resumo, setResumo] = useState(null);
+  const [despesas, setDespesas] = useState([]);
+  const [tab, setTab] = useState('Resumo');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [modalDespesa, setModalDespesa] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    descricao: '',
+    valor: '',
+    categoria: 'Geral',
+    pagador_id: null,
+    participantes_ids: [],
+    notas: '',
   });
-  const [streakInfo, setStreakInfo]   = useState(null);
-  const [fazendoCheckIn, setFazendoCheckIn] = useState(false);
-  const [agora, setAgora]             = useState(new Date());
 
-  useEffect(() => {
-    const interval = setInterval(() => setAgora(new Date()), 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const membros = grupo?.membros || [];
+  const resumoSeguro = resumo || {
+    total_gasto: 0,
+    total_despesas: 0,
+    meu_saldo: 0,
+    eu_devo: 0,
+    devem_me: 0,
+    saldos: [],
+    acertos: [],
+  };
 
-  const carregar = useCallback(async () => {
+  const minhaLinha = useMemo(
+    () => (resumoSeguro.saldos || []).find(item => item.user_id === currentUserId),
+    [resumoSeguro.saldos, currentUserId],
+  );
+
+  const carregar = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setLoading(true);
     try {
-      const [g, f, d, str] = await Promise.all([
+      const [grupoData, despesasData] = await Promise.all([
         gruposAPI.detalhe(grupoId),
-        gruposAPI.feed(grupoId),
-        desafiosAPI.listar(grupoId),
-        gruposAPI.streak(grupoId),
+        gruposAPI.despesas(grupoId),
       ]);
-      setGrupo(g);
-      setFeed(Array.isArray(f) ? f : []);
-      setDesafios(Array.isArray(d) ? d : []);
-      setStreakInfo(str);
+      setGrupo(grupoData);
+      setDespesas(Array.isArray(despesasData?.despesas) ? despesasData.despesas : []);
+      setResumo(despesasData?.resumo || null);
     } catch (e) {
-      Alert.alert('Erro', e.message);
+      Alert.alert('Erro', e.message || 'Não foi possível carregar o grupo.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [grupoId]);
 
-  const carregarChat = useCallback(async () => {
-    try {
-      const msgs = await gruposAPI.chatHistorico(grupoId);
-      setMensagens(Array.isArray(msgs) ? msgs : []);
-      setTimeout(() => chatRef.current?.scrollToEnd({ animated: false }), 100);
-    } catch (e) {}
-  }, [grupoId]);
-
   useFocusEffect(useCallback(() => { carregar(); }, [carregar]));
 
-  useEffect(() => {
-    if (tab === 'Chat') {
-      carregarChat();
-      const interval = setInterval(carregarChat, 5000);
-      return () => clearInterval(interval);
-    }
-  }, [tab, carregarChat]);
-
-  const enviarMensagem = async () => {
-    if (!texto.trim() || enviando) return;
-    setEnviando(true);
-    try {
-      const msg = await gruposAPI.chatEnviar(grupoId, texto.trim());
-      setMensagens(prev => [...prev, msg]);
-      setTexto('');
-      setTimeout(() => chatRef.current?.scrollToEnd({ animated: true }), 100);
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setEnviando(false);
-    }
+  const abrirNovaDespesa = () => {
+    const ids = membros.map(m => m.id);
+    const payer = ids.includes(currentUserId) ? currentUserId : ids[0];
+    setForm({
+      descricao: '',
+      valor: '',
+      categoria: 'Geral',
+      pagador_id: payer || null,
+      participantes_ids: ids,
+      notas: '',
+    });
+    setModalDespesa(true);
   };
 
-  const reagir = async (msg_id, emoji) => {
-    try {
-      const updated = await gruposAPI.chatReagir(grupoId, msg_id, emoji);
-      setMensagens(prev => prev.map(m => m.id === msg_id ? updated : m));
-    } catch (e) {}
-    setMostrarReacoes(null);
+  const toggleParticipante = (id) => {
+    setForm(prev => {
+      const selected = prev.participantes_ids.includes(id);
+      return {
+        ...prev,
+        participantes_ids: selected
+          ? prev.participantes_ids.filter(item => item !== id)
+          : [...prev.participantes_ids, id],
+      };
+    });
   };
 
-  const pedirDesafioIA = async () => {
-    setLoadingIA(true);
+  const guardarDespesa = async () => {
+    const valor = parseAmount(form.valor);
+    if (!form.descricao.trim()) {
+      Alert.alert('Falta a descrição', 'Dá um nome simples à despesa.');
+      return;
+    }
+    if (!valor || valor <= 0) {
+      Alert.alert('Valor inválido', 'Indica um valor maior que zero.');
+      return;
+    }
+    if (!form.pagador_id) {
+      Alert.alert('Falta o pagador', 'Escolhe quem pagou esta despesa.');
+      return;
+    }
+    if (!form.participantes_ids.length) {
+      Alert.alert('Sem participantes', 'Escolhe pelo menos uma pessoa para dividir a despesa.');
+      return;
+    }
+
+    setSaving(true);
     try {
-      const res = await desafiosAPI.criarComIA(grupoId);
-      setSugestaoIA(res.sugestao);
-      const sg = res.sugestao;
-      setFormDesafio({
-        titulo: sg.titulo || '', descricao: sg.descricao || '',
-        tipo: sg.tipo || 'gastar_menos', valor_alvo: String(sg.valor_alvo || ''),
-        dias: String(sg.dias || '14'), recompensa: sg.recompensa || '🏆',
+      await gruposAPI.criarDespesa(grupoId, {
+        descricao: form.descricao.trim(),
+        valor,
+        categoria: form.categoria,
+        pagador_id: form.pagador_id,
+        participantes_ids: form.participantes_ids,
+        notas: form.notas.trim(),
+        data: new Date().toISOString().slice(0, 10),
       });
+      setModalDespesa(false);
+      await carregar(true);
     } catch (e) {
-      Alert.alert('Erro IA', e.message);
+      Alert.alert('Erro', e.message || 'Não foi possível guardar a despesa.');
     } finally {
-      setLoadingIA(false);
+      setSaving(false);
     }
   };
 
-  const criarDesafio = async () => {
-    if (!formDesafio.titulo.trim()) { Alert.alert('Falta o título'); return; }
-    try {
-      const inicio = new Date();
-      const fim    = new Date(inicio.getTime() + parseInt(formDesafio.dias || 14) * 86400000);
-      await desafiosAPI.criar(grupoId, {
-        titulo: formDesafio.titulo, descricao: formDesafio.descricao,
-        tipo: formDesafio.tipo, valor_alvo: parseFloat(formDesafio.valor_alvo) || null,
-        inicio: inicio.toISOString(), fim: fim.toISOString(),
-        recompensa: formDesafio.recompensa, gerado_ia: !!sugestaoIA,
-      });
-      setModalDesafio(false);
-      setSugestaoIA(null);
-      await carregar();
-      Alert.alert('✅ Desafio criado!', 'Todos os membros foram adicionados.');
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    }
-  };
-
-  const fazerCheckIn = async () => {
-    setFazendoCheckIn(true);
-    try {
-      const res = await gruposAPI.streakCheckIn(grupoId);
-      setStreakInfo(prev => ({ ...prev, ...res, eu_cumpri_hoje: true }));
-      if (res.streak_aumentou) {
-        Alert.alert('🔥 Streak do grupo!', `${res.streak_dias} dias seguidos!`);
-      } else {
-        Alert.alert('✅ Check-in feito!', `${res.check_ins_hoje}/${res.total_membros} membros cumpriram hoje.`);
-      }
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setFazendoCheckIn(false);
-    }
-  };
-
-  const formatarContagem = (segundos) => {
-    if (segundos <= 0) return 'Terminado';
-    const d = Math.floor(segundos / 86400);
-    const h = Math.floor((segundos % 86400) / 3600);
-    const m = Math.floor((segundos % 3600) / 60);
-    const sec = segundos % 60;
-    if (d > 0) return `${d}d ${h}h ${m}m`;
-    return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`;
-  };
-
-  const tipoDesafioLabel = (tipo) => ({
-    gastar_menos: 'Gastar menos',
-    categoria_limite: 'Limite por categoria',
-    poupar_valor: 'Poupar valor',
-    streak_dias: 'Streak',
-  }[tipo] || 'Desafio');
-
-  const desafioProgress = (d) => {
-    const alvo = Number(d.valor_alvo || 0);
-    const progresso = Number(d.meu_progresso || d.ranking?.[0]?.progresso || 0);
-    if (alvo <= 0) return { pct: d.ranking?.length ? 55 : 8, progresso, alvo };
-    return { pct: Math.min(100, Math.max(5, (progresso / alvo) * 100)), progresso, alvo };
+  const apagarDespesa = (despesa) => {
+    Alert.alert('Remover despesa', `Remover "${despesa.descricao}" do grupo?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Remover',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await gruposAPI.apagarDespesa(grupoId, despesa.id);
+            await carregar(true);
+          } catch (e) {
+            Alert.alert('Erro', e.message || 'Não foi possível remover a despesa.');
+          }
+        },
+      },
+    ]);
   };
 
   if (loading) {
-    return <View style={s.center}><ActivityIndicator size="large" color={C.brand} /></View>;
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={C.brand} />
+      </View>
+    );
   }
+
+  const saldo = Number(resumoSeguro.meu_saldo || 0);
+  const saldoLabel = saldo > 0.009
+    ? 'Tens a receber'
+    : saldo < -0.009
+      ? 'Tens a pagar'
+      : 'Está tudo certo';
+  const saldoColor = saldo > 0.009 ? C.green : saldo < -0.009 ? C.red : C.text;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={s.container}>
+      <View style={styles.root}>
+        <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
+        <View style={styles.decorOrb} />
+        <View style={styles.decorCard} />
 
-        {/* Header */}
-        <View style={s.header}>
-          <Pressable onPress={() => navigation.goBack()} style={s.backBtn}>
-            <Text style={s.backTxt}>←</Text>
+        <View style={styles.header}>
+          <Pressable onPress={() => navigation.goBack()} style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}>
+            <Text style={styles.backTxt}>‹</Text>
           </Pressable>
-          <Text style={s.headerEmoji}>{grupo?.emoji}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={s.headerNome}>{grupo?.nome}</Text>
-            <Text style={s.headerSub}>{grupo?.total_membros} membros · 🔥 {grupo?.streak_dias || 0} dias</Text>
+          <View style={styles.groupIcon}>
+            <Text style={styles.groupEmoji}>{grupo?.emoji || '€'}</Text>
           </View>
-          <Pressable onPress={() => setModalDesafio(true)} style={s.btnNovo}>
-            <Text style={s.btnNovoTxt}>+ Desafio</Text>
+          <View style={styles.headerCopy}>
+            <Text style={styles.headerTitle} numberOfLines={1}>{grupo?.nome || 'Grupo'}</Text>
+            <Text style={styles.headerSub}>{grupo?.total_membros || membros.length} membros · contas partilhadas</Text>
+          </View>
+          <Pressable onPress={abrirNovaDespesa} style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}>
+            <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.addGradient}>
+              <Text style={styles.addTxt}>+ Despesa</Text>
+            </LinearGradient>
           </Pressable>
         </View>
 
-        {/* Tabs */}
-        <View style={s.tabs}>
-          {TABS.map(t => (
-            <Pressable key={t} onPress={() => setTab(t)} style={[s.tab, tab === t && s.tabAtivo]}>
-              <Text style={[s.tabTxt, tab === t && s.tabTxtAtivo]}>{t}</Text>
+        <View style={styles.tabs}>
+          {TABS.map(item => (
+            <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}>
+              <Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item}</Text>
             </Pressable>
           ))}
         </View>
 
-        {/* ── Feed ── */}
-        {tab === 'Feed' && (
-          <ScrollView
-            style={{ flex: 1 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); carregar(); }} tintColor={C.brand} />}
-            contentContainerStyle={{ padding: SPACE.md }}
-          >
-            {feed.length === 0 && (
-              <Text style={s.vazio}>Ainda não há atividade. Cria um desafio!</Text>
-            )}
-            {feed.map((item, i) => (
-              <Animated.View key={item.id} entering={FadeInDown.delay(i * 50)} style={s.feedCard}>
-                <Text style={s.feedEmoji}>{item.emoji}</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.feedDesc}>{item.descricao}</Text>
-                  <Text style={s.feedData}>
-                    {new Date(item.criada_em).toLocaleString('pt-PT', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                  </Text>
-                </View>
-              </Animated.View>
-            ))}
-          </ScrollView>
-        )}
-
-        {/* ── Chat ── */}
-        {tab === 'Chat' && (
-          <View style={{ flex: 1 }}>
-            <FlatList
-              ref={chatRef}
-              data={mensagens}
-              keyExtractor={m => String(m.id)}
-              contentContainerStyle={{ padding: SPACE.md }}
-              renderItem={({ item }) => (
-                <View style={[s.msgRow, item.minha && s.msgRowMinha]}>
-                  {!item.minha && (
-                    <View style={s.msgAvatar}>
-                      <Text style={{ fontSize: 16, color: C.text }}>{item.nome_autor?.[0]?.toUpperCase()}</Text>
-                    </View>
-                  )}
-                  <Pressable onLongPress={() => setMostrarReacoes(item.id)} style={[s.msgBubble, item.minha && s.msgBubbleMinha]}>
-                    {!item.minha && <Text style={s.msgNome}>{item.nome_autor}</Text>}
-                    <Text style={[s.msgTexto, item.minha && { color: '#fff' }]}>{item.texto}</Text>
-                    <Text style={[s.msgHora, item.minha && { color: 'rgba(255,255,255,0.6)' }]}>
-                      {new Date(item.enviada_em).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
-                    </Text>
-                    {Object.keys(item.reacoes || {}).length > 0 && (
-                      <View style={s.reacoesRow}>
-                        {Object.entries(item.reacoes).map(([emoji, users]) => (
-                          <Pressable key={emoji} onPress={() => reagir(item.id, emoji)} style={s.reacaoChip}>
-                            <Text style={{ fontSize: 13 }}>{emoji} {users.length}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    )}
-                  </Pressable>
-                </View>
-              )}
-              onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
-            />
-            {mostrarReacoes && (
-              <View style={s.reacoesBar}>
-                {REACAO_EMOJIS.map(e => (
-                  <Pressable key={e} onPress={() => reagir(mostrarReacoes, e)} style={s.reacaoBtnBar}>
-                    <Text style={{ fontSize: 24 }}>{e}</Text>
-                  </Pressable>
-                ))}
-                <Pressable onPress={() => setMostrarReacoes(null)} style={s.reacaoBtnBar}>
-                  <Text style={{ fontSize: 18, color: C.textMid }}>✕</Text>
-                </Pressable>
-              </View>
-            )}
-            <View style={s.inputRow}>
-              <TextInput
-                style={s.input}
-                value={texto}
-                onChangeText={setTexto}
-                placeholder="Mensagem..."
-                placeholderTextColor={C.textMid}
-                multiline
-              />
-              <Pressable onPress={enviarMensagem} style={[s.sendBtn, enviando && { opacity: 0.5 }]}>
-                {enviando
-                  ? <ActivityIndicator size="small" color="#fff" />
-                  : <Text style={s.sendTxt}>↑</Text>
-                }
-              </Pressable>
-            </View>
-          </View>
-        )}
-
-        {/* ── Desafios ── */}
-        {tab === 'Desafios' && (
-          <ScrollView
-            style={{ flex: 1 }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); carregar(); }} tintColor={C.brand} />}
-            contentContainerStyle={{ padding: SPACE.md }}
-          >
-            {desafios.length === 0 && (
-              <View style={s.vazioCard}>
-                <Text style={{ fontSize: 40, textAlign: 'center' }}>!</Text>
-                <Text style={s.vazioTxt}>Sem desafios ainda.</Text>
-                <Text style={s.vazioSub}>Cria um desafio baseado nos gastos reais do grupo.</Text>
-                <View style={s.emptyActions}>
-                  <Pressable onPress={() => setModalDesafio(true)} style={s.emptyPrimary}>
-                    <Text style={s.emptyPrimaryTxt}>Criar desafio</Text>
-                  </Pressable>
-                  <Pressable onPress={() => { setModalDesafio(true); setTimeout(pedirDesafioIA, 80); }} style={s.emptyGhost}>
-                    <Text style={s.emptyGhostTxt}>Sugerir com IA</Text>
-                  </Pressable>
-                </View>
-              </View>
-            )}
-            {desafios.map((d, i) => {
-              const fim = new Date(d.fim);
-              const segsRestantes = Math.max(0, Math.floor((fim - agora) / 1000));
-              const terminado = d.estado === 'terminado';
-              const prog = desafioProgress(d);
-              const leader = d.ranking?.[0];
-              return (
-                <Animated.View key={d.id} entering={FadeInDown.delay(i * 60)}>
-                  <Pressable
-                    style={[s.desafioCard, terminado && { opacity: 0.6 }]}
-                    onPress={() => navigation.navigate('DesafioDetalhe', { desafio_id: d.id })}
-                  >
-                    <View style={s.desafioTop}>
-                      <Text style={s.desafioTitulo}>{d.titulo}</Text>
-                      {d.gerado_ia && <Text style={s.iaBadge}>🤖 IA</Text>}
-                    </View>
-                    {!!d.descricao && <Text style={s.desafioDesc} numberOfLines={2}>{d.descricao}</Text>}
-                    <View style={s.desafioMetaRow}>
-                      <Text style={s.desafioChip}>{tipoDesafioLabel(d.tipo)}</Text>
-                      <Text style={s.desafioChip}>{d.total_participantes || d.ranking?.length || 0} membros</Text>
-                      {!!d.valor_alvo && <Text style={s.desafioChip}>{formatMoney(d.valor_alvo, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>}
-                    </View>
-                    {!terminado && (
-                      <View style={s.countdownRow}>
-                        <Text style={s.countdownTxt}>⏱️ {formatarContagem(segsRestantes)}</Text>
-                      </View>
-                    )}
-                    {terminado && <Text style={s.terminadoTxt}>🏁 Terminado</Text>}
-                    <View style={s.progressHead}>
-                      <Text style={s.progressLabel}>O teu progresso</Text>
-                      <Text style={s.progressValue}>
-                        {formatMoney(prog.progresso, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); carregar(true); }} tintColor={C.brand} />}
+        >
+          {tab === 'Resumo' && (
+            <>
+              <Animated.View entering={FadeInDown.delay(40)} style={styles.balanceCard}>
+                <LinearGradient colors={C.gradients.card} style={styles.balanceGradient}>
+                  <View style={styles.balanceTop}>
+                    <View>
+                      <Text style={styles.kicker}>O teu saldo</Text>
+                      <Text style={[styles.balanceValue, { color: saldoColor }]}>
+                        {formatMoney(Math.abs(saldo), 'EUR')}
                       </Text>
                     </View>
-                    <View style={s.progressTrack}>
-                      <View style={[s.progressFill, { width: `${prog.pct}%` }]} />
+                    <View style={[styles.balanceBadge, { backgroundColor: saldoColor === C.red ? C.redDim : saldoColor === C.green ? C.greenDim : C.glassHi }]}>
+                      <Text style={[styles.balanceBadgeTxt, { color: saldoColor }]}>{saldoLabel}</Text>
                     </View>
-                    {!!leader && (
-                      <View style={s.leaderRow}>
-                        <Text style={s.leaderLabel}>A liderar</Text>
-                        <Text style={s.leaderValue} numberOfLines={1}>{leader.nome} - {formatMoney(leader.progresso || 0, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>
-                      </View>
-                    )}
-                    {!!d.financial_context?.excluded_count && (
-                      <Text style={s.contextTxt}>{d.financial_context.excluded_count} movimento(s) ignorados como poupanca/transferencia.</Text>
-                    )}
-                    <View style={s.rankRow}>
-                      {(d.ranking || []).slice(0, 3).map((r, pos) => (
-                        <View key={r.user_id} style={s.rankItem}>
-                          <Text style={s.rankPos}>{['🥇','🥈','🥉'][pos]}</Text>
-                          <Text style={s.rankNome} numberOfLines={1}>{r.nome}</Text>
-                          <Text style={s.rankVal}>{formatMoney(r.progresso || 0, d.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}</Text>
-                        </View>
-                      ))}
+                  </View>
+                  {!!minhaLinha && (
+                    <View style={styles.balanceFoot}>
+                      <Text style={styles.balanceFootText}>Pagaste {formatMoney(minhaLinha.pago, 'EUR')}</Text>
+                      <Text style={styles.balanceFootText}>A tua parte {formatMoney(minhaLinha.parte, 'EUR')}</Text>
                     </View>
-                  </Pressable>
-                </Animated.View>
-              );
-            })}
-          </ScrollView>
-        )}
+                  )}
+                </LinearGradient>
+              </Animated.View>
 
-        {/* ── Streak ── */}
-        {tab === 'Streak' && streakInfo && (
-          <ScrollView contentContainerStyle={{ padding: SPACE.md }}>
-            <Animated.View entering={FadeIn} style={s.streakCard}>
-              <Text style={s.streakEmoji}>🔥</Text>
-              <Text style={s.streakNum}>{streakInfo.streak_dias}</Text>
-              <Text style={s.streakLabel}>dias seguidos</Text>
-              <Text style={s.streakSub}>{streakInfo.check_ins_hoje}/{streakInfo.total_membros} cumpriram hoje</Text>
-              {!streakInfo.eu_cumpri_hoje ? (
-                <Pressable onPress={fazerCheckIn} style={[s.checkInBtn, fazendoCheckIn && { opacity: 0.6 }]}>
-                  {fazendoCheckIn
-                    ? <ActivityIndicator color="#fff" />
-                    : <Text style={s.checkInTxt}>✓ Marcar objetivo hoje</Text>
-                  }
-                </Pressable>
+              <View style={styles.statGrid}>
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Total dividido</Text>
+                  <Text style={styles.statValue}>{formatMoney(resumoSeguro.total_gasto, 'EUR')}</Text>
+                </View>
+                <View style={styles.statCard}>
+                  <Text style={styles.statLabel}>Despesas</Text>
+                  <Text style={styles.statValue}>{resumoSeguro.total_despesas}</Text>
+                </View>
+              </View>
+
+              <Text style={styles.sectionTitle}>Saldos do grupo</Text>
+              {(resumoSeguro.saldos || []).length === 0 ? (
+                <EmptyState
+                  title="Sem saldos ainda"
+                  subtitle="Adiciona a primeira despesa para veres quem deve pagar a quem."
+                  action="Adicionar despesa"
+                  onPress={abrirNovaDespesa}
+                />
               ) : (
-                <View style={s.checkInDone}>
-                  <Text style={s.checkInDoneTxt}>✅ Já marcaste hoje!</Text>
-                </View>
-              )}
-            </Animated.View>
-            <Text style={s.secTitulo}>Estado dos membros</Text>
-            {(streakInfo.membros || []).map(m => (
-              <View key={m.id} style={s.membroRow}>
-                <Text style={s.membroNome}>{m.nome}</Text>
-                <Text style={{ fontSize: 20 }}>{m.cumpriu_hoje ? '✅' : '⏳'}</Text>
-              </View>
-            ))}
-          </ScrollView>
-        )}
-
-        {/* ── Modal Criar Desafio ── */}
-        <Modal visible={modalDesafio} animationType="slide" transparent>
-          <View style={s.modalBg}>
-            <ScrollView style={s.modalBox} keyboardShouldPersistTaps="handled">
-              <Text style={s.modalTitulo}>Novo Desafio</Text>
-              <Pressable onPress={pedirDesafioIA} style={[s.iaBtnModal, loadingIA && { opacity: 0.6 }]}>
-                {loadingIA
-                  ? <ActivityIndicator size="small" color="#fff" />
-                  : <Text style={s.iaBtnTxt}>🤖 Sugerir com IA</Text>
-                }
-              </Pressable>
-              {sugestaoIA && (
-                <View style={s.sugestaoBox}>
-                  <Text style={s.sugestaoTxt}>💡 {sugestaoIA.justificacao}</Text>
-                </View>
-              )}
-              <TextInput style={s.field} placeholder="Título do desafio" placeholderTextColor={C.textMid}
-                value={formDesafio.titulo} onChangeText={v => setFormDesafio(p => ({ ...p, titulo: v }))} />
-              <TextInput style={s.field} placeholder="Descrição (opcional)" placeholderTextColor={C.textMid}
-                value={formDesafio.descricao} onChangeText={v => setFormDesafio(p => ({ ...p, descricao: v }))} />
-              <View style={s.tipoRow}>
-                {['gastar_menos','categoria_limite','poupar_valor','streak_dias'].map(t => (
-                  <Pressable key={t} onPress={() => setFormDesafio(p => ({ ...p, tipo: t }))}
-                    style={[s.tipoBtn, formDesafio.tipo === t && s.tipoBtnAtivo]}>
-                    <Text style={[s.tipoTxt, formDesafio.tipo === t && { color: '#fff' }]}>
-                      {t === 'gastar_menos' ? '📉 Gastar menos' : t === 'categoria_limite' ? '🏷️ Categoria' : t === 'poupar_valor' ? '💰 Poupar' : '🔥 Streak'}
+                (resumoSeguro.saldos || []).map((item, index) => (
+                  <Animated.View key={item.user_id} entering={FadeInDown.delay(index * 40)} style={styles.balanceRow}>
+                    <Avatar nome={item.nome} accent={item.saldo > 0 ? C.green : item.saldo < 0 ? C.red : C.brand} />
+                    <View style={styles.rowBody}>
+                      <Text style={styles.rowTitle}>{item.nome}</Text>
+                      <Text style={styles.rowSub}>Pagou {formatMoney(item.pago, 'EUR')} · parte {formatMoney(item.parte, 'EUR')}</Text>
+                    </View>
+                    <Text style={[styles.rowAmount, { color: item.saldo > 0 ? C.green : item.saldo < 0 ? C.red : C.textMid }]}>
+                      {item.saldo > 0 ? '+' : item.saldo < 0 ? '-' : ''}
+                      {formatMoney(Math.abs(item.saldo), 'EUR')}
                     </Text>
-                  </Pressable>
-                ))}
+                  </Animated.View>
+                ))
+              )}
+            </>
+          )}
+
+          {tab === 'Despesas' && (
+            despesas.length === 0 ? (
+              <EmptyState
+                title="Ainda sem despesas"
+                subtitle="Regista uma conta, escolhe quem pagou e divide automaticamente pelo grupo."
+                action="Adicionar despesa"
+                onPress={abrirNovaDespesa}
+              />
+            ) : (
+              despesas.map((despesa, index) => (
+                <Animated.View key={despesa.id} entering={FadeInDown.delay(index * 45)}>
+                  <View style={styles.expenseCard}>
+                    <LinearGradient colors={[C.brand, C.cyan, C.magenta]} style={styles.expenseAccent} />
+                    <View style={styles.expenseHead}>
+                      <View style={styles.expenseIcon}>
+                        <Text style={styles.expenseIconText}>€</Text>
+                      </View>
+                      <View style={styles.rowBody}>
+                        <Text style={styles.expenseTitle} numberOfLines={1}>{despesa.descricao}</Text>
+                        <Text style={styles.rowSub}>{despesa.categoria} · {formatDate(despesa.data)}</Text>
+                      </View>
+                      <Text style={styles.expenseValue}>{formatMoney(despesa.valor, 'EUR')}</Text>
+                    </View>
+                    <View style={styles.expenseMeta}>
+                      <Text style={styles.metaText}>Pago por {despesa.pagador?.nome || 'membro'}</Text>
+                      <Text style={styles.metaText}>{despesa.total_participantes} participantes</Text>
+                      <Text style={styles.metaText}>A tua parte {formatMoney(despesa.minha_parte, 'EUR')}</Text>
+                    </View>
+                    {!!despesa.notas && <Text style={styles.notes}>{despesa.notas}</Text>}
+                    {despesa.pode_apagar && (
+                      <Pressable onPress={() => apagarDespesa(despesa)} style={styles.removeBtn}>
+                        <Text style={styles.removeTxt}>Remover</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                </Animated.View>
+              ))
+            )
+          )}
+
+          {tab === 'Acertos' && (
+            (resumoSeguro.acertos || []).length === 0 ? (
+              <EmptyState
+                title="Sem acertos pendentes"
+                subtitle="Quando houver diferenças entre quem pagou e quem participou, os acertos aparecem aqui."
+              />
+            ) : (
+              (resumoSeguro.acertos || []).map((acerto, index) => (
+                <Animated.View key={`${acerto.de_user_id}-${acerto.para_user_id}-${index}`} entering={FadeInDown.delay(index * 45)} style={styles.settlementCard}>
+                  <View style={styles.settlementPeople}>
+                    <Avatar nome={acerto.de_nome} accent={acerto.sou_devedor ? C.red : C.brand} />
+                    <View style={styles.settlementArrow}>
+                      <Text style={styles.settlementArrowTxt}>→</Text>
+                    </View>
+                    <Avatar nome={acerto.para_nome} accent={acerto.sou_credor ? C.green : C.cyan} />
+                  </View>
+                  <View style={styles.rowBody}>
+                    <Text style={styles.settlementTitle}>{acerto.de_nome} paga a {acerto.para_nome}</Text>
+                    <Text style={styles.rowSub}>
+                      {acerto.sou_devedor ? 'Ação para ti' : acerto.sou_credor ? 'Vais receber' : 'Acerto entre membros'}
+                    </Text>
+                  </View>
+                  <Text style={styles.settlementValue}>{formatMoney(acerto.valor, 'EUR')}</Text>
+                </Animated.View>
+              ))
+            )
+          )}
+        </ScrollView>
+
+        <Modal visible={modalDespesa} transparent animationType="slide" onRequestClose={() => setModalDespesa(false)}>
+          <View style={styles.overlay}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setModalDespesa(false)} />
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+              <View style={styles.sheet}>
+                <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.sheetContent}>
+                  <View style={styles.sheetHandle} />
+                  <Text style={styles.sheetTitle}>Nova despesa</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ex: Jantar, supermercado, hotel..."
+                    placeholderTextColor={C.textSub}
+                    value={form.descricao}
+                    onChangeText={value => setForm(prev => ({ ...prev, descricao: value }))}
+                  />
+                  <TextInput
+                    style={[styles.input, styles.amountInput]}
+                    placeholder="0,00"
+                    placeholderTextColor={C.textSub}
+                    value={form.valor}
+                    onChangeText={value => setForm(prev => ({ ...prev, valor: value }))}
+                    keyboardType="decimal-pad"
+                  />
+
+                  <Text style={styles.sheetLabel}>Categoria</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                    {CATEGORIAS.map(categoria => (
+                      <Pressable
+                        key={categoria}
+                        onPress={() => setForm(prev => ({ ...prev, categoria }))}
+                        style={[styles.chip, form.categoria === categoria && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, form.categoria === categoria && styles.chipTextActive]}>{categoria}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+
+                  <Text style={styles.sheetLabel}>Pago por</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.peopleRow}>
+                    {membros.map(membro => (
+                      <Pressable
+                        key={membro.id}
+                        onPress={() => setForm(prev => ({ ...prev, pagador_id: membro.id }))}
+                        style={[styles.personChip, form.pagador_id === membro.id && styles.personChipActive]}
+                      >
+                        <Avatar nome={membro.nome} size={28} accent={form.pagador_id === membro.id ? C.cyan : C.brand} />
+                        <Text style={styles.personText} numberOfLines={1}>{membro.nome}</Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+
+                  <Text style={styles.sheetLabel}>Dividir por</Text>
+                  <View style={styles.participants}>
+                    {membros.map(membro => {
+                      const selected = form.participantes_ids.includes(membro.id);
+                      return (
+                        <Pressable
+                          key={membro.id}
+                          onPress={() => toggleParticipante(membro.id)}
+                          style={[styles.participantRow, selected && styles.participantRowActive]}
+                        >
+                          <Avatar nome={membro.nome} size={30} accent={selected ? C.green : C.textMid} />
+                          <Text style={styles.participantName}>{membro.nome}</Text>
+                          <View style={[styles.checkCircle, selected && styles.checkCircleActive]}>
+                            {selected && <Text style={styles.checkTxt}>✓</Text>}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <TextInput
+                    style={[styles.input, { minHeight: 58 }]}
+                    placeholder="Notas (opcional)"
+                    placeholderTextColor={C.textSub}
+                    value={form.notas}
+                    onChangeText={value => setForm(prev => ({ ...prev, notas: value }))}
+                    multiline
+                  />
+
+                  <View style={styles.sheetActions}>
+                    <Pressable onPress={() => setModalDespesa(false)} style={styles.secondaryBtn}>
+                      <Text style={styles.secondaryTxt}>Cancelar</Text>
+                    </Pressable>
+                    <Pressable onPress={guardarDespesa} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.65 }]}>
+                      <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.saveGradient}>
+                        {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveTxt}>Guardar</Text>}
+                      </LinearGradient>
+                    </Pressable>
+                  </View>
+                </ScrollView>
               </View>
-              <View style={{ flexDirection: 'row' }}>
-                <TextInput style={[s.field, { flex: 1, marginRight: 6 }]} placeholder="Valor alvo" placeholderTextColor={C.textMid}
-                  keyboardType="numeric" value={formDesafio.valor_alvo} onChangeText={v => setFormDesafio(p => ({ ...p, valor_alvo: v }))} />
-                <TextInput style={[s.field, { flex: 1 }]} placeholder="Duração (dias)" placeholderTextColor={C.textMid}
-                  keyboardType="numeric" value={formDesafio.dias} onChangeText={v => setFormDesafio(p => ({ ...p, dias: v }))} />
-              </View>
-              <TextInput style={s.field} placeholder="Recompensa (ex: 🏆 Jantar)" placeholderTextColor={C.textMid}
-                value={formDesafio.recompensa} onChangeText={v => setFormDesafio(p => ({ ...p, recompensa: v }))} />
-              <View style={s.modalBtns}>
-                <Pressable onPress={() => { setModalDesafio(false); setSugestaoIA(null); }} style={s.cancelBtn}>
-                  <Text style={s.cancelTxt}>Cancelar</Text>
-                </Pressable>
-                <Pressable onPress={criarDesafio} style={s.confirmBtn}>
-                  <Text style={s.confirmTxt}>Criar ⚡</Text>
-                </Pressable>
-              </View>
-            </ScrollView>
+            </KeyboardAvoidingView>
           </View>
         </Modal>
-
       </View>
     </KeyboardAvoidingView>
   );
 }
 
-const s = StyleSheet.create({
-  container:      { flex: 1, backgroundColor: COLORS.bg },
-  center:         { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.bg },
-  header:         { flexDirection: 'row', alignItems: 'center', padding: SPACE.md, paddingTop: 48, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-  backBtn:        { marginRight: 8 },
-  backTxt:        { fontSize: 22, color: COLORS.brand },
-  headerEmoji:    { fontSize: 28, marginRight: 8 },
-  headerNome:     { fontSize: 17, fontWeight: '700', color: COLORS.text },
-  headerSub:      { fontSize: 12, color: COLORS.textMid, marginTop: 1 },
-  btnNovo:        { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingHorizontal: 10, paddingVertical: 6 },
-  btnNovoTxt:     { color: '#fff', fontSize: 12, fontWeight: '700' },
-  tabs:           { flexDirection: 'row', backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border },
-  tab:            { flex: 1, paddingVertical: 12, alignItems: 'center' },
-  tabAtivo:       { borderBottomWidth: 2, borderBottomColor: COLORS.brand },
-  tabTxt:         { fontSize: 13, color: COLORS.textMid, fontWeight: '500' },
-  tabTxtAtivo:    { color: COLORS.brand, fontWeight: '700' },
-  vazio:          { textAlign: 'center', color: COLORS.textMid, marginTop: 40, fontSize: 15 },
-  vazioCard:      { alignItems: 'center', paddingVertical: 40 },
-  vazioTxt:       { fontSize: 16, fontWeight: '700', color: COLORS.text, marginTop: 12 },
-  vazioSub:       { fontSize: 13, color: COLORS.textMid, marginTop: 4 },
-  emptyActions:   { flexDirection: 'row', gap: 8, marginTop: 16 },
-  emptyPrimary:   { backgroundColor: COLORS.brand, borderRadius: RADIUS.md, paddingHorizontal: 14, paddingVertical: 9 },
-  emptyPrimaryTxt:{ color: '#fff', fontSize: 12, fontWeight: '800' },
-  emptyGhost:     { backgroundColor: COLORS.surface2, borderRadius: RADIUS.md, paddingHorizontal: 14, paddingVertical: 9, borderWidth: 1, borderColor: COLORS.border },
-  emptyGhostTxt:  { color: COLORS.brand, fontSize: 12, fontWeight: '800' },
-  feedCard:       { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
-  feedEmoji:      { fontSize: 22, marginRight: 10, marginTop: 2 },
-  feedDesc:       { fontSize: 14, color: COLORS.text },
-  feedData:       { fontSize: 11, color: COLORS.textMid, marginTop: 2 },
-  msgRow:         { flexDirection: 'row', marginBottom: 10, alignItems: 'flex-end' },
-  msgRowMinha:    { flexDirection: 'row-reverse' },
-  msgAvatar:      { width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surface2, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
-  msgBubble:      { maxWidth: '75%', backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 10, borderTopLeftRadius: 4 },
-  msgBubbleMinha: { backgroundColor: COLORS.brand, borderTopLeftRadius: RADIUS.lg, borderTopRightRadius: 4 },
-  msgNome:        { fontSize: 11, fontWeight: '700', color: COLORS.brand, marginBottom: 2 },
-  msgTexto:       { fontSize: 14, color: COLORS.text },
-  msgHora:        { fontSize: 10, color: COLORS.textMid, marginTop: 3, alignSelf: 'flex-end' },
-  reacoesRow:     { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
-  reacaoChip:     { backgroundColor: COLORS.surface2, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2, marginRight: 4, marginTop: 2 },
-  reacoesBar:     { flexDirection: 'row', justifyContent: 'center', backgroundColor: COLORS.surface, paddingVertical: 10, borderTopWidth: 1, borderTopColor: COLORS.border },
-  reacaoBtnBar:   { paddingHorizontal: 10 },
-  inputRow:       { flexDirection: 'row', padding: 10, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border, alignItems: 'flex-end' },
-  input:          { flex: 1, backgroundColor: COLORS.surface2, borderRadius: RADIUS.lg, paddingHorizontal: 14, paddingVertical: 8, color: COLORS.text, maxHeight: 100, fontSize: 14 },
-  sendBtn:        { width: 38, height: 38, borderRadius: 19, backgroundColor: COLORS.brand, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
-  sendTxt:        { color: '#fff', fontSize: 18, fontWeight: '700' },
-  desafioCard:    { backgroundColor: COLORS.surface, borderRadius: RADIUS.lg, padding: 14, marginBottom: 12 },
-  desafioTop:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
-  desafioTitulo:  { fontSize: 15, fontWeight: '700', color: COLORS.text, flex: 1 },
-  iaBadge:        { fontSize: 12, backgroundColor: '#A29BFE22', color: '#A29BFE', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, fontWeight: '700', overflow: 'hidden' },
-  desafioDesc:    { color: COLORS.textMid, fontSize: 12, lineHeight: 17, marginBottom: 10 },
-  desafioMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
-  desafioChip:    { backgroundColor: COLORS.surface2, borderWidth: 1, borderColor: COLORS.border, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5, color: COLORS.textMid, fontSize: 10, fontWeight: '800', overflow: 'hidden' },
-  countdownRow:   { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  countdownTxt:   { fontSize: 14, fontWeight: '700', color: COLORS.brand },
-  terminadoTxt:   { fontSize: 12, color: COLORS.textMid, marginBottom: 8 },
-  progressHead:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
-  progressLabel:  { color: COLORS.textMid, fontSize: 11, fontWeight: '700' },
-  progressValue:  { color: COLORS.text, fontSize: 12, fontWeight: '900' },
-  progressTrack:  { height: 7, borderRadius: 999, backgroundColor: COLORS.surface2, overflow: 'hidden', marginTop: 7 },
-  progressFill:   { height: '100%', borderRadius: 999, backgroundColor: COLORS.brand },
-  leaderRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, backgroundColor: COLORS.surface2, borderRadius: RADIUS.md, padding: 9 },
-  leaderLabel:    { color: COLORS.textMid, fontSize: 11, fontWeight: '700' },
-  leaderValue:    { color: COLORS.text, fontSize: 12, fontWeight: '800', maxWidth: '68%' },
-  contextTxt:     { color: COLORS.textMid, fontSize: 10, marginTop: 8, lineHeight: 14 },
-  rankRow:        { flexDirection: 'row', marginTop: 8 },
-  rankItem:       { flex: 1, alignItems: 'center' },
-  rankPos:        { fontSize: 18 },
-  rankNome:       { fontSize: 11, color: COLORS.text, fontWeight: '500', marginTop: 2 },
-  rankVal:        { fontSize: 11, color: COLORS.textMid },
-  secTitulo:      { fontSize: 15, fontWeight: '700', color: COLORS.text, marginTop: 16, marginBottom: 8 },
-  streakCard:     { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 28, alignItems: 'center', marginBottom: 20 },
-  streakEmoji:    { fontSize: 48 },
-  streakNum:      { fontSize: 64, fontWeight: '700', color: COLORS.brand, lineHeight: 76 },
-  streakLabel:    { fontSize: 16, color: COLORS.textMid, fontWeight: '500' },
-  streakSub:      { fontSize: 13, color: COLORS.textMid, marginTop: 6, marginBottom: 16 },
-  checkInBtn:     { backgroundColor: COLORS.brand, borderRadius: RADIUS.lg, paddingHorizontal: 24, paddingVertical: 12 },
-  checkInTxt:     { color: '#fff', fontSize: 15, fontWeight: '700' },
-  checkInDone:    { backgroundColor: `${COLORS.green}20`, borderRadius: RADIUS.lg, paddingHorizontal: 24, paddingVertical: 12 },
-  checkInDoneTxt: { color: COLORS.green, fontSize: 15, fontWeight: '700' },
-  membroRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.surface, borderRadius: RADIUS.md, padding: 12, marginBottom: 8 },
-  membroNome:     { fontSize: 14, color: COLORS.text, fontWeight: '500' },
-  modalBg:        { flex: 1, justifyContent: 'flex-end', backgroundColor: '#00000088' },
-  modalBox:       { backgroundColor: COLORS.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, paddingBottom: 40, maxHeight: '90%' },
-  modalTitulo:    { fontSize: 18, fontWeight: '700', color: COLORS.text, marginBottom: 14 },
-  iaBtnModal:     { backgroundColor: '#A29BFE', borderRadius: RADIUS.md, paddingVertical: 10, alignItems: 'center', marginBottom: 10 },
-  iaBtnTxt:       { color: '#fff', fontWeight: '700', fontSize: 14 },
-  sugestaoBox:    { backgroundColor: '#A29BFE15', borderRadius: RADIUS.md, padding: 10, marginBottom: 10 },
-  sugestaoTxt:    { fontSize: 12, color: '#A29BFE' },
-  field:          { backgroundColor: COLORS.surface2, borderRadius: RADIUS.md, paddingHorizontal: 12, paddingVertical: 10, color: COLORS.text, marginBottom: 8, fontSize: 14 },
-  tipoRow:        { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 8 },
-  tipoBtn:        { borderRadius: RADIUS.xs, paddingHorizontal: 8, paddingVertical: 6, backgroundColor: COLORS.surface2, marginRight: 6, marginBottom: 6 },
-  tipoBtnAtivo:   { backgroundColor: COLORS.brand },
-  tipoTxt:        { fontSize: 12, color: COLORS.text, fontWeight: '500' },
-  modalBtns:      { flexDirection: 'row', marginTop: 10 },
-  cancelBtn:      { flex: 1, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center', backgroundColor: COLORS.surface2, marginRight: 8 },
-  cancelTxt:      { color: COLORS.textMid, fontWeight: '500' },
-  confirmBtn:     { flex: 1, borderRadius: RADIUS.md, paddingVertical: 12, alignItems: 'center', backgroundColor: COLORS.brand },
-  confirmTxt:     { color: '#fff', fontWeight: '700', fontSize: 15 },
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: C.bg },
+  decorOrb: {
+    position: 'absolute',
+    width: 170,
+    height: 170,
+    borderRadius: 48,
+    right: -70,
+    top: 92,
+    backgroundColor: 'rgba(139,92,246,0.10)',
+    transform: [{ rotate: '18deg' }],
+  },
+  decorCard: {
+    position: 'absolute',
+    width: 96,
+    height: 68,
+    borderRadius: 20,
+    left: -32,
+    top: 180,
+    backgroundColor: 'rgba(34,212,253,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 54,
+    paddingHorizontal: SPACE.lg,
+    paddingBottom: SPACE.md,
+  },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backTxt: { color: C.text, fontSize: 30, lineHeight: 30, marginTop: -3 },
+  groupIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: C.glassHi,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupEmoji: { fontSize: 22 },
+  headerCopy: { flex: 1, minWidth: 0 },
+  headerTitle: { color: C.text, fontSize: FONT.xl, fontWeight: '900' },
+  headerSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  addBtn: { borderRadius: RADIUS.pill, ...SHADOWS.brandGlow },
+  addGradient: { borderRadius: RADIUS.pill, paddingHorizontal: 13, paddingVertical: 10 },
+  addTxt: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
+  tabs: {
+    flexDirection: 'row',
+    marginHorizontal: SPACE.lg,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    padding: 4,
+    gap: 4,
+  },
+  tab: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: RADIUS.sm },
+  tabActive: { backgroundColor: C.glassHi },
+  tabText: { color: C.textMid, fontSize: FONT.sm, fontWeight: '800' },
+  tabTextActive: { color: C.text },
+  scroll: { padding: SPACE.lg, paddingBottom: 120 },
+  balanceCard: {
+    borderRadius: RADIUS.xl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    marginBottom: SPACE.md,
+    ...SHADOWS.card,
+  },
+  balanceGradient: { padding: SPACE.lg },
+  balanceTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 },
+  kicker: { color: C.textMid, fontSize: FONT.xs, fontWeight: '800', textTransform: 'uppercase' },
+  balanceValue: { fontSize: 34, fontWeight: '900', marginTop: 4 },
+  balanceBadge: { borderRadius: RADIUS.pill, paddingHorizontal: 10, paddingVertical: 7 },
+  balanceBadgeTxt: { fontSize: FONT.xs, fontWeight: '900' },
+  balanceFoot: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: SPACE.lg,
+    paddingTop: SPACE.md,
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+  },
+  balanceFootText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
+  statGrid: { flexDirection: 'row', gap: SPACE.sm, marginBottom: SPACE.lg },
+  statCard: {
+    flex: 1,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    padding: SPACE.md,
+  },
+  statLabel: { color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
+  statValue: { color: C.text, fontSize: FONT.lg, fontWeight: '900', marginTop: 6 },
+  sectionTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900', marginBottom: SPACE.sm },
+  balanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    padding: SPACE.md,
+    marginBottom: SPACE.sm,
+    gap: 12,
+  },
+  avatar: { borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontWeight: '900' },
+  rowBody: { flex: 1, minWidth: 0 },
+  rowTitle: { color: C.text, fontSize: FONT.md, fontWeight: '800' },
+  rowSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
+  rowAmount: { fontSize: FONT.md, fontWeight: '900' },
+  expenseCard: {
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    paddingLeft: SPACE.lg,
+    marginBottom: SPACE.md,
+    overflow: 'hidden',
+    ...SHADOWS.card,
+  },
+  expenseAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
+  expenseHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  expenseIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  expenseIconText: { color: C.brandMid, fontWeight: '900', fontSize: 18 },
+  expenseTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  expenseValue: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  expenseMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: SPACE.md },
+  metaText: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+    fontWeight: '700',
+    backgroundColor: C.glassHi,
+    borderRadius: RADIUS.pill,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+  notes: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: SPACE.sm },
+  removeBtn: { alignSelf: 'flex-start', marginTop: SPACE.sm, paddingVertical: 6, paddingHorizontal: 8 },
+  removeTxt: { color: C.red, fontSize: FONT.xs, fontWeight: '800' },
+  settlementCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    marginBottom: SPACE.sm,
+  },
+  settlementPeople: { flexDirection: 'row', alignItems: 'center' },
+  settlementArrow: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.surface2,
+    marginHorizontal: -2,
+    zIndex: 2,
+  },
+  settlementArrowTxt: { color: C.textMid, fontSize: FONT.sm, fontWeight: '900' },
+  settlementTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  settlementValue: { color: C.green, fontSize: FONT.md, fontWeight: '900' },
+  empty: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: SPACE.md },
+  emptyIllustration: { width: 104, height: 92, marginBottom: SPACE.md },
+  emptyShapeBack: {
+    position: 'absolute',
+    width: 76,
+    height: 58,
+    borderRadius: 18,
+    right: 4,
+    top: 7,
+    transform: [{ rotate: '12deg' }],
+  },
+  emptyShape: {
+    width: 76,
+    height: 88,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: 14,
+    justifyContent: 'center',
+    ...SHADOWS.card,
+  },
+  emptyIcon: { color: C.cyan, fontSize: 22, fontWeight: '900', marginBottom: 10 },
+  emptyLine: { width: 48, height: 5, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.22)', marginTop: 7 },
+  emptyTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900', textAlign: 'center' },
+  emptySub: { color: C.textMid, fontSize: FONT.sm, lineHeight: 20, textAlign: 'center', marginTop: 7, marginBottom: SPACE.md },
+  primaryBtn: { borderRadius: RADIUS.pill, overflow: 'hidden', ...SHADOWS.brandGlow },
+  primaryBtnGradient: { paddingHorizontal: 18, paddingVertical: 12, borderRadius: RADIUS.pill },
+  primaryBtnText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
+  pressed: { transform: [{ scale: 0.98 }], opacity: 0.92 },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.72)' },
+  sheet: {
+    maxHeight: '92%',
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    paddingBottom: 34,
+  },
+  sheetContent: { paddingBottom: 4 },
+  sheetHandle: { width: 42, height: 4, borderRadius: 3, backgroundColor: C.borderHi, alignSelf: 'center', marginBottom: SPACE.md },
+  sheetTitle: { color: C.text, fontSize: FONT.xxl, fontWeight: '900', marginBottom: SPACE.md },
+  sheetLabel: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 8, marginTop: 4 },
+  input: {
+    backgroundColor: C.surface2,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    color: C.text,
+    fontSize: FONT.md,
+    marginBottom: SPACE.sm,
+  },
+  amountInput: { fontSize: 28, fontWeight: '900', paddingVertical: 10 },
+  chipRow: { gap: 8, paddingBottom: SPACE.sm },
+  chip: {
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.glass,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  chipActive: { backgroundColor: C.brandDim, borderColor: 'rgba(139,92,246,0.45)' },
+  chipText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '800' },
+  chipTextActive: { color: C.brandMid },
+  peopleRow: { gap: 8, paddingBottom: SPACE.sm },
+  personChip: {
+    width: 112,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.glass,
+    padding: 9,
+    gap: 7,
+  },
+  personChipActive: { borderColor: 'rgba(34,212,253,0.48)', backgroundColor: 'rgba(34,212,253,0.08)' },
+  personText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
+  participants: { gap: 7, marginBottom: SPACE.sm },
+  participantRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: RADIUS.md,
+    padding: 9,
+  },
+  participantRowActive: { borderColor: 'rgba(0,214,143,0.38)', backgroundColor: C.greenDim },
+  participantName: { flex: 1, color: C.text, fontSize: FONT.sm, fontWeight: '800' },
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkCircleActive: { borderColor: C.green, backgroundColor: C.green },
+  checkTxt: { color: C.bg, fontSize: FONT.xs, fontWeight: '900' },
+  sheetActions: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.sm },
+  secondaryBtn: {
+    flex: 1,
+    borderRadius: RADIUS.pill,
+    backgroundColor: C.surface2,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  secondaryTxt: { color: C.textMid, fontSize: FONT.sm, fontWeight: '900' },
+  saveBtn: { flex: 1, borderRadius: RADIUS.pill, overflow: 'hidden', ...SHADOWS.brandGlow },
+  saveGradient: { paddingVertical: 14, alignItems: 'center', borderRadius: RADIUS.pill },
+  saveTxt: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
 });

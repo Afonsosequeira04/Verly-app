@@ -1,4 +1,4 @@
-// src/screens/GruposScreen.js — Verly Social: Grupos
+// src/screens/GruposScreen.js — Grupos de despesas
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, Pressable, TextInput,
@@ -10,8 +10,6 @@ import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
 const C   = COLORS;
-const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
-
 const initials = (n = '') =>
   n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
@@ -51,7 +49,7 @@ function MembrosRow({ membros = [] }) {
   );
 }
 
-const EMOJIS = ['👥', '💰', '🎯', '🏆', '🚀', '💪', '🌟', '🎮', '🔥', '✨'];
+const EMOJIS = ['💸', '🧾', '🏠', '✈️', '🍽️', '🛒', '🚕', '🎟️', '👥', '€'];
 
 export default function GruposScreen({ navigation }) {
   const [grupos,   setGrupos]   = useState([]);
@@ -63,7 +61,7 @@ export default function GruposScreen({ navigation }) {
   // Form criar grupo
   const [nome,        setNome]       = useState('');
   const [descricao,   setDescricao]  = useState('');
-  const [emoji,       setEmoji]      = useState('👥');
+  const [emoji,       setEmoji]      = useState('💸');
   const [convidados,  setConvidados] = useState([]);
   const [criando,     setCriando]    = useState(false);
 
@@ -111,7 +109,7 @@ export default function GruposScreen({ navigation }) {
         amigos_ids: convidados,
       });
       setModal(false);
-      setNome(''); setDescricao(''); setEmoji('👥'); setConvidados([]);
+      setNome(''); setDescricao(''); setEmoji('💸'); setConvidados([]);
       await load();
       navigation.navigate('GrupoDetalhe', { grupoId: grupo.id });
     } catch (e) {
@@ -136,12 +134,15 @@ export default function GruposScreen({ navigation }) {
         <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Text style={styles.backTxt}>←</Text>
         </Pressable>
-        <View>
-          <Text style={styles.headerTitle}>Grupos</Text>
-          <Text style={styles.headerSub}>Desafios com os teus amigos</Text>
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerTitle} numberOfLines={1}>Dividir despesas</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>Grupos para contas partilhadas</Text>
         </View>
+        <Pressable onPress={() => navigation.navigate('Amigos')} style={styles.friendsBtn}>
+          <Text style={styles.friendsTxt}>Amigos</Text>
+        </Pressable>
         <Pressable onPress={abrirModal} style={styles.addBtn}>
-          <Text style={styles.addTxt}>+ Novo</Text>
+          <Text style={styles.addTxt}>+ Grupo</Text>
         </Pressable>
       </View>
 
@@ -151,11 +152,11 @@ export default function GruposScreen({ navigation }) {
       >
         {grupos.length === 0 ? (
           <Animated.View entering={FadeIn} style={styles.empty}>
-            <Text style={styles.emptyEmoji}>👥</Text>
+            <Text style={styles.emptyEmoji}>🧾</Text>
             <Text style={styles.emptyTitle}>Ainda sem grupos</Text>
-            <Text style={styles.emptySub}>Cria um grupo com os teus amigos e lança desafios financeiros</Text>
+            <Text style={styles.emptySub}>Cria um grupo para dividir contas, viagens, jantares ou despesas de casa.</Text>
             <Pressable onPress={abrirModal} style={styles.emptyBtn}>
-              <Text style={styles.emptyBtnTxt}>Criar primeiro grupo</Text>
+              <Text style={styles.emptyBtnTxt}>Criar grupo</Text>
             </Pressable>
           </Animated.View>
         ) : (
@@ -189,7 +190,7 @@ export default function GruposScreen({ navigation }) {
           <Pressable style={styles.overlayBg} onPress={() => setModal(false)} />
           <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>Novo Grupo</Text>
+            <Text style={styles.sheetTitle}>Novo grupo de despesas</Text>
 
             {/* Emoji picker */}
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.emojiRow}>
@@ -210,7 +211,7 @@ export default function GruposScreen({ navigation }) {
             />
             <TextInput
               style={[styles.input, { height: 70 }]}
-              placeholder="Descrição (opcional)"
+              placeholder="Descrição (opcional, ex: viagem, casa, férias)"
               placeholderTextColor={C.textSub}
               value={descricao}
               onChangeText={setDescricao}
@@ -238,7 +239,7 @@ export default function GruposScreen({ navigation }) {
             )}
 
             <Pressable onPress={criar} disabled={criando} style={[styles.criarBtn, criando && { opacity: 0.5 }]}>
-              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Criar Grupo</Text>}
+              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Criar grupo</Text>}
             </Pressable>
           </View>
         </View>
@@ -253,9 +254,12 @@ const styles = StyleSheet.create({
   header:     { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
   backBtn:    { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
   backTxt:    { fontSize: 18, color: C.text },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerTitle:{ fontSize: FONT.xl, fontWeight: '800', color: C.text },
   headerSub:  { fontSize: FONT.xs, color: C.textMid, marginTop: 1 },
-  addBtn:     { marginLeft: 'auto', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
+  friendsBtn: { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.pill },
+  friendsTxt: { fontSize: FONT.sm, fontWeight: '800', color: C.textMid },
+  addBtn:     { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
   addTxt:     { fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
   scroll:     { padding: SPACE.lg, paddingBottom: 100 },
   // Empty

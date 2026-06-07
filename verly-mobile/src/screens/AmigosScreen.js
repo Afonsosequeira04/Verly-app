@@ -1,14 +1,14 @@
-// src/screens/AmigosScreen.js — Amigos & Conexões
+// src/screens/AmigosScreen.js — Amigos para despesas partilhadas
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, Pressable, TextInput,
   Alert, ActivityIndicator, StyleSheet, RefreshControl,
-  Modal, FlatList,
+  Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { amigosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
-import { Reveal, SectionHeader } from '../components/UI';
+import { Reveal } from '../components/UI';
 
 const C = COLORS;
 
@@ -35,7 +35,7 @@ export default function AmigosScreen({ navigation }) {
   const [pedidos,  setPedidos]  = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [refresh,  setRefresh]  = useState(false);
-  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos' | 'grupos'
+  const [tab,      setTab]      = useState('amigos'); // 'amigos' | 'pedidos'
 
   // Modal adicionar
   const [showAdd,  setShowAdd]  = useState(false);
@@ -137,17 +137,12 @@ export default function AmigosScreen({ navigation }) {
 
   return (
     <View style={s.root}>
-      {/* Acesso rápido a Grupos e Recompensas */}
+      {/* Acesso rápido a grupos de despesas */}
       <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
         <Pressable onPress={() => navigation.navigate('Grupos')}
           style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#7C6FE020', borderRadius: 12, borderWidth: 1, borderColor: '#7C6FE040', padding: 10 }}>
-          <Text style={{ fontSize: 18 }}>👥</Text>
-          <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C6FE0' }}>Grupos</Text>
-        </Pressable>
-        <Pressable onPress={() => navigation.navigate('Recompensas')}
-          style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFB30020', borderRadius: 12, borderWidth: 1, borderColor: '#FFB30040', padding: 10 }}>
-          <Text style={{ fontSize: 18 }}>🏆</Text>
-          <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFB300' }}>Recompensas</Text>
+          <Text style={{ fontSize: 18 }}>🧾</Text>
+          <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C6FE0' }}>Grupos de despesas</Text>
         </Pressable>
       </View>
       {/* Tab selector */}
@@ -184,7 +179,7 @@ export default function AmigosScreen({ navigation }) {
               <View style={s.empty}>
                 <Text style={s.emptyIcon}>👥</Text>
                 <Text style={s.emptyTitle}>Sem amigos ainda</Text>
-                <Text style={s.emptySub}>Adiciona amigos para partilhar playlists de compras!</Text>
+                <Text style={s.emptySub}>Adiciona amigos para criares grupos e dividires despesas.</Text>
               </View>
             ) : (
               amigos.map(a => (

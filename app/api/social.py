@@ -11,7 +11,8 @@ from app.financial_records import normalize_text, summarize_expenses
 from app.models import User
 from app.models_social import (
     Grupo, grupo_membro, Desafio, DesafioParticipante, Recompensa,
-    MensagemGrupo, ReacaoMensagem, AtividadeGrupo, StreakMembroGrupo, BADGES
+    MensagemGrupo, ReacaoMensagem, AtividadeGrupo, StreakMembroGrupo, BADGES,
+    DespesaGrupo, DespesaGrupoParticipante,
 )
 
 
@@ -129,6 +130,138 @@ def sair_grupo(grupo_id):
     )
     db.session.commit()
     return jsonify({'ok': True})
+
+
+# ── Despesas partilhadas ──────────────────────────────────────────────────────
+
+@api_bp.route('/grupos/<int:grupo_id>/despesas', methods=['GET'])
+@jwt_required()
+def listar_despesas_grupo(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    despesas = (
+        DespesaGrupo.query
+        .filter_by(grupo_id=grupo_id, ativo=True)
+        .order_by(DespesaGrupo.data.desc(), DespesaGrupo.criado_em.desc())
+        .all()
+    )
+    return jsonify({
+        'despesas': [d.to_dict(user.id) for d in despesas],
+        'resumo': _calcular_resumo_despesas(grupo, user.id),
+    })
+
+
+@api_bp.route('/grupos/<int:grupo_id>/despesas', methods=['POST'])
+@jwt_required()
+def criar_despesa_grupo(grupo_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    data = request.get_json() or {}
+    descricao = (data.get('descricao') or '').strip()
+    if not descricao:
+        return jsonify({'error': 'Descrição obrigatória'}), 400
+
+    try:
+        valor = float(str(data.get('valor', '')).replace(',', '.'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Valor inválido'}), 400
+    if valor <= 0:
+        return jsonify({'error': 'Valor tem de ser maior que zero'}), 400
+
+    membros = grupo.membros.all()
+    membro_ids = {m.id for m in membros}
+    pagador_id = int(data.get('pagador_id') or user.id)
+    if pagador_id not in membro_ids:
+        return jsonify({'error': 'Pagador não pertence ao grupo'}), 400
+
+    if 'participantes_ids' in data and data.get('participantes_ids') is not None:
+        participantes_raw = data.get('participantes_ids')
+    else:
+        participantes_raw = list(membro_ids)
+    try:
+        participantes_ids = [int(pid) for pid in participantes_raw]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Participantes inválidos'}), 400
+
+    participantes_ids = [pid for pid in dict.fromkeys(participantes_ids) if pid in membro_ids]
+    if not participantes_ids:
+        return jsonify({'error': 'Escolhe pelo menos um participante'}), 400
+
+    data_despesa = _parse_data_despesa(data.get('data'))
+    valor_cents = int(round(valor * 100))
+    base = valor_cents // len(participantes_ids)
+    resto = valor_cents % len(participantes_ids)
+
+    despesa = DespesaGrupo(
+        grupo_id=grupo_id,
+        pagador_id=pagador_id,
+        criado_por_id=user.id,
+        descricao=descricao,
+        categoria=(data.get('categoria') or 'Geral').strip()[:80],
+        valor=valor_cents / 100,
+        data=data_despesa,
+        notas=(data.get('notas') or '').strip()[:500] or None,
+    )
+    db.session.add(despesa)
+    db.session.flush()
+
+    for index, participante_id in enumerate(participantes_ids):
+        parte_cents = base + (1 if index < resto else 0)
+        db.session.add(DespesaGrupoParticipante(
+            despesa_id=despesa.id,
+            user_id=participante_id,
+            valor=parte_cents / 100,
+        ))
+
+    _registar_atividade(
+        grupo_id,
+        user.id,
+        'despesa_adicionada',
+        f'{user.nome} adicionou "{descricao}"',
+        emoji='🧾',
+        valor=despesa.valor,
+    )
+    db.session.commit()
+
+    return jsonify({
+        'despesa': despesa.to_dict(user.id),
+        'resumo': _calcular_resumo_despesas(grupo, user.id),
+    }), 201
+
+
+@api_bp.route('/grupos/<int:grupo_id>/despesas/<int:despesa_id>', methods=['DELETE'])
+@jwt_required()
+def apagar_despesa_grupo(grupo_id, despesa_id):
+    user  = _current_user()
+    grupo = Grupo.query.get_or_404(grupo_id)
+    _assert_membro(grupo, user.id)
+
+    despesa = DespesaGrupo.query.filter_by(
+        id=despesa_id,
+        grupo_id=grupo_id,
+        ativo=True,
+    ).first_or_404()
+
+    if user.id not in {despesa.criado_por_id, despesa.pagador_id, grupo.criador_id}:
+        return jsonify({'error': 'Sem permissão para apagar esta despesa'}), 403
+
+    despesa.ativo = False
+    _registar_atividade(
+        grupo_id,
+        user.id,
+        'despesa_removida',
+        f'{user.nome} removeu "{despesa.descricao}"',
+        emoji='↩',
+    )
+    db.session.commit()
+    return jsonify({
+        'ok': True,
+        'resumo': _calcular_resumo_despesas(grupo, user.id),
+    })
 
 
 # ── Chat do Grupo ──────────────────────────────────────────────────────────────
@@ -659,6 +792,119 @@ def recompensas_novas():
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _parse_data_despesa(value):
+    if not value:
+        return date.today()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        text = str(value).strip().replace('Z', '+00:00')
+        if len(text) == 10:
+            return datetime.strptime(text, '%Y-%m-%d').date()
+        return datetime.fromisoformat(text).date()
+    except Exception:
+        return date.today()
+
+
+def _calcular_resumo_despesas(grupo, user_id):
+    membros = grupo.membros.all()
+    saldos_por_id = {
+        m.id: {
+            'user_id': m.id,
+            'nome': m.nome,
+            'avatar': m.avatar,
+            'pago': 0.0,
+            'parte': 0.0,
+            'saldo': 0.0,
+        }
+        for m in membros
+    }
+
+    despesas = (
+        DespesaGrupo.query
+        .filter_by(grupo_id=grupo.id, ativo=True)
+        .all()
+    )
+
+    total_gasto = 0.0
+    for despesa in despesas:
+        valor = float(despesa.valor or 0)
+        total_gasto += valor
+        if despesa.pagador_id in saldos_por_id:
+            saldos_por_id[despesa.pagador_id]['pago'] += valor
+
+        for parte in despesa.participantes.all():
+            if parte.user_id in saldos_por_id:
+                saldos_por_id[parte.user_id]['parte'] += float(parte.valor or 0)
+
+    saldos = []
+    for item in saldos_por_id.values():
+        pago = round(item['pago'], 2)
+        parte = round(item['parte'], 2)
+        saldo = round(pago - parte, 2)
+        saldos.append({
+            **item,
+            'pago': pago,
+            'parte': parte,
+            'saldo': saldo,
+        })
+
+    saldos.sort(key=lambda item: item['nome'].lower())
+    meu_saldo = next((item['saldo'] for item in saldos if item['user_id'] == user_id), 0.0)
+
+    return {
+        'total_gasto': round(total_gasto, 2),
+        'total_despesas': len(despesas),
+        'meu_saldo': round(meu_saldo, 2),
+        'eu_devo': round(abs(min(meu_saldo, 0)), 2),
+        'devem_me': round(max(meu_saldo, 0), 2),
+        'saldos': saldos,
+        'acertos': _calcular_acertos(saldos, user_id),
+    }
+
+
+def _calcular_acertos(saldos, user_id):
+    devedores = [
+        {'user_id': s['user_id'], 'nome': s['nome'], 'valor': abs(s['saldo'])}
+        for s in saldos
+        if s['saldo'] < -0.009
+    ]
+    credores = [
+        {'user_id': s['user_id'], 'nome': s['nome'], 'valor': s['saldo']}
+        for s in saldos
+        if s['saldo'] > 0.009
+    ]
+
+    devedores.sort(key=lambda item: item['valor'], reverse=True)
+    credores.sort(key=lambda item: item['valor'], reverse=True)
+
+    acertos = []
+    i = j = 0
+    while i < len(devedores) and j < len(credores):
+        valor = min(devedores[i]['valor'], credores[j]['valor'])
+        if valor > 0.009:
+            acertos.append({
+                'de_user_id': devedores[i]['user_id'],
+                'de_nome': devedores[i]['nome'],
+                'para_user_id': credores[j]['user_id'],
+                'para_nome': credores[j]['nome'],
+                'valor': round(valor, 2),
+                'sou_devedor': devedores[i]['user_id'] == user_id,
+                'sou_credor': credores[j]['user_id'] == user_id,
+            })
+
+        devedores[i]['valor'] = round(devedores[i]['valor'] - valor, 2)
+        credores[j]['valor'] = round(credores[j]['valor'] - valor, 2)
+        if devedores[i]['valor'] <= 0.009:
+            i += 1
+        if credores[j]['valor'] <= 0.009:
+            j += 1
+
+    return acertos
+
 
 def _assert_membro(grupo, user_id):
     row = db.session.execute(
