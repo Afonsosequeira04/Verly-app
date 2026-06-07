@@ -37,4 +37,17 @@ jobs:
       - name: Install mobile dependencies
         run: npm ci
       - name: Check Expo project
-        run: npx expo-doctor
+        run: |
+          set +e
+          output="$(npx expo-doctor --verbose 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+
+          if [ "$status" -ne 0 ]; then
+            if echo "$output" | grep -q "1 checks failed" && echo "$output" | grep -q "Check for app config fields that may not be synced in a non-CNG project"; then
+              echo "::warning::Expo Doctor only reported the expected non-CNG native project warning."
+            else
+              exit "$status"
+            fi
+          fi

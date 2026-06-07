@@ -49,7 +49,9 @@ def gerar_insights_task(self, user_id: int):
                 'historico_mensal':    ctx['historico_mensal'],
                 'regra_5030_20':       ctx['regra_5030_20'],
                 'itens_por_categoria': ctx['itens_por_categoria'],
+                'financial_intelligence': ctx['financial_intelligence'],
             },
+            'financial_intelligence': ctx['financial_intelligence'],
             'personalidade': personalidade,
             'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
         }

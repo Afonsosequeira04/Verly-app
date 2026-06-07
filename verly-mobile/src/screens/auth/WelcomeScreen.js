@@ -93,7 +93,7 @@ const s = StyleSheet.create({
     fontSize: 32,
     fontWeight: '900',
     color: '#EEEEF8',
-    letterSpacing: -0.5,
+    letterSpacing: 0,
   },
   tagline: {
     fontSize: 18,

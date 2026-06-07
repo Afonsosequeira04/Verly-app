@@ -43,6 +43,8 @@ import {
   useScalePress, AnimatedListItem, PulseDot,
   AnimatedCounter, GlowPulse,
 } from '../components/UI';
+import { FinancialChartsPanel, FinancialChartsSkeleton } from '../components/FinancialCharts';
+import IntelligenceDeck from '../components/IntelligenceDeck';
 import { haptic } from '../utils/haptics';
 import { formatCompactMoney, formatMoney } from '../utils/money';
 import DraggableFlatList, { ScaleDecorator } from 'react-native-draggable-flatlist';
@@ -56,7 +58,7 @@ const initials = (name = '') =>
 
 const PREFS_KEY = '@verly_dashboard_prefs';
 const CARDS_KEY = '@verly_card_order';
-const CARDS_DEFAULT = ['hero', 'metricas', 'previsao', 'quicklinks', 'feedaccess', 'graficos', 'subscricoes', 'faturas'];
+const CARDS_DEFAULT = ['hero', 'intelligence', 'metricas', 'previsao', 'quicklinks', 'feedaccess', 'graficos', 'subscricoes', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
   mostrarGraficos: true,
@@ -64,15 +66,11 @@ const DEFAULT_PREFS = {
   mostrarSubscricoes: true,
 };
 
-const CHART_COLORS = [
-  '#7C6FE0', '#00D68F', '#FFB300', '#FF4D6D',
-  '#22D4FD', '#EC4899', '#FF7340', '#4ECDC4',
-];
-
 function normalizeDashboardData(data) {
-  if (!data) return { porCategoria: [], porMes: [], chartCurrency: 'EUR' };
+  if (!data) return { porCategoria: [], porMes: [], chartCurrency: 'EUR', chartSources: [] };
   const summary = data.real_summary || {};
   const chartCurrency = summary.currency || data.active_currency || data.currency || 'EUR';
+  const chartSources = Array.isArray(summary.fontes) ? summary.fontes : [];
   const summaryCategories = summary.mes_atual?.por_categoria?.length
     ? summary.mes_atual.por_categoria
     : summary.por_categoria;
@@ -103,7 +101,7 @@ function normalizeDashboardData(data) {
       currency: chartCurrency,
     }));
   }
-  return { porCategoria, porMes, chartCurrency };
+  return { porCategoria, porMes, chartCurrency, chartSources };
 }
 
 // ─── Budget Bar animada com Reanimated 4 ─────────────────────────────────────
@@ -128,218 +126,18 @@ function BudgetBar({ pct = 0, color = C.brand }) {
   );
 }
 
-// ─── Bar chart interativo com Reanimated 4 ────────────────────────────────────
-function BarItem({ item, idx, onSelect, isSelected, max, is3d }) {
-  const val   = item.valor || item.total || 0;
-  const pct   = val / max;
-  const color = CHART_COLORS[idx % CHART_COLORS.length];
-  const BAR_W = W - 80 - SPACE.lg * 2;
+// ─── Charts financeiros reutilizáveis ─────────────────────────────────────────
+function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR', chartSources = [] }) {
+  const hasData = (Array.isArray(porCategoria) && porCategoria.length > 0) || (Array.isArray(porMes) && porMes.length > 0);
 
-  const barWidth  = useSharedValue(4);
-  const bgOpacity = useSharedValue(0);
-  const barHeight = useSharedValue(isSelected ? 7 : 5);
-  const depth     = useSharedValue(is3d ? 1 : 0);
-
-  useEffect(() => {
-    barWidth.value = withDelay(100 + idx * 80, withTiming(Math.max(BAR_W * pct, 4), {
-      duration: 600,
-      easing: Easing.out(Easing.cubic),
-    }));
-  }, [pct]);
-
-  useEffect(() => {
-    bgOpacity.value = withTiming(isSelected ? 1 : 0, { duration: 200 });
-    barHeight.value = withSpring(isSelected ? 8 : 5, { damping: 20, stiffness: 300 });
-  }, [isSelected]);
-
-  useEffect(() => {
-    depth.value = withSpring(is3d ? 1 : 0, { damping: 18, stiffness: 180 });
-  }, [is3d]);
-
-  const barStyle   = useAnimatedStyle(() => ({ width: barWidth.value, height: barHeight.value }));
-  const rowStyle   = useAnimatedStyle(() => ({
-    backgroundColor: `${color}${Math.round(bgOpacity.value * 18).toString(16).padStart(2,'0')}`,
-    transform: [
-      { perspective: 700 },
-      { rotateX: `${interpolate(depth.value, [0, 1], [0, isSelected ? -8 : -4])}deg` },
-      { rotateY: `${interpolate(depth.value, [0, 1], [0, idx % 2 === 0 ? 4 : -4])}deg` },
-      { translateY: interpolate(depth.value, [0, 1], [0, isSelected ? -2 : 0]) },
-      { scale: interpolate(depth.value, [0, 1], [1, isSelected ? 1.02 : 1.005]) },
-    ],
-  }));
-
-  return (
-    <Animated.View
-      entering={FadeInDown.delay(idx * 60).duration(350).springify()}
-      style={[is3d && s.chartDepthRow, rowStyle]}
-    >
-      <Pressable
-        onPress={() => onSelect?.(isSelected ? null : idx)}
-        style={{ borderRadius: 10, padding: 8 }}
-      >
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 }}>
-          <Text
-            style={[s.microText, { flex: 1, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}
-            numberOfLines={1}
-          >
-            {item.categoria || item.label || item.nome || `Item ${idx + 1}`}
-          </Text>
-          <Text style={[s.microText, { color, fontWeight: '800' }]}>
-            {formatMoney(val, item.currency || 'EUR')}
-          </Text>
-        </View>
-        <View style={{ backgroundColor: C.surface3, borderRadius: 4, overflow: 'hidden' }}>
-          <Animated.View style={[{ backgroundColor: color, borderRadius: 4 }, barStyle]}>
-            {is3d && <View style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 10, backgroundColor: '#00000022' }} />}
-          </Animated.View>
-        </View>
-        {isSelected && (
-          <Animated.View entering={FadeIn.duration(200)}>
-            <Text style={[s.microText, { marginTop: 5, color }]}>
-              {Math.round(pct * 100)}% do total gasto - toca novamente para fechar
-            </Text>
-          </Animated.View>
-        )}
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-function InteractiveBarChart({ items = [], onSelect, selectedIdx, is3d }) {
-  const max = Math.max(...items.map(i => i.valor || i.total || 0), 1);
-  return (
-    <View style={{ gap: 6 }}>
-      {items.slice(0, 6).map((item, idx) => (
-        <BarItem key={idx} item={item} idx={idx} onSelect={onSelect} isSelected={selectedIdx === idx} max={max} is3d={is3d} />
-      ))}
-    </View>
-  );
-}
-
-// ─── Monthly chart ────────────────────────────────────────────────────────────
-function MonthBar({ item, idx, total, onPress, isSelected, is3d }) {
-  const max = total;
-  const pct = (item.total || 0) / max;
-  const CHART_H = 72;
-  const h = Math.max(pct * CHART_H, 4);
-  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-  const rawMes = String(item.mes || '');
-  const m = rawMes.includes('-') ? parseInt(rawMes.split('-')[1], 10) - 1 : NaN;
-  const label = Number.isFinite(m) ? (meses[m] || rawMes) : rawMes;
-  const color = isSelected ? CHART_COLORS[0] : CHART_COLORS[0] + '55';
-
-  const barH    = useSharedValue(0);
-  const opacity = useSharedValue(isSelected ? 1 : 0.6);
-  const depth   = useSharedValue(is3d ? 1 : 0);
-
-  useEffect(() => {
-    barH.value    = withDelay(150 + idx * 60, withTiming(h, { duration: 500, easing: Easing.out(Easing.cubic) }));
-  }, [h]);
-
-  useEffect(() => {
-    opacity.value = withTiming(isSelected ? 1 : 0.6, { duration: 200 });
-  }, [isSelected]);
-
-  useEffect(() => {
-    depth.value = withSpring(is3d ? 1 : 0, { damping: 18, stiffness: 180 });
-  }, [is3d]);
-
-  const barStyle = useAnimatedStyle(() => ({
-    height: barH.value,
-    opacity: opacity.value,
-    transform: [
-      { perspective: 620 },
-      { rotateX: `${interpolate(depth.value, [0, 1], [0, -12])}deg` },
-      { rotateY: `${interpolate(depth.value, [0, 1], [0, idx % 2 === 0 ? 6 : -6])}deg` },
-      { translateY: interpolate(depth.value, [0, 1], [0, isSelected ? -3 : 0]) },
-    ],
-  }));
-
-  return (
-    <Pressable
-      style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end', height: CHART_H + 36 }}
-      onPress={onPress}
-    >
-      {isSelected ? (
-        <Animated.View entering={FadeIn.duration(150)}>
-          <Text style={[s.microText, { fontSize: 9, marginBottom: 3, color: CHART_COLORS[0], fontWeight: '800' }]}>
-            {formatCompactMoney(item.total || 0, item.currency || 'EUR')}
-          </Text>
-        </Animated.View>
-      ) : (
-        <Text style={{ fontSize: 9, marginBottom: 3, opacity: 0 }}>-</Text>
-      )}
-      <Animated.View style={[{ width: '75%', backgroundColor: color, borderRadius: 4, marginBottom: 6 }, is3d && s.monthDepthBar, barStyle]} />
-      <Text style={[s.microText, { fontSize: 10, fontWeight: isSelected ? '800' : '600', color: isSelected ? C.text : C.textMid }]}>
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-function MonthlyChart({ data = [], onMonthSelect, selectedMonth, is3d }) {
-  if (!data.length) return null;
-  const max = Math.max(...data.map(d => d.total || 0), 1);
-  const meses = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
-
-  return (
-    <View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5 }}>
-        {data.slice(-6).map((item, idx) => (
-          <MonthBar
-            key={idx} item={item} idx={idx} total={max}
-            onPress={() => onMonthSelect?.(selectedMonth === idx ? null : idx)}
-            isSelected={selectedMonth === idx}
-            is3d={is3d}
-          />
-        ))}
-      </View>
-      {selectedMonth != null && data[data.length - 6 + selectedMonth] && (() => {
-        const item = data[data.length - 6 + selectedMonth];
-        const rawMes = String(item.mes || '');
-        const m = rawMes.includes('-') ? parseInt(rawMes.split('-')[1], 10) - 1 : NaN;
-        return (
-          <Animated.View entering={FadeInDown.duration(250)} style={{ marginTop: 10, padding: 12, backgroundColor: C.surface3, borderRadius: 10 }}>
-            <Text style={[s.microText, { color: C.text, fontWeight: '800' }]}>
-              {(Number.isFinite(m) ? meses[m] : rawMes) || item.mes} - {formatMoney(item.total, item.currency || 'EUR')}
-            </Text>
-            {item.num_faturas != null && (
-              <Text style={[s.microText, { marginTop: 3 }]}>{item.num_faturas} fatura(s) registada(s)</Text>
-            )}
-          </Animated.View>
-        );
-      })()}
-    </View>
-  );
-}
-
-// ─── Charts section ───────────────────────────────────────────────────────────
-function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR' }) {
-  const [tab, setTab] = useState('categorias');
-  const [selectedBar, setSelectedBar] = useState(null);
-  const [selectedMonth, setSelectedMonth] = useState(null);
-  const [is3d, setIs3d] = useState(false);
-
-  const hasCats  = Array.isArray(porCategoria) && porCategoria.length > 0;
-  const hasMeses = Array.isArray(porMes) && porMes.length > 0;
-
-  const tabIndicator = useSharedValue(tab === 'categorias' ? 0 : 1);
-
-  const handleTab = (t) => {
-    setTab(t);
-    tabIndicator.value = withSpring(t === 'categorias' ? 0 : 1, { damping: 22, stiffness: 300 });
-    if (t === 'categorias') setSelectedBar(null);
-    else setSelectedMonth(null);
-  };
-
-  if (!hasCats && !hasMeses) {
+  if (!hasData) {
     return (
       <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
         <SectionHeader title="Os teus gastos" />
         <View style={[s.card, { padding: 24, alignItems: 'center', gap: 12 }]}>
           <BarChart2 size={32} color={C.textMid} />
           <Text style={[s.bodyText, { textAlign: 'center', color: C.textMid }]}>Ainda sem dados suficientes</Text>
-          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>Adiciona as tuas primeiras faturas para ver gráficos aqui</Text>
+          <Text style={[s.microText, { textAlign: 'center', maxWidth: 240 }]}>Adiciona faturas ou liga o banco para veres analise real.</Text>
           <Pressable onPress={() => navigation?.navigate?.('Faturas')} style={{ marginTop: 4, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: C.brandDim, borderRadius: 10 }}>
             <Text style={{ fontSize: 13, fontWeight: '700', color: C.brand }}>+ Adicionar fatura</Text>
           </Pressable>
@@ -348,85 +146,20 @@ function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR'
     );
   }
 
-  const topCat = hasCats
-    ? porCategoria.reduce((a, b) => ((b.valor || b.total || 0) > (a.valor || a.total || 0) ? b : a), porCategoria[0])
-    : null;
-
-  let tendencia = null;
-  if (hasMeses && porMes.length >= 2) {
-    const last = porMes[porMes.length - 1]?.total || 0;
-    const prev = porMes[porMes.length - 2]?.total || 0;
-    const diff = last - prev;
-    const pct  = prev > 0 ? Math.abs(diff / prev * 100) : 0;
-    tendencia = { diff, pct: Math.round(pct), subiu: diff > 0 };
-  }
-
   return (
     <Reveal delay={140} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <SectionHeader title="Os teus gastos" />
-      <View style={s.card}>
-        {/* Tabs */}
-        <View style={{ flexDirection: 'row', padding: 12, gap: 8, alignItems: 'center' }}>
-          {hasCats && (
-            <Pressable onPress={() => handleTab('categorias')} style={[s.tab, tab === 'categorias' && s.tabActive]}>
-              <Text style={[s.tabText, tab === 'categorias' && s.tabTextActive]}>Por categoria</Text>
-            </Pressable>
-          )}
-          {hasMeses && (
-            <Pressable onPress={() => handleTab('mensal')} style={[s.tab, tab === 'mensal' && s.tabActive]}>
-              <Text style={[s.tabText, tab === 'mensal' && s.tabTextActive]}>Evolução</Text>
-            </Pressable>
-          )}
-          <Pressable onPress={() => setIs3d(v => !v)} style={[s.chartModeBtn, is3d && s.chartModeBtnActive]}>
-            <Zap size={12} color={is3d ? C.yellow : C.textMid} />
-            <Text style={[s.chartModeText, is3d && { color: C.yellow }]}>3D</Text>
-          </Pressable>
-        </View>
-
-        {tab === 'categorias' && hasCats && (
-          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            {topCat && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: CHART_COLORS[0] }} />
-                <Text style={[s.microText, { flex: 1 }]}>
-                  Categoria principal:{' '}
-                  <Text style={{ color: C.text, fontWeight: '800' }}>{topCat.categoria || topCat.label}</Text>
-                  {' '}com{' '}
-                  <Text style={{ color: CHART_COLORS[0], fontWeight: '800' }}>
-                    {formatMoney(topCat.valor || topCat.total, topCat.currency || chartCurrency)}
-                  </Text>
-                </Text>
-              </View>
-            )}
-            <InteractiveBarChart items={porCategoria} onSelect={setSelectedBar} selectedIdx={selectedBar} is3d={is3d} />
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca numa categoria para ver detalhes</Text>
-          </Animated.View>
-        )}
-
-        {tab === 'mensal' && hasMeses && (
-          <Animated.View entering={FadeIn.duration(200)} style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            {tendencia && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14, padding: 12, backgroundColor: C.surface2, borderRadius: 10 }}>
-                {tendencia.subiu ? <TrendingUp size={14} color={C.red} /> : <TrendingDown size={14} color={C.green} />}
-                <Text style={[s.microText, { flex: 1 }]}>
-                  Este mês gastaste{' '}
-                  <Text style={{ color: tendencia.subiu ? C.red : C.green, fontWeight: '800' }}>
-                    {tendencia.subiu ? '+' : '-'}{tendencia.pct}%
-                  </Text>
-                  {' '}{tendencia.subiu ? 'mais' : 'menos'} do que no mês anterior
-                </Text>
-              </View>
-            )}
-            <MonthlyChart data={porMes} onMonthSelect={setSelectedMonth} selectedMonth={selectedMonth} is3d={is3d} />
-            <Text style={[s.microText, { textAlign: 'center', marginTop: 12, opacity: 0.55 }]}>Toca num mês para ver o valor</Text>
-          </Animated.View>
-        )}
-      </View>
+      <FinancialChartsPanel
+        title="Analise viva dos gastos"
+        subtitle="Tempo, categorias e profundidade num grafico unico e interativo."
+        categories={porCategoria}
+        months={porMes}
+        sources={chartSources}
+        currency={chartCurrency}
+      />
     </Reveal>
   );
 }
 
-// ─── HeroCard ─────────────────────────────────────────────────────────────────
 function HeroCard({ data, onSearchPress }) {
   const spent    = data?.total_gasto || 0;
   const budget   = data?.orcamento   || 0;
@@ -903,7 +636,7 @@ function LoadingSkeleton() {
       <View style={{ flexDirection: 'row', gap: 10 }}>
         {[1,2,3].map(i => <Skeleton key={i} height={76} style={{ flex: 1 }} radius={RADIUS.md} />)}
       </View>
-      <Skeleton height={200} radius={RADIUS.lg} />
+      <FinancialChartsSkeleton title="A montar dashboard" />
       <Skeleton height={140} radius={RADIUS.lg} />
     </View>
   );
@@ -1352,7 +1085,7 @@ export default function DashboardScreen({ navigation, route }) {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  const { porCategoria, porMes, chartCurrency } = normalizeDashboardData(data);
+  const { porCategoria, porMes, chartCurrency, chartSources } = normalizeDashboardData(data);
 
 
   // Renderiza cada card pelo seu id
@@ -1360,6 +1093,14 @@ export default function DashboardScreen({ navigation, route }) {
     switch (id) {
       case 'hero':
         return <HeroCard key="hero" data={data} onSearchPress={() => setSearch(true)} />;
+      case 'intelligence':
+        return (
+          <IntelligenceDeck
+            key="intelligence"
+            intelligence={data?.financial_intelligence}
+            navigation={navigation}
+          />
+        );
       case 'metricas':
         return (
           <React.Fragment key="metricas">
@@ -1372,7 +1113,7 @@ export default function DashboardScreen({ navigation, route }) {
       case 'quicklinks':
         return <QuickLinks key="quicklinks" navigation={navigation} numGarantias={numGarantias} />;
       case 'graficos':
-        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} chartCurrency={chartCurrency} /> : null;
+        return prefs.mostrarGraficos ? <ChartsSection key="graficos" porCategoria={porCategoria} porMes={porMes} navigation={navigation} chartCurrency={chartCurrency} chartSources={chartSources} /> : null;
       case 'subscricoes': {
         const subTotals = data?.subscricoes?.totais_por_moeda || [];
         const subMain = subTotals.find(item => item.desperdicado > 0) || null;
@@ -1447,7 +1188,7 @@ export default function DashboardScreen({ navigation, route }) {
 
           {/* Centro — título + streak */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 }}>Verly</Text>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: 0 }}>Verly</Text>
             <StreakBadge streak={streakDias} />
           </View>
 
@@ -1665,9 +1406,9 @@ const s = StyleSheet.create({
   label:    { fontSize: FONT.xs, fontWeight: '600', color: C.textMid, letterSpacing: 0.3 },
   bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },
   microText:{ fontSize: FONT.xs, color: C.textMid },
-  bigNum:   { fontSize: FONT.h1, fontWeight: '900', color: C.text, letterSpacing: -0.8 },
+  bigNum:   { fontSize: FONT.h1, fontWeight: '900', color: C.text, letterSpacing: 0 },
   subText:  { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
-  metricVal:{ fontSize: FONT.xl, fontWeight: '900', letterSpacing: -0.5 },
+  metricVal:{ fontSize: FONT.xl, fontWeight: '900', letterSpacing: 0 },
   iconBtn: {
     width: 40, height: 40, borderRadius: RADIUS.sm,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
@@ -1709,45 +1450,6 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
     borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border,
     alignItems: 'center', paddingVertical: 18, paddingHorizontal: 8,
-  },
-  tab: {
-    paddingHorizontal: 14, paddingVertical: 7,
-    borderRadius: 10, borderWidth: 1, borderColor: 'transparent',
-  },
-  tabActive: { backgroundColor: C.brandDim, borderColor: C.brand + '40' },
-  tabText:       { fontSize: 12, fontWeight: '700', color: C.textMid },
-  tabTextActive: { color: C.brand },
-  chartModeBtn: {
-    marginLeft: 'auto',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.surface2,
-  },
-  chartModeBtnActive: {
-    borderColor: C.yellow + '55',
-    backgroundColor: C.yellow + '12',
-  },
-  chartModeText: { fontSize: 11, fontWeight: '900', color: C.textMid },
-  chartDepthRow: {
-    borderRadius: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 5,
-  },
-  monthDepthBar: {
-    shadowColor: C.brand,
-    shadowOffset: { width: 4, height: 5 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
-    elevation: 5,
   },
   dragIndicator: {
     position: 'absolute', right: 20, top: '50%',

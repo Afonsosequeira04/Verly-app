@@ -6,6 +6,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.api  import api_bp
 from app      import db
+from app.financial_intelligence import build_financial_intelligence
 from app.financial_records import normalize_text, summarize_expenses
 from app.models import User
 from app.models_social import (
@@ -381,8 +382,10 @@ def criar_desafio_ia(grupo_id):
     inicio_analise = datetime.utcnow().date() - timedelta(days=30)
 
     resumo_membros = []
+    sugestoes_inteligentes = []
     for membro in membros:
         summary = summarize_expenses(membro.id)
+        intelligence = build_financial_intelligence(membro, summary)
         registos = [
             item for item in summary['records']
             if item['date'] and item['date'] >= inicio_analise
@@ -402,7 +405,10 @@ def criar_desafio_ia(grupo_id):
                 for cat, valor in sorted(categorias.items(), key=lambda x: x[1], reverse=True)[:3]
             ],
             'movimentos_excluidos': summary['excluded']['count'],
+            'acao_principal': intelligence.get('primary_action'),
+            'desafios_sugeridos': intelligence.get('social_challenges', [])[:2],
         })
+        sugestoes_inteligentes.extend(intelligence.get('social_challenges', [])[:2])
 
     # Chamar IA (Groq)
     try:
@@ -451,6 +457,7 @@ Responde APENAS com JSON válido neste formato exato:
         return jsonify({
             'sugestao': sugestao,
             'resumo_grupo': resumo_membros,
+            'sugestoes_inteligentes': sugestoes_inteligentes[:5],
         })
 
     except Exception as e:
@@ -463,6 +470,23 @@ Responde APENAS com JSON válido neste formato exato:
                     todas_cats[cat] = todas_cats.get(cat, 0) + val
             if todas_cats:
                 cat_comum = max(todas_cats, key=todas_cats.get)
+
+        if sugestoes_inteligentes:
+            smart = sugestoes_inteligentes[0]
+            return jsonify({
+                'sugestao': {
+                    'titulo': smart.get('title') or 'Desafio inteligente do grupo',
+                    'descricao': smart.get('description') or 'Desafio criado a partir dos gastos reais do grupo.',
+                    'tipo': smart.get('type') or 'gastar_menos',
+                    'categoria': smart.get('category'),
+                    'valor_alvo': smart.get('target') or 0,
+                    'dias': smart.get('days') or 14,
+                    'recompensa': 'Campeao da poupanca',
+                    'justificacao': 'Sugestao criada a partir dos gastos reais e dos padroes do grupo.',
+                },
+                'resumo_grupo': resumo_membros,
+                'sugestoes_inteligentes': sugestoes_inteligentes[:5],
+            })
 
         return jsonify({
             'sugestao': {

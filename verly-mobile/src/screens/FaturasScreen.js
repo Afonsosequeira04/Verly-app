@@ -429,7 +429,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
     paddingHorizontal: 20, paddingTop: 16, paddingBottom: 12,
   },
-  title: { fontSize: 28, fontWeight: '800', color: C.text, letterSpacing: -0.5 },
+  title: { fontSize: 28, fontWeight: '800', color: C.text, letterSpacing: 0 },
   sub:   { fontSize: 13, color: C.textSub, marginTop: 4 },
   uploadBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,

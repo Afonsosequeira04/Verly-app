@@ -1,3 +1,5 @@
+import json
+import os
 import re
 import unicodedata
 from calendar import monthrange
@@ -10,6 +12,53 @@ from app.models import BankTransaction, CATEGORIAS, Fatura
 DEFAULT_CATEGORY = 'Outros'
 TRANSFER_CATEGORY = 'Transferencias'
 SAVINGS_CATEGORY = 'Poupanca'
+
+FALLBACK_RATES_PER_EUR = {
+    'EUR': 1.0,
+    'DKK': 7.46,
+    'USD': 1.08,
+    'GBP': 0.85,
+    'SEK': 11.2,
+    'NOK': 11.5,
+}
+
+
+def _rates_per_eur():
+    raw = os.getenv('EXCHANGE_RATES_PER_EUR_JSON')
+    if not raw:
+        return FALLBACK_RATES_PER_EUR
+    try:
+        parsed = json.loads(raw)
+        rates = {
+            clean_currency(currency): float(rate)
+            for currency, rate in parsed.items()
+            if float(rate) > 0
+        }
+        return {**FALLBACK_RATES_PER_EUR, **rates, 'EUR': 1.0}
+    except Exception:
+        return FALLBACK_RATES_PER_EUR
+
+
+def convert_currency(value, from_currency, to_currency):
+    source = clean_currency(from_currency)
+    target = clean_currency(to_currency)
+    amount = float(value or 0)
+    if source == target:
+        return amount, False
+    rates = _rates_per_eur()
+    if source not in rates or target not in rates:
+        return amount, False
+    eur_value = amount / rates[source]
+    return eur_value * rates[target], True
+
+
+def financial_cache_keys(user_id):
+    currencies = ['auto', *sorted(_rates_per_eur().keys())]
+    for prefix in ('dashboard', 'estatisticas'):
+        yield f'{prefix}:{user_id}'
+        for currency in currencies:
+            yield f'{prefix}:{user_id}:{currency}'
+    yield f'insights:{user_id}'
 
 
 def clean_currency(value):
@@ -360,14 +409,37 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
         current_end,
         requested=currency,
     )
-    records = [
-        record for record in spending_records
-        if record['currency'] == selected_currency
-    ]
     other_currency_records = [
         record for record in spending_records
         if record['currency'] != selected_currency
     ]
+    converted_count = 0
+
+    def display_record(record):
+        converted_value, converted = convert_currency(
+            record['value'],
+            record['currency'],
+            selected_currency,
+        )
+        signed_amount, _ = convert_currency(
+            record.get('signed_amount', record['value']),
+            record['currency'],
+            selected_currency,
+        )
+        nonlocal converted_count
+        if converted:
+            converted_count += 1
+        return {
+            **record,
+            'original_value': round(record['value'], 2),
+            'original_currency': record['currency'],
+            'value': converted_value,
+            'signed_amount': signed_amount,
+            'currency': selected_currency,
+            'converted': converted,
+        }
+
+    records = [display_record(record) for record in spending_records]
 
     por_categoria = defaultdict(float)
     por_categoria_count = defaultdict(int)
@@ -432,11 +504,22 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
 
     current = aggregate(current_records)
     previous = aggregate(previous_records)
+    all_aggregated = aggregate(records)
 
-    month_keys = []
+    rolling_month_keys = []
     for offset in range(months - 1, -1, -1):
         year, month = add_months(today.year, today.month, -offset)
-        month_keys.append(f'{year}-{month:02d}')
+        rolling_month_keys.append(f'{year}-{month:02d}')
+
+    data_month_keys = sorted({record['month'] for record in records if record.get('month')})
+    month_keys = [
+        key for key in rolling_month_keys
+        if key in data_month_keys or por_mes.get(key, 0) > 0
+    ]
+    for key in data_month_keys[-months:]:
+        if key not in month_keys:
+            month_keys.append(key)
+    month_keys = sorted(month_keys)[-months:]
 
     total_geral = sum(item['value'] for item in records)
     variacao_pct = None
@@ -467,6 +550,16 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
     return {
         'records': records,
         'currency': selected_currency,
+        'conversion': {
+            'display_currency': selected_currency,
+            'converted_count': converted_count,
+            'enabled': converted_count > 0,
+            'rates_source': (
+                'env'
+                if os.getenv('EXCHANGE_RATES_PER_EUR_JSON')
+                else 'fallback'
+            ),
+        },
         'available_currencies': currency_totals,
         'currency_totals': currency_totals,
         'other_currencies': {
@@ -504,6 +597,7 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
             {'loja': key, 'total': round(value, 2), 'currency': selected_currency}
             for key, value in sorted(por_loja.items(), key=lambda item: -item[1])[:8]
         ],
+        'itens_por_categoria': all_aggregated['items_by_category'],
         'fontes': [
             {
                 'fonte': key,

@@ -13,12 +13,10 @@ import {
 } from 'react-native';
 import {
   AlertTriangle,
-  BarChart3,
   Building2,
   CalendarDays,
   CheckCircle2,
   Link as LinkIcon,
-  PieChart,
   RefreshCw,
   Repeat,
   Search,
@@ -27,12 +25,13 @@ import {
   WalletCards,
 } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { MotiView } from 'moti';
 
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { OPEN_BANKING_CALLBACK_URL, openBankingAPI } from '../services/api';
 import { formatCompactMoney, formatMoney } from '../utils/money';
+import { FinancialChartsPanel, FinancialChartsSkeleton } from '../components/FinancialCharts';
+import IntelligenceDeck from '../components/IntelligenceDeck';
 
 const C = COLORS;
 function parseCallbackUrl(url) {
@@ -114,7 +113,12 @@ function BudgetBanner({ budget }) {
   const pct = Math.min(Number(budget.pct || 0), 140);
 
   return (
-    <Animated.View entering={FadeInDown.delay(60).duration(360).springify()} style={[styles.budgetCard, { borderColor: color + '66' }]}>
+    <MotiView
+      from={{ opacity: 0, translateY: 12 }}
+      animate={{ opacity: 1, translateY: 0 }}
+      transition={{ type: 'timing', duration: 360, delay: 60 }}
+      style={[styles.budgetCard, { borderColor: color + '66' }]}
+    >
       <View style={styles.budgetHeader}>
         <View style={[styles.budgetIcon, { backgroundColor: color + '18' }]}>
           {danger || warning
@@ -140,108 +144,7 @@ function BudgetBanner({ budget }) {
           <View style={[styles.progressFill, { width: `${Math.min(pct, 100)}%`, backgroundColor: color }]} />
         </View>
       )}
-    </Animated.View>
-  );
-}
-
-function MonthlyBars({ data = [], currency = 'EUR' }) {
-  const [selected, setSelected] = useState(null);
-  if (!data.length) return null;
-  const max = Math.max(...data.map(item => Number(item.total || 0)), 1);
-  const visible = data.slice(-6);
-
-  return (
-    <Animated.View entering={FadeInDown.delay(110).duration(360).springify()} style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionTitleRow}>
-          <BarChart3 size={15} color={C.brand} />
-          <Text style={styles.sectionTitle}>Evolução bancária</Text>
-        </View>
-      </View>
-      <View style={styles.chartCard}>
-        {visible.map((item, index) => {
-          const height = Math.max((Number(item.total || 0) / max) * 90, 8);
-          const month = String(item.mes || '').split('-')[1] || item.mes;
-          return (
-            <Pressable
-              key={`${item.mes}-${index}`}
-              onPress={() => setSelected(selected === index ? null : index)}
-              style={[styles.monthCol, selected === index && styles.monthColSelected]}
-            >
-              <Text style={styles.monthValue}>{formatShortAmount(item.total, item.currency || currency)}</Text>
-              <MotiView
-                from={{ height: 4, opacity: 0.4 }}
-                animate={{ height, opacity: 1 }}
-                transition={{ type: 'timing', duration: 520 + index * 70 }}
-                style={styles.monthBar}
-              />
-              <Text style={styles.monthLabel}>{month}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      {selected != null && visible[selected] && (
-        <View style={styles.chartDetail}>
-          <Text style={styles.chartDetailText}>
-            {visible[selected].mes}: {formatAmount(visible[selected].total, visible[selected].currency || currency)}
-          </Text>
-        </View>
-      )}
-    </Animated.View>
-  );
-}
-
-function CategoryBars({ data = [], currency = 'EUR', itemsByCategory = {} }) {
-  const [selected, setSelected] = useState(null);
-  const visible = data.slice(0, 5);
-  if (!visible.length) return null;
-  const max = Math.max(...visible.map(item => Number(item.valor ?? item.total ?? 0)), 1);
-
-  return (
-    <Animated.View entering={FadeInDown.delay(150).duration(360).springify()} style={styles.section}>
-      <View style={styles.sectionHeader}>
-        <View style={styles.sectionTitleRow}>
-          <PieChart size={15} color={C.brand} />
-          <Text style={styles.sectionTitle}>Categorias do mês</Text>
-        </View>
-      </View>
-      <View style={styles.categoryCard}>
-        {visible.map((item, index) => {
-          const total = Number(item.valor ?? item.total ?? 0);
-          const pct = max > 0 ? Math.max((total / max) * 100, 4) : 4;
-          const active = selected === index;
-          const details = itemsByCategory[normalizeKey(item.categoria)] || [];
-          return (
-            <Pressable
-              key={`${item.categoria}-${index}`}
-              onPress={() => setSelected(active ? null : index)}
-              style={[styles.categoryRow, active && styles.categoryRowActive]}
-            >
-              <View style={styles.categoryTop}>
-                <Text style={styles.categoryName} numberOfLines={1}>{item.categoria}</Text>
-                <Text style={styles.categoryAmount}>{formatAmount(total, item.currency || currency)}</Text>
-              </View>
-              <View style={styles.categoryTrack}>
-                <MotiView
-                  from={{ width: '0%' }}
-                  animate={{ width: `${pct}%` }}
-                  transition={{ type: 'timing', duration: 500 + index * 70 }}
-                  style={styles.categoryFill}
-                />
-              </View>
-              {active && details.slice(0, 3).map((detail, detailIndex) => (
-                <View key={`${detail.loja}-${detailIndex}`} style={styles.categoryDetailRow}>
-                  <Text style={styles.categoryDetailName} numberOfLines={1}>{detail.loja}</Text>
-                  <Text style={styles.categoryDetailAmount}>
-                    {formatAmount(detail.valor, detail.currency || item.currency || currency)}
-                  </Text>
-                </View>
-              ))}
-            </Pressable>
-          );
-        })}
-      </View>
-    </Animated.View>
+    </MotiView>
   );
 }
 
@@ -257,7 +160,12 @@ function RecurringCard({ subscriptions = [], currency = 'EUR' }) {
   const visible = subscriptions.slice(0, 3);
 
   return (
-    <Animated.View entering={FadeInDown.delay(190).duration(360).springify()} style={styles.section}>
+    <MotiView
+      from={{ opacity: 0, translateY: 12 }}
+      animate={{ opacity: 1, translateY: 0 }}
+      transition={{ type: 'timing', duration: 360, delay: 190 }}
+      style={styles.section}
+    >
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleRow}>
           <Repeat size={15} color={C.brand} />
@@ -280,11 +188,11 @@ function RecurringCard({ subscriptions = [], currency = 'EUR' }) {
         ))}
         <Text style={styles.recurringFoot}>Impacto anual estimado: {formatAmount(total * 12, totalCurrency)}</Text>
       </View>
-    </Animated.View>
+    </MotiView>
   );
 }
 
-function CurrencyStrip({ summary }) {
+function CurrencyStrip({ summary, onSelect }) {
   const currencies = summary?.available_currencies || [];
   if (!currencies.length) return null;
   return (
@@ -292,10 +200,14 @@ function CurrencyStrip({ summary }) {
       {currencies.slice(0, 3).map(item => {
         const active = item.currency === summary.currency;
         return (
-          <View key={item.currency} style={[styles.currencyPill, active && styles.currencyPillActive]}>
+          <Pressable
+            key={item.currency}
+            onPress={() => onSelect?.(item.currency)}
+            style={[styles.currencyPill, active && styles.currencyPillActive]}
+          >
             <Text style={[styles.currencyCode, active && styles.currencyCodeActive]}>{item.currency}</Text>
             <Text style={styles.currencyTotal}>{formatShortAmount(item.total, item.currency)}</Text>
-          </View>
+          </Pressable>
         );
       })}
     </View>
@@ -305,7 +217,12 @@ function CurrencyStrip({ summary }) {
 function ExcludedMovementsCard({ excluded }) {
   if (!excluded?.count) return null;
   return (
-    <Animated.View entering={FadeInDown.delay(130).duration(360).springify()} style={styles.excludedCard}>
+    <MotiView
+      from={{ opacity: 0, translateY: 12 }}
+      animate={{ opacity: 1, translateY: 0 }}
+      transition={{ type: 'timing', duration: 360, delay: 130 }}
+      style={styles.excludedCard}
+    >
       <View style={styles.excludedHeader}>
         <View style={styles.sectionTitleRow}>
           <ShieldCheck size={15} color={C.green} />
@@ -327,11 +244,11 @@ function ExcludedMovementsCard({ excluded }) {
           <Text style={styles.excludedAmount}>{formatAmount(item.valor, item.currency)}</Text>
         </View>
       ))}
-    </Animated.View>
+    </MotiView>
   );
 }
 
-export default function OpenBankingScreen() {
+export default function OpenBankingScreen({ navigation }) {
   const [status, setStatus] = useState(null);
   const [summary, setSummary] = useState(null);
   const [institutions, setInstitutions] = useState([]);
@@ -342,6 +259,7 @@ export default function OpenBankingScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [connectingId, setConnectingId] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [selectedCurrency, setSelectedCurrency] = useState(null);
 
   const configured = status?.configured;
   const financialSummary = summary?.summary;
@@ -371,11 +289,14 @@ export default function OpenBankingScreen() {
       const [accountsData, transactionsData, summaryData] = await Promise.all([
         openBankingAPI.accounts(),
         openBankingAPI.transactions({ limit: 20 }),
-        openBankingAPI.summary(),
+        openBankingAPI.summary(selectedCurrency ? { currency: selectedCurrency } : {}),
       ]);
       setAccounts(accountsData.accounts || []);
       setTransactions(transactionsData.transactions || []);
       setSummary(summaryData || null);
+      if (!selectedCurrency && summaryData?.summary?.currency) {
+        setSelectedCurrency(summaryData.summary.currency);
+      }
 
       if (statusData.configured) {
         const institutionsData = await openBankingAPI.institutions('PT');
@@ -387,7 +308,7 @@ export default function OpenBankingScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedCurrency]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -399,7 +320,7 @@ export default function OpenBankingScreen() {
         openBankingAPI.accounts(),
         openBankingAPI.transactions({ limit: 20 }),
         openBankingAPI.status(),
-        openBankingAPI.summary(),
+        openBankingAPI.summary(selectedCurrency ? { currency: selectedCurrency } : {}),
       ]);
       setAccounts(accountsData.accounts || []);
       setTransactions(transactionsData.transactions || []);
@@ -417,7 +338,7 @@ export default function OpenBankingScreen() {
     } finally {
       setSyncing(false);
     }
-  }, []);
+  }, [selectedCurrency]);
 
   const finishCallback = useCallback(async (url) => {
     if (!url?.startsWith('verly://open-banking/callback')) return;
@@ -467,8 +388,8 @@ export default function OpenBankingScreen() {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={C.brand} />
+      <View style={styles.loadingRoot}>
+        <FinancialChartsSkeleton title="A sincronizar Open Banking" />
       </View>
     );
   }
@@ -511,7 +432,12 @@ export default function OpenBankingScreen() {
           <>
             {financialSummary && (
               <>
-                <Animated.View entering={FadeInDown.duration(360).springify()} style={styles.heroPanel}>
+                <MotiView
+                  from={{ opacity: 0, translateY: 12 }}
+                  animate={{ opacity: 1, translateY: 0 }}
+                  transition={{ type: 'timing', duration: 360 }}
+                  style={styles.heroPanel}
+                >
                   <View style={styles.heroTop}>
                     <View>
                       <Text style={styles.heroLabel}>Gastos reais este mês</Text>
@@ -542,17 +468,34 @@ export default function OpenBankingScreen() {
                       </View>
                     )}
                   </View>
-                </Animated.View>
+                </MotiView>
 
-                <CurrencyStrip summary={financialSummary} />
+                <CurrencyStrip
+                  summary={financialSummary}
+                  onSelect={(currency) => {
+                    setSelectedCurrency(currency);
+                    setLoading(true);
+                  }}
+                />
+                <IntelligenceDeck
+                  intelligence={summary?.financial_intelligence}
+                  navigation={navigation}
+                  compact
+                  title="Leitura do banco"
+                />
                 <BudgetBanner budget={summary?.budget} />
                 <ExcludedMovementsCard excluded={financialSummary.excluded} />
-                <MonthlyBars data={monthlyData} currency={activeCurrency} />
-                <CategoryBars
-                  data={categoryData}
-                  currency={activeCurrency}
-                  itemsByCategory={monthSummary.itens_por_categoria || {}}
-                />
+                <View style={styles.chartPanelWrap}>
+                  <FinancialChartsPanel
+                    title="Open Banking vivo"
+                    subtitle="Movimentos, categorias e evolucao vindos diretamente do banco."
+                    categories={categoryData}
+                    months={monthlyData}
+                    itemsByCategory={monthSummary.itens_por_categoria || {}}
+                    sources={sourceData}
+                    currency={activeCurrency}
+                  />
+                </View>
                 <RecurringCard subscriptions={summary?.subscriptions || []} currency={activeCurrency} />
               </>
             )}
@@ -671,6 +614,7 @@ export default function OpenBankingScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg },
+  loadingRoot: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', paddingHorizontal: SPACE.lg },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -798,50 +742,7 @@ const styles = StyleSheet.create({
     marginBottom: SPACE.sm,
   },
   sectionBadge: { color: C.brand, fontSize: FONT.xs, fontWeight: '800' },
-  chartCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    gap: 8,
-    minHeight: 142,
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: SPACE.md,
-  },
-  monthCol: { flex: 1, alignItems: 'center', justifyContent: 'flex-end', minHeight: 110 },
-  monthColSelected: { backgroundColor: C.brand + '10', borderRadius: RADIUS.sm },
-  monthValue: { color: C.textMid, fontSize: 9, fontWeight: '800', minHeight: 14 },
-  monthBar: { width: '72%', maxWidth: 24, minHeight: 8, borderRadius: 5, backgroundColor: C.brand, marginTop: 4 },
-  monthLabel: { color: C.textMid, fontSize: 10, fontWeight: '700', marginTop: 6 },
-  chartDetail: {
-    backgroundColor: C.surface2,
-    borderRadius: RADIUS.sm,
-    borderWidth: 1,
-    borderColor: C.border,
-    paddingHorizontal: SPACE.sm,
-    paddingVertical: 8,
-    marginTop: SPACE.sm,
-  },
-  chartDetailText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
-  categoryCard: {
-    backgroundColor: C.surface,
-    borderRadius: RADIUS.md,
-    borderWidth: 1,
-    borderColor: C.border,
-    padding: SPACE.md,
-  },
-  categoryRow: { marginBottom: SPACE.sm, borderRadius: RADIUS.sm, padding: 6 },
-  categoryRowActive: { backgroundColor: C.surface2 },
-  categoryTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.sm, marginBottom: 6 },
-  categoryName: { color: C.text, fontSize: FONT.sm, fontWeight: '700', flex: 1 },
-  categoryAmount: { color: C.text, fontSize: FONT.sm, fontWeight: '800' },
-  categoryTrack: { height: 7, borderRadius: 4, backgroundColor: C.surface3, overflow: 'hidden' },
-  categoryFill: { height: '100%', borderRadius: 4, backgroundColor: C.green },
-  categoryDetailRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, marginTop: 8 },
-  categoryDetailName: { flex: 1, color: C.textMid, fontSize: FONT.xs, fontWeight: '700' },
-  categoryDetailAmount: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
+  chartPanelWrap: { marginTop: SPACE.md },
   recurringCard: {
     backgroundColor: C.surface,
     borderRadius: RADIUS.md,

@@ -51,8 +51,9 @@ def processar_ocr_task(self, fatura_id: int):
 
         # Invalidar cache do dashboard após novo OCR
         from app.extensions import cache
-        cache.delete(f'dashboard:{fatura.user_id}')
-        cache.delete(f'estatisticas:{fatura.user_id}')
+        from app.financial_records import financial_cache_keys
+        for key in financial_cache_keys(fatura.user_id):
+            cache.delete(key)
 
         from app.tasks.qdrant_task import indexar_fatura_task
         indexar_fatura_task.delay(fatura_id)

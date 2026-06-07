@@ -12,6 +12,7 @@ from datetime import datetime
 from flask import jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_intelligence import build_financial_intelligence
 from app.financial_records import json_safe_financial_summary, summarize_expenses
 from app.models import Fatura, Conversa
 from app.subscriptions import detect_subscriptions
@@ -33,15 +34,16 @@ logger = logging.getLogger(__name__)
 def dashboard():
     from app.models import User
     user_id = int(get_jwt_identity())
+    requested_currency = request.args.get('currency')
 
     # Cache por utilizador (5 min) — invalida no upload de faturas
-    cache_key = f'dashboard:{user_id}'
+    cache_key = f'dashboard:{user_id}:{requested_currency or "auto"}'
     cached = cache.get(cache_key)
     if cached:
         return jsonify(cached)
 
     user = User.query.get_or_404(user_id)
-    real_summary = summarize_expenses(user_id)
+    real_summary = summarize_expenses(user_id, currency=requested_currency)
     budget_summary = (
         real_summary if real_summary['currency'] == 'EUR'
         else summarize_expenses(user_id, currency='EUR')
@@ -95,6 +97,7 @@ def dashboard():
     alertas.sort(key=lambda x: x['dias'])
 
     subs_data    = detect_subscriptions(user_id)
+    financial_intelligence = build_financial_intelligence(user, real_summary, budget_summary, subs_data)
     metas_info   = _get_metas_dashboard(user_id)
     mood         = _calcular_mood(total_gasto, orcamento, len(alertas), personalidade)
     streak       = _atualizar_streak(user, faturas, orcamento)
@@ -131,6 +134,7 @@ def dashboard():
         'fontes_reais':      real_summary_public['fontes_por_moeda'],
         'real_summary':      real_summary_public,
         'budget_summary':    budget_summary_public,
+        'financial_intelligence': financial_intelligence,
         'banking': {
             'active_currency': real_summary_public['currency'],
             'available_currencies': real_summary_public['available_currencies'],
@@ -199,13 +203,25 @@ def _parse_date_str(s):
 @jwt_required()
 def estatisticas():
     user_id = int(get_jwt_identity())
+    requested_currency = request.args.get('currency')
 
-    cache_key = f'estatisticas:{user_id}'
+    cache_key = f'estatisticas:{user_id}:{requested_currency or "auto"}'
     cached = cache.get(cache_key)
     if cached:
         return jsonify(cached)
 
-    summary = summarize_expenses(user_id, currency=request.args.get('currency'))
+    summary = summarize_expenses(user_id, currency=requested_currency)
+    from app.models import User
+    user = User.query.get_or_404(user_id)
+    try:
+        subs_data = detect_subscriptions(user_id)
+    except Exception:
+        subs_data = {}
+    budget_summary = (
+        summary if summary['currency'] == 'EUR'
+        else summarize_expenses(user_id, currency='EUR')
+    )
+    financial_intelligence = build_financial_intelligence(user, summary, budget_summary, subs_data)
 
     if not summary['records']:
         return jsonify({
@@ -218,8 +234,12 @@ def estatisticas():
             'num_faturas':   0,
             'num_registos':  0,
             'fontes':        [],
+            'fontes_por_moeda': summary['fontes_por_moeda'],
+            'itens_por_categoria': {},
             'top_lojas':     [],
             'currency':      summary['currency'],
+            'conversion':    summary['conversion'],
+            'financial_intelligence': financial_intelligence,
             'available_currencies': summary['available_currencies'],
             'other_currencies': summary['other_currencies'],
             'excluded':      summary['excluded'],
@@ -243,10 +263,13 @@ def estatisticas():
         'num_registos':  summary['num_registos'],
         'fontes':        summary['fontes'],
         'fontes_por_moeda': summary['fontes_por_moeda'],
+        'itens_por_categoria': summary['itens_por_categoria'],
         'top_lojas':     summary['top_lojas'],
         'mes_atual':     summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
         'currency':      summary['currency'],
+        'conversion':    summary['conversion'],
+        'financial_intelligence': financial_intelligence,
         'available_currencies': summary['available_currencies'],
         'other_currencies': summary['other_currencies'],
         'excluded':      summary['excluded'],

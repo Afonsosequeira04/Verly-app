@@ -255,7 +255,10 @@ export const onboardingAPI = {
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
 export const dashboardAPI = {
-  get: () => apiFetch('/dashboard'),
+  get: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/dashboard${query ? `?${query}` : ''}`);
+  },
 };
 
 // ── Faturas ────────────────────────────────────────────────────────────────────
@@ -326,7 +329,10 @@ export const metasAPI = {
 // ── Estatísticas ───────────────────────────────────────────────────────────────
 
 export const estatisticasAPI = {
-  get: () => apiFetch('/estatisticas'),
+  get: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/estatisticas${query ? `?${query}` : ''}`);
+  },
 };
 
 // ── Score de Compras ───────────────────────────────────────────────────────────
@@ -455,7 +461,10 @@ export const openBankingAPI = {
 
   accounts: () => apiFetch('/open-banking/accounts'),
 
-  summary: () => apiFetch('/open-banking/summary'),
+  summary: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/open-banking/summary${query ? `?${query}` : ''}`);
+  },
 
   sync: () => apiFetch('/open-banking/sync', { method: 'POST' }),
 

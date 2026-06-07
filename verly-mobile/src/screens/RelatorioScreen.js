@@ -250,7 +250,7 @@ const styles = StyleSheet.create({
   // Seletor mês
   mesNav:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 18 },
   mesNavBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: C.surface2, borderWidth: 1, borderColor: C.border, alignItems: 'center', justifyContent: 'center' },
-  mesTitulo: { fontSize: 17, fontWeight: '800', color: C.text, letterSpacing: -0.3 },
+  mesTitulo: { fontSize: 17, fontWeight: '800', color: C.text, letterSpacing: 0 },
 
   loadBox:    { padding: 60, alignItems: 'center' },
 
@@ -274,7 +274,7 @@ const styles = StyleSheet.create({
   statAccent:{ position: 'absolute', top: 0, left: 0, right: 0, height: 2 },
   statIconWrap:{ width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   statLabel: { fontSize: 11, color: C.textSub, textTransform: 'uppercase', letterSpacing: 0.5 },
-  statValue: { fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  statValue: { fontSize: 20, fontWeight: '900', color: C.text, letterSpacing: 0 },
   statSub:   { fontSize: 11, color: C.textSub },
 
   // Card

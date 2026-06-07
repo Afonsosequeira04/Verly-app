@@ -201,7 +201,7 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   card: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border },
   bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },
-  bigNum:   { fontSize: FONT.xxl, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  bigNum:   { fontSize: FONT.xxl, fontWeight: '900', color: C.text, letterSpacing: 0 },
   microText: { fontSize: FONT.xs, color: C.textMid },
   label:    { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 8, letterSpacing: 0.3 },
 

@@ -426,7 +426,7 @@ const styles = StyleSheet.create({
 
   heroCard:    { backgroundColor: C.brand, borderRadius: RADIUS.lg, padding: 24, marginBottom: 16, alignItems: 'center' },
   heroLabel:   { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: -1, marginTop: 8 },
+  heroValor:   { fontSize: 44, fontWeight: '900', color: '#fff', letterSpacing: 0, marginTop: 8 },
   variacaoRow: { flexDirection: 'row', gap: 6, alignItems: 'center', marginTop: 10 },
   variacaoText: { fontSize: 13, fontWeight: '700' },
   heroSub:     { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 8 },

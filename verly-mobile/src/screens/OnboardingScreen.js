@@ -734,7 +734,7 @@ const s = StyleSheet.create({
   },
   title: {
     fontSize: 26, fontWeight: '900', color: C.text,
-    textAlign: 'center', marginBottom: 10, letterSpacing: -0.5,
+    textAlign: 'center', marginBottom: 10, letterSpacing: 0,
   },
   sub: {
     fontSize: 14, color: C.textMid,

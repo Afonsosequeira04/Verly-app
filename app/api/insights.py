@@ -13,6 +13,7 @@ from datetime import datetime
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_intelligence import build_financial_intelligence
 from app.financial_records import normalize_text, summarize_expenses
 from app.models import Fatura, User, Meta
 from app.extensions import cache
@@ -116,6 +117,7 @@ def _build_context(user_id: int) -> dict:
             for sub in subs_data.get('subscriptions', [])[:5]
         ]
     except Exception:
+        subs_data = {}
         subscricoes_detetadas = []
 
     total_subscricoes = sum(s['valor_mensal'] for s in subscricoes_detetadas)
@@ -186,6 +188,7 @@ def _build_context(user_id: int) -> dict:
         'regra_5030_20': regra_5030_20,
         'risco_concentracao': risco_concentracao,
         'itens_por_categoria': itens_por_categoria,
+        'financial_intelligence': build_financial_intelligence(user, summary, budget_summary, subs_data),
     }
 
     gastos_mes = defaultdict(float)
@@ -590,7 +593,9 @@ def get_insights():
             'historico_mensal':    ctx['historico_mensal'],
             'regra_5030_20':       ctx['regra_5030_20'],
             'itens_por_categoria': ctx['itens_por_categoria'],
+            'financial_intelligence': ctx['financial_intelligence'],
         },
+        'financial_intelligence': ctx['financial_intelligence'],
         'personalidade': personalidade,
         'sem_dados': ctx['num_faturas_mes'] == 0 and ctx['total_gasto_mes'] == 0,
     }

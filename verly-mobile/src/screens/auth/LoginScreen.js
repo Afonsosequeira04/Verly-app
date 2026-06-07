@@ -168,7 +168,7 @@ const s = StyleSheet.create({
     shadowColor: C.brand, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.4, shadowRadius: 14,
   },
   logoMarkText: { fontSize: 22, fontWeight: '900', color: '#fff' },
-  logoText: { fontSize: 26, fontWeight: '900', color: C.text, letterSpacing: -0.5 },
+  logoText: { fontSize: 26, fontWeight: '900', color: C.text, letterSpacing: 0 },
   logoSub:  { fontSize: FONT.sm, color: C.textMid, marginTop: 6 },
 
   card: {

@@ -8,8 +8,10 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app import db
 from app.api import api_bp
 from app.extensions import cache
+from app.financial_intelligence import build_financial_intelligence
 from app.financial_records import (
     classify_bank_movement,
+    financial_cache_keys,
     json_safe_financial_summary,
     normalize_text,
     summarize_expenses,
@@ -88,11 +90,7 @@ def _transaction_to_dict(transaction):
 
 
 def _invalidate_financial_cache(user_id):
-    for key in (
-        f'dashboard:{user_id}',
-        f'estatisticas:{user_id}',
-        f'insights:{user_id}',
-    ):
+    for key in financial_cache_keys(user_id):
         try:
             cache.delete(key)
         except Exception:
@@ -432,6 +430,7 @@ def open_banking_summary():
     return jsonify({
         'success': True,
         'summary': json_safe_financial_summary(summary),
+        'financial_intelligence': build_financial_intelligence(user, summary, budget_summary, {'subscriptions': subscriptions}),
         'budget': budget_status,
         'metas': metas,
         'subscriptions': subscriptions,

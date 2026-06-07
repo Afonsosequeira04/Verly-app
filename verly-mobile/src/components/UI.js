@@ -552,7 +552,7 @@ export function ScoreGauge({ score = 0, size = 220, strokeWidth = 16 }) {
         />
       </Svg>
       <View style={{ alignItems: 'center', paddingBottom: 4 }}>
-        <Text style={{ fontSize: 48, fontWeight: '900', color, letterSpacing: -2 }}>{score}</Text>
+        <Text style={{ fontSize: 48, fontWeight: '900', color, letterSpacing: 0 }}>{score}</Text>
         <Text style={{ fontSize: 13, fontWeight: '700', color: C.textSub, marginTop: -4 }}>{label}</Text>
       </View>
     </View>

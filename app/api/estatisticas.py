@@ -15,6 +15,7 @@ from datetime import datetime, date
 from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
+from app.financial_intelligence import build_financial_intelligence
 from app.financial_records import get_expense_records, summarize_expenses
 from app.models import Fatura
 from app import db
@@ -58,6 +59,18 @@ def estatisticas_geral():
     """
     user_id = int(get_jwt_identity())
     summary = summarize_expenses(user_id, currency=request.args.get('currency'))
+    from app.models import User
+    from app.subscriptions import detect_subscriptions
+    user = User.query.get_or_404(user_id)
+    try:
+        subs_data = detect_subscriptions(user_id)
+    except Exception:
+        subs_data = {}
+    budget_summary = (
+        summary if summary['currency'] == 'EUR'
+        else summarize_expenses(user_id, currency='EUR')
+    )
+    financial_intelligence = build_financial_intelligence(user, summary, budget_summary, subs_data)
     return jsonify({
         'total_geral':  summary['total_geral'],
         'num_faturas':  sum(1 for item in summary['records'] if item['source'] == 'fatura'),
@@ -66,11 +79,14 @@ def estatisticas_geral():
         'por_categoria': summary['por_categoria'],
         'por_mes': summary['por_mes'],
         'top_lojas': summary['top_lojas'],
+        'itens_por_categoria': summary['itens_por_categoria'],
         'fontes': summary['fontes'],
         'fontes_por_moeda': summary['fontes_por_moeda'],
         'mes_atual': summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
         'currency': summary['currency'],
+        'conversion': summary['conversion'],
+        'financial_intelligence': financial_intelligence,
         'available_currencies': summary['available_currencies'],
         'other_currencies': summary['other_currencies'],
         'excluded': summary['excluded'],
