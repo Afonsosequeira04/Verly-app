@@ -170,6 +170,18 @@ def _valor_da_mensagem(texto: str):
         return None
 
 
+def _nome_patrimonio_da_mensagem(texto: str):
+    normalizado = _normalizar_texto(texto)
+    normalizado = re.sub(r'\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?', ' ', normalizado)
+    normalizado = re.sub(
+        r'\b(adiciona|adicionar|cria|criar|regista|registrar|mete|coloca|no|na|ao|a|meu|minha|net|worth|patrimonio|ativo|ativos|divida|dividas|valor|de)\b',
+        ' ',
+        normalizado,
+    )
+    normalizado = re.sub(r'\s+', ' ', normalizado).strip()
+    return normalizado[:60].title() if normalizado else 'Item patrimonio'
+
+
 def _chat_actions(mensagem: str, user_id: int):
     texto = _normalizar_texto(mensagem)
     faturas_count = Fatura.query.filter_by(user_id=user_id).count()
@@ -222,12 +234,54 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'Grupos',
         })
 
+    if any(k in texto for k in ['gmail', 'email', 'importar', 'importacao', 'fonte', 'fontes']):
+        add({
+            'id': 'open_import',
+            'type': 'navigate',
+            'label': 'Importar dados',
+            'route': 'ImportarDados',
+        })
+
     if any(k in texto for k in ['banco', 'open banking', 'transacoes', 'transacoes bancarias', 'sincronizar']):
         add({
             'id': 'open_banking',
             'type': 'navigate',
             'label': 'Ligar banco',
-            'route': 'OpenBanking',
+            'route': 'ImportarDados',
+        })
+
+    if any(k in texto for k in ['subscricao', 'subscricoes', 'assinatura', 'recorrente', 'netflix', 'spotify']):
+        add({
+            'id': 'open_subscriptions',
+            'type': 'navigate',
+            'label': 'Auditar subscricoes',
+            'route': 'MinhasSubscricoes',
+        })
+
+    if any(k in texto for k in ['net worth', 'patrimonio', 'patrimonio liquido', 'ativo', 'ativos', 'divida', 'dividas']):
+        valor = _valor_da_mensagem(mensagem)
+        wants_create = any(k in texto for k in ['adiciona', 'adicionar', 'cria', 'criar', 'regista', 'registrar', 'mete', 'coloca'])
+        tipo = 'liability' if any(k in texto for k in ['divida', 'dividas', 'credito', 'emprestimo', 'cartao']) else 'asset'
+        if wants_create and valor:
+            add({
+                'id': 'create_networth_item',
+                'type': 'create_networth_item',
+                'label': 'Adicionar ao net worth',
+                'description': f'{valor:.2f} EUR como {"divida" if tipo == "liability" else "ativo"}',
+                'payload': {
+                    'nome': _nome_patrimonio_da_mensagem(mensagem),
+                    'tipo': tipo,
+                    'categoria': 'Outros',
+                    'valor': valor,
+                    'currency': 'EUR',
+                },
+                'requires_confirmation': True,
+            })
+        add({
+            'id': 'open_networth',
+            'type': 'navigate',
+            'label': 'Ver net worth',
+            'route': 'NetWorth',
         })
 
     if any(k in texto for k in ['grafico', 'estatistica', 'estatisticas', 'tendencia', 'categorias']):

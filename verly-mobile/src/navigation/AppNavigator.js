@@ -42,6 +42,8 @@ import SimuladorScreen         from '../screens/SimuladorScreen';
 import IntelligenceFeedScreen  from '../screens/IntelligenceFeedScreen';
 import FinancialGraphScreen    from '../screens/FinancialGraphScreen';
 import OpenBankingScreen       from '../screens/OpenBankingScreen';
+import ImportScreen            from '../screens/ImportScreen';
+import NetWorthScreen          from '../screens/NetWorthScreen';
 import GruposScreen            from '../screens/GruposScreen';
 import GrupoDetalheScreen      from '../screens/GrupoDetalheScreen';
 import { COLORS as THEME_COLORS, RADIUS } from '../constants/theme';
@@ -150,6 +152,13 @@ function MenuIcon({ name, color = C.textMid, size = 16 }) {
           <Line x1="18" y1="20" x2="18" y2="10" />
           <Line x1="12" y1="20" x2="12" y2="4" />
           <Line x1="6" y1="20" x2="6" y2="14" />
+        </Svg>
+      );
+    case 'pie':
+      return (
+        <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round">
+          <Path d="M21 12a9 9 0 1 1-9-9v9z" />
+          <Path d="M12 3a9 9 0 0 1 9 9h-9z" />
         </Svg>
       );
     case 'filereport':
@@ -277,14 +286,14 @@ function MenuScreen({ navigation }) {
     {
       label: 'Importar',
       items: [
-        { label: 'Open Banking',        screen: 'OpenBanking', icon: 'wallet'   },
-        { label: 'Importar Gmail',        screen: 'Gmail',       icon: 'mail'     },
+        { label: 'Importar dados',      screen: 'ImportarDados', icon: 'wallet'   },
       ],
     },
     {
       label: 'Organização',
       items: [
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
+        { label: 'Net worth',    screen: 'NetWorth',     icon: 'pie'       },
         { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
         { label: 'Dividir despesas', screen: 'Grupos',    icon: 'users'     },
       ],
@@ -584,6 +593,8 @@ function MainStackNav() {
       <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...hdr, headerTitle: 'Playlists de compras' }} />
       <MainStack.Screen name="Amigos"        component={AmigosScreen}        options={{ ...hdr, headerTitle: 'Amigos' }} />
       <MainStack.Screen name="Configuracoes" component={ConfiguracoesScreen} options={{ ...hdr, headerTitle: 'Configurações' }} />
+      <MainStack.Screen name="ImportarDados" component={ImportScreen}        options={{ headerShown: false }} />
+      <MainStack.Screen name="NetWorth"      component={NetWorthScreen}      options={{ headerShown: false }} />
       <MainStack.Screen name="Gmail"         component={GmailScreen}         options={{ ...hdr, headerTitle: 'Importar Gmail' }} />
       <MainStack.Screen name="OpenBanking"   component={OpenBankingScreen}   options={{ headerShown: false }} />
       <MainStack.Screen name="Garantias"     component={GarantiasScreen}         options={{ headerShown: false }} />

@@ -7,11 +7,11 @@
  *  - Resultado entra com FadeInDown stagger
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
   TouchableOpacity, ActivityIndicator, Alert,
-  Dimensions, Modal,
+  Dimensions, Modal, Linking,
 } from 'react-native';
 import * as Location from 'expo-location';
 import Animated, {
@@ -199,6 +199,125 @@ const m = StyleSheet.create({
   lojaDistChip: { fontSize: 11, color: COLORS.textSub, marginTop: 2 },
 });
 
+function MiniMapa({ lojas, userCoords, onOpen }) {
+  const [MapView, setMapView] = useState(null);
+  const [Marker, setMarker] = useState(null);
+
+  useEffect(() => {
+    const maps = getMapComponents();
+    setMapView(() => maps.MapView);
+    setMarker(() => maps.Marker);
+  }, []);
+
+  if (!lojas.length) return null;
+
+  const hasMap = !!MapView && !!Marker && userCoords?.lat && userCoords?.lng;
+  const firstStores = lojas.slice(0, 3);
+
+  return (
+    <Animated.View entering={FadeInDown.delay(90).springify()} style={s.marketCard}>
+      <View style={s.marketHeader}>
+        <View>
+          <Text style={s.marketTitle}>Lojas próximas</Text>
+          <Text style={s.marketSub}>{lojas.length} resultado{lojas.length !== 1 ? 's' : ''} perto de ti</Text>
+        </View>
+        <TouchableOpacity onPress={onOpen} style={s.marketGhostBtn}>
+          <Text style={s.marketGhostText}>Mapa</Text>
+        </TouchableOpacity>
+      </View>
+
+      {hasMap && (
+        <View style={s.miniMapWrap}>
+          {React.createElement(MapView, {
+            style: { flex: 1 },
+            pointerEvents: 'none',
+            initialRegion: {
+              latitude: userCoords.lat,
+              longitude: userCoords.lng,
+              latitudeDelta: 0.04,
+              longitudeDelta: 0.04,
+            },
+          },
+            React.createElement(Marker, {
+              key: 'user',
+              coordinate: { latitude: userCoords.lat, longitude: userCoords.lng },
+              title: 'Tu',
+              pinColor: COLORS.brand,
+            }),
+            ...firstStores.map((loja, index) => loja.lat && React.createElement(Marker, {
+              key: `${loja.nome}-${index}`,
+              coordinate: { latitude: loja.lat, longitude: loja.lng },
+              title: loja.nome,
+            })),
+          )}
+        </View>
+      )}
+
+      {firstStores.map((loja, index) => (
+        <View key={`${loja.nome}-${index}`} style={s.storeRow}>
+          <View style={s.storeDot} />
+          <View style={{ flex: 1 }}>
+            <Text style={s.storeName} numberOfLines={1}>{loja.nome}</Text>
+            <Text style={s.storeMeta} numberOfLines={1}>{loja.distancia}{loja.endereco ? ` · ${loja.endereco}` : ''}</Text>
+          </View>
+        </View>
+      ))}
+    </Animated.View>
+  );
+}
+
+function PriceComparison({ precos, loading, message, precoPago }) {
+  if (loading) {
+    return (
+      <View style={s.marketCard}>
+        <ActivityIndicator color={COLORS.brand} />
+        <Text style={[s.marketSub, { textAlign: 'center', marginTop: 8 }]}>A procurar preços reais...</Text>
+      </View>
+    );
+  }
+
+  if (!precos.length && !message) return null;
+
+  return (
+    <Animated.View entering={FadeInDown.delay(120).springify()} style={s.marketCard}>
+      <View style={s.marketHeader}>
+        <View>
+          <Text style={s.marketTitle}>Comparação de preços</Text>
+          <Text style={s.marketSub}>Outras lojas e preço mais barato encontrado</Text>
+        </View>
+      </View>
+
+      {!!message && !precos.length && (
+        <Text style={s.marketMessage}>{message}</Text>
+      )}
+
+      {precos.slice(0, 5).map((oferta, index) => {
+        const diff = Number(precoPago || 0) - Number(oferta.preco || 0);
+        return (
+          <TouchableOpacity
+            key={`${oferta.loja}-${oferta.preco}-${index}`}
+            activeOpacity={oferta.link ? 0.78 : 1}
+            onPress={() => oferta.link && Linking.openURL(oferta.link)}
+            style={[s.priceRow, oferta.mais_barato && s.priceRowBest]}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={s.priceStore} numberOfLines={1}>{oferta.loja}</Text>
+              <Text style={s.priceName} numberOfLines={1}>{oferta.nome}</Text>
+              {diff > 0 && <Text style={s.priceSaving}>Pouparias {diff.toFixed(2)}€ vs preço indicado</Text>}
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[s.priceValue, oferta.mais_barato && { color: COLORS.green }]}>
+                {Number(oferta.preco || 0).toFixed(2)}€
+              </Text>
+              {oferta.mais_barato && <Text style={s.bestBadge}>Mais barato</Text>}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </Animated.View>
+  );
+}
+
 // ── Ecrã principal ────────────────────────────────────────────────────────────
 
 export default function ScoreScreen({ route }) {
@@ -213,8 +332,13 @@ export default function ScoreScreen({ route }) {
   const [lojasLoad, setLojasLoad] = useState(false);
   const [showMapa, setShowMapa]   = useState(false);
   const [userCoords, setUserCoords] = useState({ lat: null, lng: null });
+  const [precos, setPrecos]       = useState([]);
+  const [precosLoad, setPrecosLoad] = useState(false);
+  const [precosMsg, setPrecosMsg] = useState('');
+  const [marketError, setMarketError] = useState('');
 
   const scrollRef = useRef(null);
+  const marketSeqRef = useRef(0);
   const { showToast, ToastComponent } = useToast();
 
   useEffect(() => {
@@ -228,6 +352,81 @@ export default function ScoreScreen({ route }) {
     }
   }, [route?.params?.prefill]);
 
+  const resolveCoords = useCallback(async () => {
+    if (userCoords.lat && userCoords.lng) return userCoords;
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return null;
+    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+    setUserCoords(coords);
+    return coords;
+  }, [userCoords]);
+
+  const loadMarketData = useCallback(async ({ openMap = false, silent = true } = {}) => {
+    const cleanItem = item.trim();
+    if (cleanItem.length < 3) return;
+
+    const seq = ++marketSeqRef.current;
+    setMarketError('');
+    setPrecosLoad(true);
+    setLojasLoad(true);
+
+    try {
+      const [priceResult, coords] = await Promise.all([
+        scoreAPI.precos({ item: cleanItem, categoria }).catch(e => ({
+          items: [],
+          message: e.message || 'Nao foi possivel procurar precos agora.',
+        })),
+        resolveCoords().catch(() => null),
+      ]);
+
+      if (seq !== marketSeqRef.current) return;
+      setPrecos(priceResult.items || []);
+      setPrecosMsg(priceResult.message || '');
+
+      if (!coords?.lat || !coords?.lng) {
+        setLojas([]);
+        setMarketError('Ativa a localizacao para veres lojas proximas.');
+        return;
+      }
+
+      const lojasData = await scoreAPI.lojasProximas({
+        item: cleanItem,
+        categoria,
+        lat: coords.lat,
+        lng: coords.lng,
+      });
+
+      if (seq !== marketSeqRef.current) return;
+      const nextLojas = lojasData.lojas || [];
+      setLojas(nextLojas);
+      if (openMap && nextLojas.length) setShowMapa(true);
+    } catch (e) {
+      if (seq === marketSeqRef.current) {
+        setMarketError(e.message || 'Nao foi possivel carregar lojas e precos.');
+        if (!silent) Alert.alert('Score de compra', e.message || 'Nao foi possivel carregar lojas e precos.');
+      }
+    } finally {
+      if (seq === marketSeqRef.current) {
+        setPrecosLoad(false);
+        setLojasLoad(false);
+      }
+    }
+  }, [categoria, item, resolveCoords]);
+
+  useEffect(() => {
+    const cleanItem = item.trim();
+    if (cleanItem.length < 3) {
+      setPrecos([]);
+      setPrecosMsg('');
+      setLojas([]);
+      setMarketError('');
+      return undefined;
+    }
+    const t = setTimeout(() => loadMarketData({ silent: true }), 850);
+    return () => clearTimeout(t);
+  }, [categoria, item, loadMarketData]);
+
   // ── Analisar ──────────────────────────────────────────────────────────────
 
   const handleAnalisar = async () => {
@@ -237,10 +436,10 @@ export default function ScoreScreen({ route }) {
 
     setLoading(true);
     setResultado(null);
-    setLojas([]);
     try {
       const data = await scoreAPI.analisar({ item: item.trim(), preco: precoNum, categoria, uso });
       setResultado(data);
+      loadMarketData({ silent: true });
       showToast('Análise concluída!', 'success');
       setTimeout(() => scrollRef.current?.scrollTo({ y: 420, animated: true }), 400);
     } catch (e) {
@@ -252,26 +451,7 @@ export default function ScoreScreen({ route }) {
 
   // ── Lojas próximas ─────────────────────────────────────────────────────────
 
-  const handleLojas = async () => {
-    setLojasLoad(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Sem permissão', 'Preciso de acesso à localização para mostrar lojas próximas.');
-        return;
-      }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const { latitude: lat, longitude: lng } = loc.coords;
-      setUserCoords({ lat, lng });
-      const data = await scoreAPI.lojasProximas({ item: item.trim(), categoria, lat, lng });
-      setLojas(data.lojas || []);
-      setShowMapa(true);
-    } catch (e) {
-      Alert.alert('Erro', e.message);
-    } finally {
-      setLojasLoad(false);
-    }
-  };
+  const handleLojas = () => loadMarketData({ openMap: true, silent: false });
 
   const score = resultado?.score_final ?? resultado?.score ?? 0;
 
@@ -338,6 +518,28 @@ export default function ScoreScreen({ route }) {
 
           <AnimatedButton onPress={handleAnalisar} disabled={loading} loading={loading} label="Analisar Compra" />
         </Animated.View>
+
+        <PriceComparison
+          precos={precos}
+          loading={precosLoad}
+          message={precosMsg}
+          precoPago={parseFloat(preco.replace(',', '.'))}
+        />
+
+        <MiniMapa lojas={lojas} userCoords={userCoords} onOpen={handleLojas} />
+
+        {!!marketError && item.trim().length >= 3 && !lojas.length && (
+          <View style={s.marketHint}>
+            <Text style={s.marketHintText}>{marketError}</Text>
+          </View>
+        )}
+
+        {lojasLoad && item.trim().length >= 3 && !lojas.length && (
+          <View style={s.marketHint}>
+            <ActivityIndicator color={COLORS.brand} size="small" />
+            <Text style={s.marketHintText}>A procurar lojas perto de ti...</Text>
+          </View>
+        )}
 
         {/* Loading shimmer */}
         {loading && (
@@ -419,7 +621,7 @@ export default function ScoreScreen({ route }) {
               <TouchableOpacity style={[s.lojasBtn, lojasLoad && { opacity: 0.6 }]} onPress={handleLojas} disabled={lojasLoad}>
                 {lojasLoad
                   ? <ActivityIndicator color={COLORS.brand} size="small" />
-                  : <Text style={s.lojasBtnText}>📍 Ver Lojas Próximas</Text>
+                  : <Text style={s.lojasBtnText}>{lojas.length ? 'Abrir mapa completo' : 'Atualizar lojas e precos'}</Text>
                 }
               </TouchableOpacity>
             </Animated.View>
@@ -478,4 +680,70 @@ const s = StyleSheet.create({
 
   lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
   lojasBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
+
+  marketCard: {
+    backgroundColor: COLORS.glass || COLORS.surface,
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.borderHi || COLORS.border,
+  },
+  marketHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 },
+  marketTitle: { color: COLORS.text, fontSize: 16, fontWeight: '900' },
+  marketSub: { color: COLORS.textMid || COLORS.textSub, fontSize: 12, marginTop: 3 },
+  marketGhostBtn: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: COLORS.brand + '55',
+    backgroundColor: COLORS.brandDim,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+  },
+  marketGhostText: { color: COLORS.brandMid || COLORS.brand, fontSize: 12, fontWeight: '900' },
+  marketMessage: { color: COLORS.textMid || COLORS.textSub, fontSize: 13, lineHeight: 19 },
+  miniMapWrap: {
+    height: 138,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    marginBottom: 12,
+    backgroundColor: COLORS.surface2,
+  },
+  storeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderTopWidth: 1, borderTopColor: COLORS.border },
+  storeDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: COLORS.cyan },
+  storeName: { color: COLORS.text, fontSize: 13, fontWeight: '800' },
+  storeMeta: { color: COLORS.textSub, fontSize: 11, marginTop: 2 },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
+  },
+  priceRowBest: {
+    marginHorizontal: -8,
+    paddingHorizontal: 8,
+    borderRadius: 14,
+    backgroundColor: COLORS.greenDim,
+  },
+  priceStore: { color: COLORS.text, fontSize: 13, fontWeight: '900' },
+  priceName: { color: COLORS.textMid || COLORS.textSub, fontSize: 11, marginTop: 3 },
+  priceSaving: { color: COLORS.green, fontSize: 11, fontWeight: '800', marginTop: 5 },
+  priceValue: { color: COLORS.text, fontSize: 16, fontWeight: '900' },
+  bestBadge: { color: COLORS.green, fontSize: 10, fontWeight: '900', marginTop: 3 },
+  marketHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+  marketHintText: { flex: 1, color: COLORS.textMid || COLORS.textSub, fontSize: 12, lineHeight: 17 },
 });

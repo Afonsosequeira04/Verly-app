@@ -92,7 +92,13 @@ export default function GrupoDetalheScreen({ route, navigation }) {
     notas: '',
   });
 
-  const membros = grupo?.membros || [];
+  const membros = useMemo(() => {
+    const byId = new Map();
+    (grupo?.membros || []).forEach(membro => {
+      if (membro?.id != null && !byId.has(membro.id)) byId.set(membro.id, membro);
+    });
+    return Array.from(byId.values());
+  }, [grupo?.membros]);
   const resumoSeguro = resumo || {
     total_gasto: 0,
     total_despesas: 0,
@@ -475,18 +481,17 @@ export default function GrupoDetalheScreen({ route, navigation }) {
                     onChangeText={value => setForm(prev => ({ ...prev, notas: value }))}
                     multiline
                   />
-
-                  <View style={styles.sheetActions}>
-                    <Pressable onPress={() => setModalDespesa(false)} style={styles.secondaryBtn}>
-                      <Text style={styles.secondaryTxt}>Cancelar</Text>
-                    </Pressable>
-                    <Pressable onPress={guardarDespesa} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.65 }]}>
-                      <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.saveGradient}>
-                        {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveTxt}>Guardar</Text>}
-                      </LinearGradient>
-                    </Pressable>
-                  </View>
                 </ScrollView>
+                <View style={styles.sheetActions}>
+                  <Pressable onPress={() => setModalDespesa(false)} style={styles.secondaryBtn}>
+                    <Text style={styles.secondaryTxt}>Cancelar</Text>
+                  </Pressable>
+                  <Pressable onPress={guardarDespesa} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.65 }]}>
+                    <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.saveGradient}>
+                      {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveTxt}>Guardar despesa</Text>}
+                    </LinearGradient>
+                  </Pressable>
+                </View>
               </View>
             </KeyboardAvoidingView>
           </View>
@@ -728,9 +733,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.borderHi,
     padding: SPACE.lg,
-    paddingBottom: 34,
+    paddingBottom: 22,
   },
-  sheetContent: { paddingBottom: 4 },
+  sheetContent: { paddingBottom: SPACE.md },
   sheetHandle: { width: 42, height: 4, borderRadius: 3, backgroundColor: C.borderHi, alignSelf: 'center', marginBottom: SPACE.md },
   sheetTitle: { color: C.text, fontSize: FONT.xxl, fontWeight: '900', marginBottom: SPACE.md },
   sheetLabel: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 8, marginTop: 4 },
@@ -794,7 +799,14 @@ const styles = StyleSheet.create({
   },
   checkCircleActive: { borderColor: C.green, backgroundColor: C.green },
   checkTxt: { color: C.bg, fontSize: FONT.xs, fontWeight: '900' },
-  sheetActions: { flexDirection: 'row', gap: SPACE.sm, marginTop: SPACE.sm },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: SPACE.sm,
+    paddingTop: SPACE.md,
+    borderTopWidth: 1,
+    borderTopColor: C.border,
+    backgroundColor: C.surface,
+  },
   secondaryBtn: {
     flex: 1,
     borderRadius: RADIUS.pill,

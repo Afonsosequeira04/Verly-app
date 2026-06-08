@@ -112,6 +112,20 @@ def lojas_proximas_mobile():
     return jsonify({'success': True, 'lojas': lojas, 'item': item})
 
 
+@api_bp.route('/scoring/precos', methods=['POST'])
+@jwt_required()
+def scoring_precos_mobile():
+    """Compara preços online reais quando SERPAPI_KEY está configurada."""
+    from app.scoring import buscar_precos_online
+    data = request.json or {}
+    item = (data.get('item') or '').strip()
+    categoria = data.get('categoria', 'Outros')
+    if not item:
+        return jsonify({'success': False, 'error': 'Produto obrigatório.', 'items': []}), 400
+    result = buscar_precos_online(item, categoria)
+    return jsonify({'success': True, **result})
+
+
 # ── Impulse Control (/api/v1/impulse/analisar) ────────────────────────────────
 
 @api_bp.route('/impulse/analisar', methods=['POST'])

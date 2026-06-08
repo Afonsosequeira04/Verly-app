@@ -7,7 +7,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Send, Zap, ChevronRight, Check, Trash2 } from 'lucide-react-native';
-import { chatAPI, dashboardAPI, metasAPI } from '../services/api';
+import { chatAPI, dashboardAPI, metasAPI, netWorthAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
@@ -18,7 +18,8 @@ const SUGESTOES_FALLBACK = [
   'Quanto gastei este mês?',
   'Qual a minha categoria mais cara?',
   'Tenho garantias a expirar?',
-  'Ajuda-me a criar uma meta',
+  'Audita as minhas subscrições',
+  'Adiciona 1000€ de poupança ao net worth',
 ];
 
 function ActionCard({ action, onAction, executing }) {
@@ -184,6 +185,13 @@ export default function ChatScreen({ navigation }) {
           const payload = action.payload || {};
           await metasAPI.criar(payload.nome || payload.categoria, payload.limite, payload.categoria);
           appendAssistant(`Feito. Criei a meta de ${payload.categoria} com limite de ${Number(payload.limite).toFixed(2)}€.`);
+          return;
+        }
+
+        if (action.type === 'create_networth_item') {
+          const payload = action.payload || {};
+          await netWorthAPI.criarItem(payload);
+          appendAssistant(`Feito. Adicionei ${payload.nome || 'o item'} ao net worth.`);
           return;
         }
 

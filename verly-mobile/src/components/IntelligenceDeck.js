@@ -26,9 +26,13 @@ function priorityColor(priority) {
 
 function routeToLabel(route) {
   if (route === 'OpenBanking') return 'Banco';
+  if (route === 'ImportarDados') return 'Importar';
   if (route === 'MinhasSubscricoes') return 'Subscricoes';
   if (route === 'Metas') return 'Metas';
   if (route === 'Estatisticas') return 'Analise';
+  if (route === 'Score') return 'Score';
+  if (route === 'NetWorth') return 'Patrimonio';
+  if (route === 'Grupos') return 'Grupos';
   return 'Abrir';
 }
 
@@ -66,6 +70,7 @@ function ActionCard({ item, index, navigation }) {
 }
 
 function ChallengeCard({ item, index, navigation }) {
+  const days = item.days || 1;
   return (
     <BitReveal delay={220 + index * 70} style={{ flex: 1 }}>
       <Pressable
@@ -74,7 +79,7 @@ function ChallengeCard({ item, index, navigation }) {
       >
         <View style={styles.challengeTop}>
           <Users size={14} color={C.green} />
-          <Text style={styles.challengeDays}>{item.days || 7} dias</Text>
+          <Text style={styles.challengeDays}>{days} {days === 1 ? 'dia' : 'dias'}</Text>
         </View>
         <Text style={styles.challengeTitle} numberOfLines={2}>{item.title}</Text>
         <Text style={styles.challengeText} numberOfLines={2}>{item.description}</Text>
@@ -163,7 +168,7 @@ export default function IntelligenceDeck({
         <View style={styles.challengeSection}>
           <View style={styles.challengeHeader}>
             <ShieldCheck size={14} color={C.green} />
-            <Text style={styles.challengeHeaderText}>Desafios com dados reais</Text>
+            <Text style={styles.challengeHeaderText}>Acoes colaborativas</Text>
           </View>
           <View style={styles.challengeGrid}>
             {challenges.slice(0, 2).map((item, index) => (

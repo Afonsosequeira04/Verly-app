@@ -32,6 +32,7 @@ class User(UserMixin, db.Model):
     conversas          = db.relationship('Conversa',  backref='user', lazy=True, cascade='all, delete-orphan')
     metas              = db.relationship('Meta',      backref='user', lazy=True, cascade='all, delete-orphan')
     subscricoes        = db.relationship('Subscricao',backref='user', lazy=True, cascade='all, delete-orphan')
+    net_worth_items    = db.relationship('NetWorthItem', backref='user', lazy=True, cascade='all, delete-orphan')
     playlists_proprias = db.relationship('Playlist',  backref='owner',lazy=True, cascade='all, delete-orphan')
 
     def set_password(self, password):
@@ -164,6 +165,21 @@ class Subscricao(db.Model):
     ativa         = db.Column(db.Boolean, default=True)
     atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class NetWorthItem(db.Model):
+    __tablename__ = 'net_worth_items'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    user_id       = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    nome          = db.Column(db.String(160), nullable=False)
+    tipo          = db.Column(db.String(20), nullable=False, default='asset')  # asset | liability
+    categoria     = db.Column(db.String(80), nullable=False, default='Outros')
+    valor         = db.Column(db.Float, nullable=False, default=0)
+    currency      = db.Column(db.String(10), default='EUR')
+    ativo         = db.Column(db.Boolean, default=True)
+    criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 playlist_fatura = db.Table(

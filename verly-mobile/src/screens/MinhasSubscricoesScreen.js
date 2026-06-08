@@ -11,11 +11,13 @@ import {
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
-import { apiFetch } from '../services/api';
+import { subscricoesAPI } from '../services/api';
 
 const C = COLORS;
 
 const RISK_CONFIG = {
+  danger: { color: C.red,    label: 'Rever já',    bg: 'rgba(255,77,109,0.10)'  },
+  warning:{ color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
   high:   { color: C.red,    label: 'Alto risco',  bg: 'rgba(255,77,109,0.10)'  },
   medium: { color: C.yellow, label: 'Atenção',     bg: 'rgba(255,179,0,0.10)'   },
   ok:     { color: C.green,  label: 'Normal',      bg: 'rgba(0,214,143,0.10)'   },
@@ -23,6 +25,8 @@ const RISK_CONFIG = {
 
 function SubCard({ sub, onDelete, index }) {
   const risk = RISK_CONFIG[sub.risk] || RISK_CONFIG.ok;
+  const deleteId = sub.db_id || sub.id;
+  const currency = sub.currency || 'EUR';
 
   return (
     <Animated.View entering={FadeInDown.delay(index * 60).springify()}>
@@ -52,7 +56,10 @@ function SubCard({ sub, onDelete, index }) {
             {sub.nome}
           </Text>
           <Text style={{ fontSize: FONT.xs, color: C.textSub, marginTop: 2 }}>
-            {sub.categoria} · pago {sub.meses_pago}x
+            {sub.alerta || `${sub.categoria} · pago ${sub.meses_pago || 1}x`}
+          </Text>
+          <Text style={{ fontSize: 10, color: C.textSub, marginTop: 4, textTransform: 'uppercase', fontWeight: '800' }}>
+            Fonte: {sub.fonte || 'auto'}
           </Text>
           <View style={{
             marginTop: 5, alignSelf: 'flex-start',
@@ -68,16 +75,18 @@ function SubCard({ sub, onDelete, index }) {
         {/* Preço + delete */}
         <View style={{ alignItems: 'flex-end', gap: 8 }}>
           <Text style={{ fontSize: FONT.lg, fontWeight: '900', color: C.brand }}>
-            {sub.preco_mensal?.toFixed(2)}€
+            {Number(sub.preco_mensal || 0).toFixed(2)} {currency}
           </Text>
           <Text style={{ fontSize: 10, color: C.textSub }}>/ mês</Text>
-          <Pressable
-            onPress={() => onDelete(sub.id, sub.nome)}
-            hitSlop={8}
-            style={{ padding: 4 }}
-          >
-            <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
-          </Pressable>
+          {!!deleteId && (
+            <Pressable
+              onPress={() => onDelete(deleteId, sub.nome)}
+              hitSlop={8}
+              style={{ padding: 4 }}
+            >
+              <Text style={{ fontSize: 16, color: C.red }}>✕</Text>
+            </Pressable>
+          )}
         </View>
       </View>
     </Animated.View>
@@ -95,7 +104,7 @@ export default function MinhasSubscricoesScreen({ navigation }) {
     if (refresh) setRefresh(true);
     else setLoading(true);
     try {
-      const data = await apiFetch('/subscricoes');
+      const data = await subscricoesAPI.listar();
       if (data.success) {
         setSubs(data.subscricoes || []);
         setResumo(data.resumo || null);
@@ -113,12 +122,12 @@ export default function MinhasSubscricoesScreen({ navigation }) {
   const detetar = async () => {
     setDetetando(true);
     try {
-      const res = await apiFetch('/subscricoes/detetar', { method: 'POST' });
+      const res = await subscricoesAPI.detetar();
       if (res.success) {
         await carregar();
         const msg = res.detetadas > 0
-          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas faturas!`
-          : 'Nenhuma subscrição nova detetada nas faturas atuais.';
+          ? `${res.detetadas} subscrição(ões) encontrada(s) nas tuas fontes ligadas.`
+          : 'Nenhuma subscrição nova detetada nas faturas, Gmail ou banco atuais.';
         Alert.alert('Deteção concluída', msg);
       }
     } catch (e) {
@@ -139,8 +148,8 @@ export default function MinhasSubscricoesScreen({ navigation }) {
           style: 'destructive',
           onPress: async () => {
             try {
-              await apiFetch(`/subscricoes/${id}`, { method: 'DELETE' });
-              setSubs(prev => prev.filter(s => s.id !== id));
+              await subscricoesAPI.apagar(id);
+              setSubs(prev => prev.filter(s => (s.db_id || s.id) !== id));
             } catch (e) {
               Alert.alert('Erro', 'Não foi possível remover.');
             }
@@ -246,8 +255,23 @@ export default function MinhasSubscricoesScreen({ navigation }) {
             Sem subscrições
           </Text>
           <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
-            Toca em "Detetar" para a Verly analisar as tuas faturas e encontrar subscrições automáticas.
+            Deteta nas faturas existentes ou liga Gmail/Banco para alimentar a auditoria com dados reais.
           </Text>
+          <Pressable
+            onPress={() => navigation.navigate('ImportarDados')}
+            style={({ pressed }) => ({
+              marginTop: 8,
+              borderRadius: RADIUS.lg,
+              borderWidth: 1,
+              borderColor: C.borderHi,
+              backgroundColor: C.glass,
+              paddingHorizontal: 18,
+              paddingVertical: 12,
+              opacity: pressed ? 0.8 : 1,
+            })}
+          >
+            <Text style={{ color: C.text, fontWeight: '900', fontSize: FONT.sm }}>Ligar fontes</Text>
+          </Pressable>
         </Animated.View>
       ) : (
         <>
@@ -256,7 +280,7 @@ export default function MinhasSubscricoesScreen({ navigation }) {
             {subs.length} subscrição{subs.length !== 1 ? 'ões' : ''} encontrada{subs.length !== 1 ? 's' : ''}
           </Text>
           {subs.map((sub, i) => (
-            <SubCard key={sub.id} sub={sub} onDelete={eliminar} index={i} />
+            <SubCard key={sub.db_id || sub.id || `${sub.nome}-${i}`} sub={sub} onDelete={eliminar} index={i} />
           ))}
         </>
       )}

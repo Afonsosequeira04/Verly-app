@@ -1,0 +1,7 @@
+Starting project at C:\projetos\meu-projeto-ai\verly-mobile
+Starting Metro Bundler
+Waiting on http://localhost:19006
+Logs for your project will appear below.
+Web node_modules\expo\AppEntry.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web node_modules\expo\AppEntry.js ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 99.9% (1012/1132)
+Web Bundled 5930ms node_modules\expo\AppEntry.js (2965 modules)

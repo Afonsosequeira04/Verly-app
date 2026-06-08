@@ -347,13 +347,17 @@ export const estatisticasAPI = {
 
 export const scoreAPI = {
   analisar: ({ item, preco, categoria, uso }) =>
-    apiFetch('/scoring/analisar', { method: 'POST', body: JSON.stringify({ item, preco, categoria, uso }) }),
+    apiFetch('/scoring/analisar', { method: 'POST', body: JSON.stringify({ item, preco, categoria, uso }) })
+      .then(data => data.resultado || data),
 
   scoreFatura: (faturaId) =>
-    apiFetch(`/scoring/fatura/${faturaId}`),
+    apiFetch(`/scoring/fatura/${faturaId}`).then(data => data.resultado || data),
 
   lojasProximas: ({ item, categoria, lat, lng }) =>
     apiFetch('/scoring/lojas-proximas', { method: 'POST', body: JSON.stringify({ item, categoria, lat, lng }) }),
+
+  precos: ({ item, categoria }) =>
+    apiFetch('/scoring/precos', { method: 'POST', body: JSON.stringify({ item, categoria }) }),
 };
 
 // ── Perfil ─────────────────────────────────────────────────────────────────────
@@ -483,6 +487,14 @@ export const openBankingAPI = {
 };
 
 // ── Garantias & Resumo ─────────────────────────────────────────────────────────
+
+export const netWorthAPI = {
+  get: () => apiFetch('/networth'),
+  criarItem: (data) =>
+    apiFetch('/networth/items', { method: 'POST', body: JSON.stringify(data) }),
+  apagarItem: (id) =>
+    apiFetch(`/networth/items/${id}`, { method: 'DELETE' }),
+};
 
 export const garantiasAPI = {
   resumo: () => apiFetch('/exportar/resumo'),

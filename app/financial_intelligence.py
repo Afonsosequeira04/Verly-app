@@ -207,7 +207,17 @@ def _next_actions(summary, budget, subs, quality):
             'route': 'Estatisticas',
         })
 
-    if quality['bank_records'] == 0:
+    if quality['bank_records'] == 0 and quality['invoice_records'] == 0:
+        actions.append({
+            'id': 'import_sources',
+            'priority': 'high',
+            'title': 'Ligar fontes reais',
+            'body': 'Importa Gmail ou banco para o cockpit deixar de trabalhar com dados incompletos.',
+            'metric': None,
+            'currency': currency,
+            'route': 'ImportarDados',
+        })
+    elif quality['bank_records'] == 0:
         actions.append({
             'id': 'connect_bank',
             'priority': 'medium',
@@ -215,7 +225,40 @@ def _next_actions(summary, budget, subs, quality):
             'body': 'Com Open Banking, a Verly passa a apanhar subscricoes e gastos esquecidos automaticamente.',
             'metric': None,
             'currency': currency,
-            'route': 'OpenBanking',
+            'route': 'ImportarDados',
+        })
+
+    if subs['count'] == 0 and (quality['bank_records'] or quality['invoice_records']):
+        actions.append({
+            'id': 'detect_subscriptions',
+            'priority': 'medium',
+            'title': 'Detetar subscricoes',
+            'body': 'Ja ha fontes suficientes para procurar pagamentos recorrentes com mais contexto.',
+            'metric': None,
+            'currency': currency,
+            'route': 'MinhasSubscricoes',
+        })
+
+    if quality['records'] > 0:
+        actions.append({
+            'id': 'score_next_purchase',
+            'priority': 'low',
+            'title': 'Testar proxima compra',
+            'body': 'Antes de comprares, compara score, preco e lojas proximas para evitar pagar demais.',
+            'metric': None,
+            'currency': currency,
+            'route': 'Score',
+        })
+
+    if quality['records'] > 0:
+        actions.append({
+            'id': 'networth_review',
+            'priority': 'low',
+            'title': 'Atualizar patrimonio',
+            'body': 'Regista ativos e dividas para veres se o mes esta a aumentar ou a reduzir o teu net worth.',
+            'metric': None,
+            'currency': currency,
+            'route': 'NetWorth',
         })
 
     if quality['converted_count'] > 0:
@@ -257,34 +300,33 @@ def _social_challenges(summary, subs):
     top = _top_category(summary)
     currency = summary.get('currency', 'EUR')
     if top and top['total'] > 0:
-        target = max(top['total'] * 0.85, top['total'] - 50)
         suggestions.append({
-            'type': 'categoria_limite',
-            'title': f'Desafio {top["categoria"]} controlado',
-            'description': f'Grupo tenta manter {top["categoria"]} abaixo do alvo durante 14 dias.',
+            'type': 'dividir_categoria',
+            'title': f'Dividir despesas de {top["categoria"]}',
+            'description': 'Se forem gastos partilhados, cria um grupo e evita acertos por fora.',
             'category': top['categoria'],
-            'target': _money(target),
+            'target': _money(top['total']),
             'currency': top['currency'],
-            'days': 14,
+            'days': 7,
         })
     if subs['risk_count']:
         suggestions.append({
-            'type': 'poupar_valor',
+            'type': 'auditar_subscricoes',
             'title': 'Auditoria de subscricoes',
-            'description': 'Cada membro cancela ou justifica uma subscricao recorrente.',
+            'description': 'Reve pagamentos recorrentes e decide o que manter antes da renovacao.',
             'category': None,
             'target': _money(max(subs['monthly_risk'], 20)),
             'currency': subs.get('currency') or currency,
-            'days': 7,
+            'days': 1,
         })
     suggestions.append({
-        'type': 'gastar_menos',
-        'title': 'Semana sem piloto automatico',
-        'description': 'Antes de cada compra nao essencial, esperar 10 minutos e registar a decisao.',
+        'type': 'grupo_partilhado',
+        'title': 'Criar grupo partilhado',
+        'description': 'Usa grupos para viagens, casa ou jantares e deixa a app calcular acertos.',
         'category': None,
         'target': 0,
         'currency': currency,
-        'days': 7,
+        'days': 1,
     })
     return suggestions[:3]
 

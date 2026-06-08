@@ -216,9 +216,75 @@ def _distancia_label(km: float) -> str:
     return f"{km:.1f} km"
 
 
-# Muda o raio padrão de 3000 para 5000
+def _lojas_overpass(lat: float, lng: float, categoria: str, raio_m: int = 5000) -> list:
+    filtros = CATEGORIA_OSM.get(categoria) or CATEGORIA_OSM['Outros']
+    clauses = []
+    for filtro in filtros[:16]:
+        if '=' not in filtro:
+            continue
+        key, value = filtro.split('=', 1)
+        if key == 'name':
+            selector = f'["name"~"{value}",i]'
+        else:
+            selector = f'["{key}"="{value}"]'
+        clauses.extend([
+            f'node{selector}(around:{raio_m},{lat},{lng});',
+            f'way{selector}(around:{raio_m},{lat},{lng});',
+            f'relation{selector}(around:{raio_m},{lat},{lng});',
+        ])
+
+    query = f"""
+    [out:json][timeout:12];
+    (
+      {' '.join(clauses)}
+    );
+    out center tags 30;
+    """
+
+    try:
+        r = requests.post('https://overpass-api.de/api/interpreter', data={'data': query}, timeout=16)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as exc:
+        print(f"[OVERPASS] erro: {exc}")
+        return []
+
+    lojas = []
+    seen = set()
+    for element in data.get('elements', []):
+        tags = element.get('tags') or {}
+        nome = tags.get('name')
+        if not nome:
+            continue
+        elat = element.get('lat') or element.get('center', {}).get('lat')
+        elng = element.get('lon') or element.get('center', {}).get('lon')
+        if elat is None or elng is None:
+            continue
+        key = (nome.lower(), round(float(elat), 4), round(float(elng), 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        km = _distancia_km(lat, lng, float(elat), float(elng))
+        endereco = ', '.join(filter(None, [
+            tags.get('addr:street'),
+            tags.get('addr:city'),
+        ]))
+        lojas.append({
+            'nome': nome,
+            'lat': float(elat),
+            'lng': float(elng),
+            'endereco': endereco,
+            'distancia': _distancia_label(km),
+            'km': km,
+            'fonte': 'OpenStreetMap',
+        })
+
+    lojas.sort(key=lambda x: x['km'])
+    return lojas[:10]
+
+
 def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000, item: str = '') -> list:
-    """Usa Google Places API para encontrar lojas próximas."""
+    """Procura lojas próximas. Usa Google Places quando configurado e OSM como fallback."""
 
     KEYWORDS_CATEGORIA = {
         'Tecnologia':       'loja tecnologia eletrónica telemóvel computador',
@@ -236,7 +302,7 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
     api_key = os.getenv("GOOGLE_PLACES_API_KEY")
     if not api_key:
         print("[MAPA] GOOGLE_PLACES_API_KEY não configurada")
-        return []
+        return _lojas_overpass(lat, lng, categoria, raio_m)
 
     # Usa o nome do produto se disponível — muito mais específico do que a categoria
     if item and item.strip() and item.lower() not in ('item', ''):
@@ -265,7 +331,7 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
 
         if data.get('status') not in ('OK', 'ZERO_RESULTS'):
             print(f"[GOOGLE PLACES] erro: {data.get('error_message', '')}")
-            return []
+            return _lojas_overpass(lat, lng, categoria, raio_m)
 
         lojas = []
         seen = set()
@@ -291,11 +357,76 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
 
         lojas.sort(key=lambda x: x['km'])
         print(f"[GOOGLE PLACES] lojas encontradas: {len(lojas)}")
-        return lojas[:10]
+        return lojas[:10] if lojas else _lojas_overpass(lat, lng, categoria, raio_m)
 
     except Exception as e:
         print(f"[GOOGLE PLACES] exceção: {e}")
-        return []
+        return _lojas_overpass(lat, lng, categoria, raio_m)
+
+
+def buscar_precos_online(item: str, categoria: str = '', limite: int = 8) -> dict:
+    """Pesquisa preços reais via SerpAPI Google Shopping quando configurado."""
+    api_key = os.getenv('SERPAPI_KEY') or os.getenv('SERP_API_KEY')
+    item = (item or '').strip()
+    if not item:
+        return {'configured': False, 'items': [], 'message': 'Produto vazio.'}
+    if not api_key:
+        return {
+            'configured': False,
+            'items': [],
+            'message': 'Configura SERPAPI_KEY para mostrar preços reais de outras lojas.',
+        }
+
+    try:
+        response = requests.get(
+            'https://serpapi.com/search.json',
+            params={
+                'engine': 'google_shopping',
+                'q': item,
+                'gl': 'pt',
+                'hl': 'pt',
+                'api_key': api_key,
+            },
+            timeout=16,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        print(f"[PREÇOS] erro SerpAPI: {exc}")
+        return {'configured': True, 'items': [], 'message': 'Não foi possível obter preços agora.'}
+
+    results = []
+    for raw in (data.get('shopping_results') or [])[:limite * 2]:
+        price = raw.get('extracted_price')
+        if price is None:
+            continue
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            continue
+        results.append({
+            'nome': raw.get('title') or item,
+            'loja': raw.get('source') or raw.get('seller') or 'Loja online',
+            'preco': round(price, 2),
+            'moeda': 'EUR',
+            'link': raw.get('link') or raw.get('product_link'),
+            'thumbnail': raw.get('thumbnail'),
+            'rating': raw.get('rating'),
+            'reviews': raw.get('reviews'),
+            'fonte': 'Google Shopping',
+        })
+        if len(results) >= limite:
+            break
+
+    results.sort(key=lambda row: row['preco'])
+    for index, row in enumerate(results):
+        row['mais_barato'] = index == 0
+
+    return {
+        'configured': True,
+        'items': results,
+        'message': '' if results else 'Sem preços encontrados para este produto.',
+    }
 
 # ─── SCORE ────────────────────────────────────────────────────────────────────
 
@@ -362,6 +493,15 @@ def calcular_score(categoria: str, preco: float, uso: str,
 
     score = int(max(0, min(100, raw_base + mercado['ajuste_score'])))
     label_info = _score_label(score, personalidade)
+    price_score = 75
+    if mercado['avaliacao'] == 'barato':
+        price_score = 92
+    elif mercado['avaliacao'] == 'justo':
+        price_score = 74
+    elif mercado['avaliacao'] == 'caro':
+        price_score = 45
+    elif mercado['avaliacao'] == 'muito_caro':
+        price_score = 20
 
     chips = [
         {'text': USAGE_LABELS.get(uso, uso), 'type': 'good' if score >= 60 else 'bad'},
@@ -381,12 +521,23 @@ def calcular_score(categoria: str, preco: float, uso: str,
 
     return {
         'score':               score,
+        'score_final':         score,
         'label':               label_info['label'],
         'color':               label_info['color'],
         'message':             mensagem,
+        'conselho':            mensagem,
         'chips':               chips,
         'preco_medio_mercado': mercado['preco_medio'],
-        'avaliacao_mercado':   mercado['avaliacao'],
+        'avaliacao_mercado':   {
+            'preco_medio': mercado['preco_medio'],
+            'avaliacao': mercado['avaliacao'],
+            'comentario': mercado['comentario'],
+        },
+        'fatores': [
+            {'nome': 'Uso previsto', 'score': int(max(0, min(100, base)))},
+            {'nome': 'Categoria', 'score': int(max(0, min(100, weight * 75)))},
+            {'nome': 'Preço vs mercado', 'score': price_score},
+        ],
     }
 
 

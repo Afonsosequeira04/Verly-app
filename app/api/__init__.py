@@ -25,3 +25,5 @@ from app.api import estatisticas  # noqa
 from app.api import social         # noqa
 from app.api import open_banking   # noqa
 from app.api import semantic       # noqa
+from app.api import subscricoes    # noqa
+from app.api import networth       # noqa
