@@ -550,6 +550,130 @@ Responde APENAS com um array JSON válido, sem markdown, sem texto extra:
 _gerar_insights_com_llm = _gerar_insights_llm
 
 
+def _build_priority_insights(ctx: dict) -> list:
+    """Insights deterministicos, acionaveis e explicaveis para evitar texto generico."""
+    insights = []
+
+    total = float(ctx.get('total_gasto_mes') or 0)
+    orcamento = float(ctx.get('orcamento_mensal') or 0)
+    previsao = float(ctx.get('previsao_mensal') or 0)
+    variacao = ctx.get('variacao_pct')
+    top_cats = ctx.get('top_categorias') or []
+    metas = ctx.get('metas') or []
+    subs = ctx.get('subscricoes_detetadas') or []
+    total_subs = float(ctx.get('total_subscricoes') or 0)
+    currency = ctx.get('currency') or 'EUR'
+
+    def add(type_, severity, title, message, impact, explanation, actions):
+        insights.append({
+            'type': type_,
+            'severity': severity,
+            'title': title,
+            'message': message,
+            'impactAmount': round(float(impact or 0), 2) if impact is not None else None,
+            'currency': currency,
+            'period': 'this_month',
+            'explanation': explanation,
+            'actions': actions,
+        })
+
+    if orcamento > 0 and previsao > orcamento:
+        diff = previsao - orcamento
+        add(
+            'budget_forecast',
+            'critical',
+            'Orcamento em risco',
+            f'Ao ritmo atual podes fechar o mes {diff:.2f} {currency} acima do orcamento.',
+            diff,
+            f'Baseado em {ctx.get("dia_atual")} dias de gastos e numa previsao linear de {previsao:.2f} {currency}.',
+            [
+                {'label': 'Ver historico', 'type': 'open_transactions'},
+                {'label': 'Ajustar metas', 'type': 'create_budget'},
+            ],
+        )
+
+    for meta in metas:
+        if meta.get('ultrapassou'):
+            excesso = float(meta.get('gasto') or 0) - float(meta.get('limite') or 0)
+            add(
+                'goal_overspend',
+                'critical',
+                f'{meta.get("categoria")} passou o limite',
+                f'Esta categoria ja excedeu a meta em {excesso:.2f} EUR.',
+                excesso,
+                f'Gasto atual {meta.get("gasto")} EUR comparado com limite {meta.get("limite")} EUR.',
+                [
+                    {'label': 'Ver categoria', 'type': 'open_transactions', 'filters': {'category': meta.get('categoria')}},
+                    {'label': 'Editar meta', 'type': 'create_budget', 'category': meta.get('categoria')},
+                ],
+            )
+            break
+
+    if total_subs > 0:
+        add(
+            'subscriptions_saving',
+            'opportunity',
+            'Subscricoes com impacto anual',
+            f'As recorrencias detetadas somam {total_subs:.2f} EUR por mes.',
+            total_subs * 12,
+            f'Baseado em {len(subs)} subscricao(s) detetada(s) por faturas, Gmail ou banco.',
+            [
+                {'label': 'Auditar subscricoes', 'type': 'open_subscriptions'},
+                {'label': 'Ignorar agora', 'type': 'dismiss'},
+            ],
+        )
+
+    if top_cats and total > 0:
+        top = top_cats[0]
+        top_value = float(top.get('valor') or 0)
+        top_pct = round((top_value / total) * 100, 1) if total else 0
+        if top_pct >= 35:
+            add(
+                'category_concentration',
+                'warning',
+                f'{top.get("categoria")} pesa muito este mes',
+                f'Representa {top_pct}% dos teus gastos atuais.',
+                top_value,
+                f'Categoria calculada a partir de movimentos e faturas deste mes: {top_value:.2f} {currency}.',
+                [
+                    {'label': 'Ver movimentos', 'type': 'open_transactions', 'filters': {'category': top.get('categoria')}},
+                    {'label': 'Criar limite', 'type': 'create_budget', 'category': top.get('categoria')},
+                ],
+            )
+
+    if variacao is not None and float(variacao) < 0:
+        ganho = abs(float(ctx.get('total_gasto_mes_anterior') or 0) - total)
+        add(
+            'positive_trend',
+            'positive',
+            'Melhor que o mes anterior',
+            f'Gastaste {abs(float(variacao)):.1f}% menos do que no mes anterior.',
+            ganho,
+            'Comparacao direta entre o mes atual e o mes anterior nas mesmas fontes de dados.',
+            [
+                {'label': 'Ver progresso', 'type': 'open_stats'},
+                {'label': 'Manter ritmo', 'type': 'dismiss'},
+            ],
+        )
+
+    if not insights and top_cats:
+        top = top_cats[0]
+        add(
+            'next_best_action',
+            'opportunity',
+            'Proxima acao clara',
+            f'Comeca por rever {top.get("categoria")}, a tua maior categoria atual.',
+            float(top.get('valor') or 0),
+            'Escolhido porque e a categoria com maior peso no mes atual.',
+            [
+                {'label': 'Ver movimentos', 'type': 'open_transactions', 'filters': {'category': top.get('categoria')}},
+                {'label': 'Usar Score', 'type': 'open_score'},
+            ],
+        )
+
+    return insights[:5]
+
+
 # ── GET /api/v1/insights ──────────────────────────────────────────────────────
 
 @api_bp.route('/insights', methods=['GET'])
@@ -571,6 +695,9 @@ def get_insights():
     cache_key = f'insights:{user_id}'
     cached = cache.get(cache_key)
     if cached:
+        if 'priority_insights' not in cached:
+            ctx_cached = _build_context(user_id)
+            cached['priority_insights'] = _build_priority_insights(ctx_cached)
         return jsonify(cached)
 
     # Cache miss — disparar task Celery em background
@@ -589,10 +716,12 @@ def get_insights():
     # Fallback síncrono se Celery não estiver disponível
     ctx = _build_context(user_id)
     insights = _gerar_insights_llm(ctx, personalidade)
+    priority_insights = _build_priority_insights(ctx)
 
     result = {
         'success': True,
         'insights': insights,
+        'priority_insights': priority_insights,
         'resumo': {
             'total_gasto':         ctx['total_gasto_mes'],
             'num_faturas':         ctx['num_faturas_mes'],

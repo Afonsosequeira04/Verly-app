@@ -1,283 +1,613 @@
-# Verly 💜
+# Verly
 
-**O teu guardião financeiro inteligente.**
+Verly e uma app financeira pessoal com backend Flask e app mobile React Native/Expo. O objetivo e juntar faturas, banco, Gmail, IA e ferramentas praticas de decisao financeira numa experiencia simples: perceber para onde vai o dinheiro, agir antes de gastar mal, gerir subscricoes, dividir despesas e acompanhar patrimonio.
 
-Verly é uma aplicação móvel + web que ajuda utilizadores portugueses a gerir as suas despesas, detetar desperdício financeiro e tomar decisões de compra mais inteligentes — com a personalidade irreverente de uma IA que conhece os teus hábitos melhor do que tu.
+A app esta desenhada com uma UI dark premium, cards glass subtis, gradientes controlados e uma experiencia mobile-first.
 
----
+## Estado Atual
 
-## ✨ Funcionalidades
+Verly inclui hoje:
 
-### 📱 App Mobile (React Native / Expo)
-- **Dashboard** — visão geral do mês: gastos, faturas, alertas e tendência vs. mês anterior
-- **Faturas** — upload via câmara, galeria ou PDF; extração automática por OCR + IA em background
-- **Ask Verly** — chat com IA contextualizado com os teus dados financeiros pessoais
-- **Insights** — análise inteligente com cache Redis; gerados em background via Celery com fallback síncrono
-- **Poupança** — plano de poupança personalizado com breakdown por categoria
-- **Perfil** — personalidade da IA (Savage / Sarcástico / Calmo / Pro), avatar, configurações
+- dashboard financeiro com cockpit inteligente;
+- upload de faturas com OCR/IA;
+- importacao Gmail para recibos e compras;
+- Open Banking para ligar e sincronizar banco;
+- Score de compra com lojas proximas, mapa e comparacao de precos;
+- subscricoes detetadas por faturas/Gmail/banco;
+- Ask Verly com respostas e acoes dentro da app;
+- divisao de despesas estilo Tricount;
+- net worth com ativos, dividas e grafico em pizza;
+- metas, garantias, historico, estatisticas e relatorios;
+- backend API JWT para mobile;
+- web Flask/Jinja para areas legacy/admin;
+- deploy em Railway com Postgres, Redis, Qdrant e Celery worker.
 
-### 🗂️ Menu Lateral
-- **Metas** — define limites de gasto por categoria e acompanha o progresso em tempo real
-- **Amigos** — partilha e compara hábitos financeiros com amigos
-- **Playlists de compras** — listas colaborativas de produtos
-- **Estatísticas** — gráficos detalhados de consumo por categoria e histórico mensal
-- **Relatório** — relatório mensal com estimativa de desperdício e análise de tendências
-- **Histórico** — todas as faturas ordenadas por data com filtros
-- **Score de compra** — analisa se uma compra vale a pena antes de a fazer
-- **Subscrições** — deteta serviços recorrentes automaticamente e alerta para os que não usas
-- **Garantias** — alertas de garantias e prazos de devolução
-- **Notificações** — push notifications via FCM
-- **Gmail** — importação automática de faturas por email
+## Funcionalidades
 
-### 🌐 Web (Flask + Jinja2)
-- Interface completa de gestão de faturas e relatórios
-- Exportação PDF de relatórios mensais
-- Sistema de personalidade da IA
-- Módulo Impulse Control — análise custo-benefício antes de comprar
-- Dashboard com gráficos e métricas financeiras
+### Dashboard
 
----
+O dashboard e a primeira vista financeira da app.
 
-## 🛠️ Stack Tecnológico
+- Gasto mensal e progresso face ao orcamento.
+- Metricas de faturas, alertas e variacao mensal.
+- Graficos financeiros por categoria, tempo e fontes.
+- Cockpit inteligente com score financeiro, qualidade dos dados e acoes recomendadas.
+- Upload rapido de fatura por camera, galeria ou ficheiro.
+- Empty/loading states em dark mode.
+
+### Cockpit Inteligente
+
+O cockpit analisa dados reais e sugere proximas acoes.
+
+- Sugere ligar fontes quando faltam dados.
+- Sugere auditar subscricoes quando encontra recorrencias.
+- Sugere usar Score antes da proxima compra.
+- Sugere atualizar Net Worth quando ja ha base financeira.
+- Encaminha para Metas, Subscricoes, Importar Dados, Score, Net Worth ou Estatisticas.
+
+### Faturas
+
+- Upload via camera, galeria, PDF, imagem ou texto.
+- Extracao de loja, valor, data, categoria, garantia e devolucao.
+- Guardado em base de dados e opcionalmente Cloudflare R2.
+- Indexacao semantica para Ask Verly e pesquisas futuras.
+- Lista e detalhe de faturas no mobile.
+
+### Score de Compra
+
+O Score ajuda a avaliar uma compra antes de a fazer.
+
+- Produto, preco, categoria e frequencia de uso.
+- Score final com fatores explicaveis.
+- Avaliacao de preco vs mercado via IA quando configurado.
+- Lojas proximas com Google Places e fallback OpenStreetMap/Overpass.
+- Mapa inline e modal de mapa completo.
+- Comparacao de precos reais noutras lojas via SerpApi.
+- Destaque de loja/preco mais barato.
+
+Variaveis relevantes:
+
+```env
+GOOGLE_PLACES_API_KEY=
+SERPAPI_KEY=
+GROQ_API_KEY=
+```
+
+Sem `SERPAPI_KEY`, o Score continua a funcionar, mas nao mostra precos reais de outras lojas.
+
+### Importar Dados
+
+O menu de importacao centraliza fontes externas:
+
+- Banco: Open Banking.
+- Gmail: importacao de recibos e confirmacoes de compra.
+
+O objetivo deste ecra e ligar fontes. A analise financeira fica no dashboard, insights e cockpit.
+
+### Open Banking
+
+O Open Banking foi simplificado para cumprir um papel claro:
+
+- Ver estado da ligacao.
+- Pesquisar instituicao bancaria.
+- Iniciar consentimento no provider.
+- Sincronizar movimentos.
+- Ver contas ligadas.
+
+Os movimentos bancarios alimentam dashboard, subscricoes, estatisticas, Ask Verly e memoria semantica.
+
+Variaveis principais:
+
+```env
+OPEN_BANKING_PROVIDER=enablebanking
+OPEN_BANKING_DEFAULT_COUNTRY=PT
+OPEN_BANKING_REDIRECT_URL=https://verly-app-production.up.railway.app/api/v1/open-banking/callback
+OPEN_BANKING_APP_RETURN_URL=verly://open-banking/callback
+ENABLE_BANKING_APP_ID=
+ENABLE_BANKING_PRIVATE_KEY=
+```
+
+### Gmail
+
+- Liga a conta Gmail por OAuth.
+- Procura emails de confirmacao de compra/recibos.
+- Extrai faturas automaticamente.
+- Permite sincronizar e desligar.
+- Alimenta faturas, subscricoes e Ask Verly.
+
+Variaveis principais:
+
+```env
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+APP_URL=
+```
+
+### Subscricoes
+
+Auditoria de pagamentos recorrentes.
+
+- Deteccao por faturas.
+- Deteccao por Gmail apos importacao.
+- Deteccao por Open Banking quando existem movimentos recorrentes.
+- Resumo mensal/anual.
+- Risco por subscricao.
+- Remocao/ocultacao de subscricoes irrelevantes.
+- Estado vazio com CTA para ligar fontes reais.
+
+### Ask Verly
+
+Chat financeiro com contexto dos dados do utilizador.
+
+Usa:
+
+- faturas;
+- metas;
+- memoria semantica;
+- historico recente;
+- personalidade do utilizador.
+
+Tambem devolve acoes que o mobile pode executar:
+
+- abrir upload;
+- ver faturas;
+- ver garantias;
+- analisar compra no Score;
+- abrir grupos;
+- abrir importacao;
+- abrir subscricoes;
+- abrir Net Worth;
+- criar metas com confirmacao;
+- criar item de Net Worth com confirmacao;
+- limpar conversa.
+
+### Dividir Despesas
+
+Parte social convertida para uma experiencia tipo Tricount.
+
+- Grupos.
+- Membros.
+- Despesas partilhadas.
+- Pagador.
+- Participantes.
+- Divisao automatica.
+- Saldos por pessoa.
+- Acertos sugeridos.
+- Modal de nova despesa com botao de guardar fixo.
+
+### Net Worth
+
+Funcionalidade de patrimonio liquido.
+
+- Adicionar ativos.
+- Adicionar dividas.
+- Categorizar itens.
+- Total de ativos.
+- Total de dividas.
+- Net worth liquido.
+- Grafico em pizza por categoria de ativos.
+- Remocao logica de itens.
+
+Backend:
+
+- modelo `NetWorthItem`;
+- endpoints `/api/v1/networth`;
+- migration `20260608_0003_networth.py`.
+
+### Metas, Garantias, Estatisticas e Historico
+
+- Metas por categoria e limite mensal.
+- Garantias e prazos de devolucao extraidos das faturas.
+- Estatisticas por categoria e evolucao mensal.
+- Historico filtrado de compras/faturas.
+
+## Stack
 
 ### Mobile
-| Camada | Tecnologia |
+
+| Area | Tecnologia |
 |---|---|
 | Framework | React Native 0.81 + Expo 54 |
-| Linguagem | JavaScript (ES2022) |
-| Navegação | React Navigation 6 (Stack + Bottom Tabs + Drawer) |
-| Animações | React Native Reanimated 4 + Moti |
-| Ícones | Lucide React Native + SVG customizados |
-| SVG | react-native-svg 15 |
-| Storage local | AsyncStorage |
-| Autenticação | Firebase Auth (email, Google, Apple) |
-| Compras in-app | RevenueCat |
-| Push Notifications | Firebase Cloud Messaging (FCM) |
-| Câmara / Galeria | expo-image-picker |
-| Ficheiros | expo-document-picker |
-| HTTP | fetch nativo (via `src/services/api.js`) |
-
-### Backend
-| Camada | Tecnologia |
-|---|---|
-| Linguagem | Python 3.13 |
-| Framework | Flask 3.1 + Flask-Login + SQLAlchemy 2.0 |
-| Base de dados | PostgreSQL (produção) / SQLite (desenvolvimento) |
-| Cache | Redis + Flask-Caching (dashboard 5min, insights 15min) |
-| Tasks em background | Celery 5.4 + Redis broker (OCR, insights IA, emails, indexação) |
-| Rate limiting | Flask-Limiter + Redis (multi-worker safe) |
-| IA / LLM | Meta Llama 3.3 70B via Groq API |
-| Orquestração IA | LlamaIndex 0.14 |
-| Vector Search | Qdrant (RAG por utilizador) |
-| Embeddings | HuggingFace BGE Small + sentence-transformers |
-| OCR / Extração | LlamaIndex + Groq multimodal |
-| Storage ficheiros | Cloudflare R2 (S3-compatible) |
-| Autenticação API | JWT (access 15min + refresh 30 dias) com blacklist Redis |
-| Email | Resend API |
-| Exportação PDF | ReportLab |
-| Deploy | Railway (Flask + Celery worker separados) |
-
-### Frontend Web
-| Camada | Tecnologia |
-|---|---|
-| Templates | Jinja2 |
-| CSS | CSS puro com variáveis (dark mode) |
-| Tipografia | Sora + Inter |
-
----
-
-## 📁 Estrutura do Projeto
-
-```
-verly/
-├── app/                        # Backend Flask
-│   ├── api/                    # Endpoints REST para mobile (JWT)
-│   │   ├── __init__.py         # Blueprint da API
-│   │   ├── auth.py             # Login, registo, Firebase, refresh tokens
-│   │   ├── chat.py             # Chat IA contextualizado
-│   │   ├── dashboard.py        # Dados do dashboard (cache Redis)
-│   │   ├── faturas.py          # Upload R2 + OCR async via Celery
-│   │   ├── insights.py         # Insights IA (cache + Celery dispatch)
-│   │   ├── metas.py            # Metas financeiras
-│   │   ├── mobile_extras.py    # Score, impulse, relatório, lojas
-│   │   ├── subscricoes.py      # Subscrições + RevenueCat
-│   │   ├── amizades.py         # Sistema social
-│   │   ├── playlists.py        # Playlists colaborativas
-│   │   ├── gmail.py            # Importação Gmail
-│   │   └── push_notifications.py # FCM push notifications
-│   ├── tasks/                  # Tasks Celery em background
-│   │   ├── ocr.py              # Processamento OCR assíncrono
-│   │   ├── ai_insights.py      # Geração de insights IA
-│   │   ├── emails.py           # Envio de emails via Resend
-│   │   └── qdrant_task.py      # Indexação vectorial no Qdrant
-│   ├── models.py               # Modelos SQLAlchemy (User, Fatura, Meta, etc.)
-│   ├── extensions.py           # Cache, Limiter, Redis client, R2 client
-│   ├── celery_app.py           # Factory Celery com contexto Flask
-│   ├── r2_service.py           # Upload/download/signed URLs Cloudflare R2
-│   ├── qdrant_service.py       # Integração LlamaIndex + Qdrant (RAG)
-│   ├── ai.py                   # Integração LlamaIndex + Groq
-│   ├── email_service.py        # Serviço de email
-│   └── ...                     # Outros módulos (scoring, impulse, etc.)
-│
-├── verly-mobile/               # App React Native / Expo
-│   ├── src/
-│   │   ├── screens/            # Ecrãs da app
-│   │   │   ├── DashboardScreen.js
-│   │   │   ├── ChatScreen.js
-│   │   │   ├── InsightsScreen.js
-│   │   │   ├── FaturasScreen.js
-│   │   │   ├── PerfilScreen.js
-│   │   │   ├── MetasScreen.js
-│   │   │   ├── ScoreScreen.js
-│   │   │   ├── GarantiasScreen.js
-│   │   │   ├── GmailScreen.js
-│   │   │   └── ...
-│   │   ├── navigation/
-│   │   │   └── AppNavigator.js # Stack + Tabs + Drawer
-│   │   ├── services/
-│   │   │   └── api.js          # Comunicação com backend Flask
-│   │   ├── context/
-│   │   │   ├── AuthContext.js  # JWT + refresh tokens
-│   │   │   └── RevenueCatContext.js
-│   │   ├── components/
-│   │   │   ├── UI.js           # Componentes reutilizáveis
-│   │   │   ├── DonutCategorias.js
-│   │   │   └── DraggableDashboard.js
-│   │   └── constants/
-│   │       └── theme.js        # COLORS, FONT, SPACE, RADIUS
-│   └── android/                # Build nativo Android
-│
-├── templates/                  # Templates Jinja2 (web)
-├── static/                     # CSS e assets estáticos
-├── dados_utilizadores/         # Ficheiros por utilizador (PDFs, imagens)
-├── config.py                   # Configuração por ambiente
-├── run.py                      # Entry point Flask + Celery
-└── requirements.txt
-```
-
----
-
-## 🚀 Instalação e Setup
+| Linguagem | JavaScript |
+| Navegacao | React Navigation 6 |
+| UI | React Native + Expo Linear Gradient |
+| Animacoes | Reanimated 4 + Moti |
+| Icones | Lucide React Native |
+| Graficos/SVG | react-native-svg |
+| Mapas | react-native-maps |
+| Storage local | AsyncStorage + SecureStore fallback |
+| Compras/pro | RevenueCat |
+| Push | Firebase Cloud Messaging |
+| Camera/ficheiros | expo-image-picker + expo-document-picker |
 
 ### Backend
 
-```bash
-git clone https://github.com/your-username/verly.git
-cd verly
+| Area | Tecnologia |
+|---|---|
+| Framework | Flask |
+| API mobile | Flask JWT Extended |
+| ORM | SQLAlchemy |
+| Migrations | Flask-Migrate / Alembic |
+| Base de dados | PostgreSQL em producao, SQLite em desenvolvimento |
+| Cache | Flask-Caching + Redis |
+| Jobs | Celery + Redis |
+| IA | Groq / Llama 3.3 70B |
+| RAG | LlamaIndex + Qdrant |
+| Embeddings | HuggingFace / sentence-transformers |
+| Storage | Cloudflare R2 |
+| Email | Resend |
+| OAuth | Google |
+| Open Banking | Enable Banking |
+| Precos externos | SerpApi Google Shopping |
+| Deploy | Railway |
 
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+## Estrutura
+
+```text
+.
+|-- app/
+|   |-- api/
+|   |   |-- __init__.py
+|   |   |-- auth.py
+|   |   |-- chat.py
+|   |   |-- dashboard.py
+|   |   |-- faturas.py
+|   |   |-- gmail.py
+|   |   |-- mobile_extras.py
+|   |   |-- networth.py
+|   |   |-- open_banking.py
+|   |   |-- social.py
+|   |   |-- subscricoes.py
+|   |   `-- ...
+|   |-- tasks/
+|   |-- models.py
+|   |-- models_social.py
+|   |-- financial_intelligence.py
+|   |-- financial_records.py
+|   |-- open_banking_service.py
+|   |-- scoring.py
+|   |-- subscriptions.py
+|   `-- ...
+|-- migrations/
+|   `-- versions/
+|-- templates/
+|-- static/
+|-- dados_utilizadores/
+|-- storage_utilizadores/
+|-- verly-mobile/
+|   |-- src/
+|   |   |-- components/
+|   |   |-- constants/
+|   |   |-- context/
+|   |   |-- navigation/
+|   |   |-- screens/
+|   |   |-- services/
+|   |   `-- utils/
+|   |-- android/
+|   |-- package.json
+|   `-- app.json
+|-- config.py
+|-- run.py
+|-- Procfile
+`-- requirements.txt
+```
+
+## Setup Local
+
+### 1. Backend
+
+```powershell
+cd c:\projetos\meu-projeto-ai
+python -m venv .venv
+.\.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Cria um ficheiro `.env` na raiz:
+Cria um `.env` na raiz.
+
+Minimo para desenvolvimento:
 
 ```env
-# Core
 FLASK_ENV=development
-SECRET_KEY=your_secret_key
-JWT_SECRET_KEY=your_jwt_secret
-
-# Base de dados
-DATABASE_URL=sqlite:///shopping_police.db  # ou postgresql://...
-
-# IA
-GROQ_API_KEY=your_groq_api_key
-
-# Redis (obrigatório para cache, rate limiting e Celery)
+SECRET_KEY=dev-secret
+JWT_SECRET_KEY=dev-jwt-secret
+DATABASE_URL=sqlite:///shopping_police.db
+GROQ_API_KEY=
 REDIS_URL=redis://localhost:6379/0
-
-# Qdrant (vector search)
 QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=
 QDRANT_COLLECTION=verly_docs
+```
 
-# Cloudflare R2 (opcional — sem isto os uploads ficam locais)
-R2_ENDPOINT_URL=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
-R2_BUCKET_NAME=verly-docs
+Para funcionalidades completas:
 
-# Email
-RESEND_API_KEY=your_resend_key
-EMAIL_FROM=Verly <alertas@verly.app>
-
-# Google OAuth
+```env
+APP_URL=http://localhost:5000
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
-
-# RevenueCat
+GOOGLE_PLACES_API_KEY=
+SERPAPI_KEY=
+RESEND_API_KEY=
+EMAIL_FROM=Verly <alertas@verlyapp.com>
 REVENUECAT_SECRET_KEY=
+R2_ENDPOINT_URL=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+OPEN_BANKING_PROVIDER=enablebanking
+OPEN_BANKING_DEFAULT_COUNTRY=PT
+OPEN_BANKING_REDIRECT_URL=http://localhost:5000/api/v1/open-banking/callback
+OPEN_BANKING_APP_RETURN_URL=verly://open-banking/callback
+ENABLE_BANKING_APP_ID=
+ENABLE_BANKING_PRIVATE_KEY=
 ```
 
-Inicia o Redis e o Qdrant (requer Docker):
+Aplica migrations:
 
-```bash
-docker run -d -p 6379:6379 redis:7-alpine
-docker run -d -p 6333:6333 qdrant/qdrant
+```powershell
+flask db upgrade
 ```
 
-Inicia o servidor Flask:
+Arranca o backend:
 
-```bash
+```powershell
 python run.py
 ```
 
-Inicia o Celery worker (noutra janela):
+Arranca Celery noutra consola:
 
-```bash
+```powershell
 celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails -c 2
 ```
 
-### Mobile
+### 2. Mobile
 
-```bash
+```powershell
 cd verly-mobile
 npm install
 ```
 
-Em `src/services/api.js`, atualiza o URL base:
+Android emulator contra backend local:
 
-```js
-const BASE_URL = 'http://192.168.1.X:5000/api/v1';  // desenvolvimento local
-// ou
-const BASE_URL = 'https://verly-app-production.up.railway.app/api/v1';  // produção
+```powershell
+$env:EXPO_PUBLIC_API_URL="http://10.0.2.2:5000/api/v1"
+npx expo run:android
 ```
 
-Inicia a app:
+Telemovel fisico contra backend local:
+
+```powershell
+$env:EXPO_PUBLIC_API_URL="http://IP_DO_TEU_PC:5000/api/v1"
+npx expo run:android
+```
+
+Contra producao:
+
+```powershell
+npx expo run:android
+```
+
+Por defeito a app usa:
+
+```text
+https://verly-app-production.up.railway.app/api/v1
+```
+
+Web preview:
+
+```powershell
+npx expo start --web
+```
+
+## Railway / Producao
+
+Servicos usados:
+
+- `Verly-app`: Flask/Gunicorn.
+- `celery-worker`: Celery.
+- PostgreSQL.
+- Redis.
+- Qdrant.
+
+`Procfile` atual:
+
+```text
+web: python migrate_prod.py && gunicorn run:flask_app --workers 1 --bind 0.0.0.0:$PORT --timeout 120
+```
+
+Comando comum para migrations em Railway:
 
 ```bash
-npx expo start
+flask db upgrade
 ```
 
----
+Se necessario:
 
-## 🚢 Deploy (Railway)
+```bash
+export FLASK_APP=run.py
+python -m flask db upgrade
+```
 
-O projeto usa dois serviços no Railway:
+Depois de alterar variaveis no Railway, faz redeploy/restart do servico.
 
-| Serviço | Start Command |
-|---|---|
-| Verly-app (Flask) | `python migrate_prod.py && gunicorn run:app --workers 1 --bind 0.0.0.0:$PORT --timeout 120` |
-| Celery worker | `celery -A run.celery worker --loglevel=info -Q default,ocr,ai,emails -c 2` |
+## Variaveis de Ambiente
 
-Serviços de infraestrutura no Railway: **PostgreSQL**, **Redis**, **Qdrant**.
+### Core
 
----
+```env
+APP_URL=
+FLASK_ENV=
+SECRET_KEY=
+JWT_SECRET_KEY=
+DATABASE_URL=
+REDIS_URL=
+```
 
-## 🎨 Design System
+### IA e dados
 
-A app usa um sistema de design consistente definido em `src/constants/theme.js`:
+```env
+GROQ_API_KEY=
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION=
+```
 
-- **Cor primária:** `#7C6FE0` (roxo Verly)
-- **Background:** `#080810` (dark profundo)
-- **Surface:** `#0F0F1A` / `#161624`
-- **Tipografia:** FONT.xs / sm / md / lg / xl / h1
-- **Espaçamento:** SPACE.sm / md / lg
-- **Raios:** RADIUS.sm / md / lg
+### Score e mercado
 
----
+```env
+GOOGLE_PLACES_API_KEY=
+SERPAPI_KEY=
+```
 
-## 📄 Licença
+### Gmail / Google
 
-Projeto privado — todos os direitos reservados.
+```env
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+### Open Banking
+
+```env
+OPEN_BANKING_PROVIDER=
+OPEN_BANKING_DEFAULT_COUNTRY=
+OPEN_BANKING_REDIRECT_URL=
+OPEN_BANKING_APP_RETURN_URL=
+ENABLE_BANKING_APP_ID=
+ENABLE_BANKING_PRIVATE_KEY=
+ENABLE_BANKING_PRIVATE_KEY_FILE=
+```
+
+### Storage e email
+
+```env
+R2_ENDPOINT_URL=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET_NAME=
+RESEND_API_KEY=
+EMAIL_FROM=
+```
+
+### Monetizacao
+
+```env
+REVENUECAT_SECRET_KEY=
+```
+
+## API Mobile
+
+Base URL:
+
+```text
+/api/v1
+```
+
+Principais grupos de endpoints:
+
+- `/auth`: login, registo, refresh, logout, perfil autenticado.
+- `/dashboard`: resumo financeiro e cockpit.
+- `/faturas`: listar, detalhe, upload e apagar.
+- `/chat`: Ask Verly, historico e limpar conversa.
+- `/scoring`: Score de compra, lojas proximas e precos.
+- `/gmail`: OAuth, status, sync e disconnect.
+- `/open-banking`: status, institutions, connect, callback, sync, accounts, transactions.
+- `/subscricoes`: listar, detetar e apagar.
+- `/grupos`: grupos, despesas, acertos e chat de grupo.
+- `/networth`: patrimonio liquido e itens.
+- `/metas`: metas financeiras.
+- `/estatisticas`: graficos e historico agregado.
+- `/exportar`: resumo/garantias/PDF.
+
+## Migrations Importantes
+
+```text
+20260606_0001_open_banking.py
+20260607_0002_social_expenses.py
+20260608_0003_networth.py
+```
+
+Sempre que fizeres deploy com novas migrations:
+
+```bash
+flask db upgrade
+```
+
+## Validacao
+
+Backend:
+
+```powershell
+python -m py_compile app\scoring.py app\api\mobile_extras.py app\api\subscricoes.py app\api\networth.py app\api\chat.py app\financial_intelligence.py app\models.py
+```
+
+Mobile bundle:
+
+```powershell
+cd verly-mobile
+npx expo export --platform web --output-dir .expo-web-check
+```
+
+Limpar export temporario:
+
+```powershell
+Remove-Item -Recurse -Force .expo-web-check
+```
+
+## Design System
+
+O design system mobile vive em:
+
+```text
+verly-mobile/src/constants/theme.js
+```
+
+Direcao visual atual:
+
+- dark premium;
+- fundo navy/preto azulado;
+- cards glass subtis;
+- gradientes roxo/azul/ciano/magenta apenas em destaques;
+- bordas finas e sombras discretas;
+- bottom navigation moderna;
+- componentes densos mas respiraveis;
+- microinteracoes curtas;
+- tipografia consistente.
+
+Tokens principais:
+
+- `COLORS`
+- `FONT`
+- `RADIUS`
+- `SPACE`
+- `SHADOWS`
+
+## Seguranca
+
+Nunca commits ficheiros `.env`, private keys, service accounts ou secrets.
+
+Credenciais que devem ficar apenas em gestores de variaveis:
+
+- `DATABASE_URL`
+- `SECRET_KEY`
+- `JWT_SECRET_KEY`
+- `GROQ_API_KEY`
+- `SERPAPI_KEY`
+- `GOOGLE_CLIENT_SECRET`
+- `RESEND_API_KEY`
+- `R2_SECRET_ACCESS_KEY`
+- `ENABLE_BANKING_PRIVATE_KEY`
+- `REVENUECAT_SECRET_KEY`
+
+Se uma key for colada em chat, issue, README, screenshot ou commit, considera-a exposta e roda/regenera no provider.
+
+## Notas de Operacao
+
+- `SERPAPI_KEY` e opcional, mas necessaria para precos reais no Score.
+- `GOOGLE_PLACES_API_KEY` melhora lojas proximas; sem ela ha fallback OpenStreetMap/Overpass.
+- `GROQ_API_KEY` e necessaria para respostas IA completas.
+- `OPEN_BANKING_*` so e necessario para ligar bancos.
+- `AUTO_MIGRATE_ON_STARTUP` pode criar tabelas em desenvolvimento, mas em producao e preferivel gerir migrations explicitamente.
+
+## Licenca
+
+Projeto privado. Todos os direitos reservados.

@@ -327,10 +327,21 @@ export const subscricoesAPI = {
 export const metasAPI = {
   listar: () => apiFetch('/metas'),
 
-  criar: (nome, limite, categoria) =>
-    apiFetch('/metas', { method: 'POST', body: JSON.stringify({ nome, limite, categoria }) }),
+  criar: (nomeOrData, limite, categoria) => {
+    const payload = typeof nomeOrData === 'object' && nomeOrData !== null
+      ? {
+          nome: nomeOrData.nome || nomeOrData.categoria,
+          categoria: nomeOrData.categoria,
+          limite: nomeOrData.limite ?? nomeOrData.valor_limite,
+        }
+      : { nome: nomeOrData, limite, categoria };
+    return apiFetch('/metas', { method: 'POST', body: JSON.stringify(payload) });
+  },
 
   apagar: (id) =>
+    apiFetch(`/metas/${id}`, { method: 'DELETE' }),
+
+  eliminar: (id) =>
     apiFetch(`/metas/${id}`, { method: 'DELETE' }),
 };
 
@@ -492,6 +503,8 @@ export const netWorthAPI = {
   get: () => apiFetch('/networth'),
   criarItem: (data) =>
     apiFetch('/networth/items', { method: 'POST', body: JSON.stringify(data) }),
+  atualizarItem: (id, data) =>
+    apiFetch(`/networth/items/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   apagarItem: (id) =>
     apiFetch(`/networth/items/${id}`, { method: 'DELETE' }),
 };

@@ -6,9 +6,10 @@ import {
   Animated, Easing, RefreshControl,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Plus, X, Target, ChevronRight, Trash2 } from 'lucide-react-native';
 import { metasAPI } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { COLORS, RADIUS, FONT, SPACE, SHADOWS } from '../constants/theme';
 import { Reveal, Card, Skeleton, SectionHeader, useScalePress } from '../components/UI';
 
 const C = COLORS;
@@ -34,19 +35,22 @@ function MetaBar({ pct = 0, color = C.brand }) {
 }
 
 function MetaCard({ meta, onDelete }) {
-  const pct = meta.valor_limite > 0 ? (meta.gasto_atual / meta.valor_limite) * 100 : 0;
+  const limite = Number(meta.limite ?? meta.valor_limite ?? 0);
+  const gasto = Number(meta.gasto ?? meta.gasto_atual ?? 0);
+  const pct = limite > 0 ? (gasto / limite) * 100 : 0;
   const color = pct > 100 ? C.red : pct > 80 ? C.yellow : C.green;
-  const restante = meta.valor_limite - meta.gasto_atual;
+  const restante = limite - gasto;
 
   return (
     <Reveal delay={0}>
       <View style={s.card}>
+        <LinearGradient colors={[color + '66', C.cyan + '33']} style={s.cardAccent} />
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', padding: 16 }}>
           <View style={{ flex: 1 }}>
             <Text style={s.bodyText}>{meta.categoria}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4, marginTop: 2 }}>
-              <Text style={[s.bigNum, { color }]}>{fmt(meta.gasto_atual)} €</Text>
-              <Text style={s.microText}>/ {fmt(meta.valor_limite)} €</Text>
+              <Text style={[s.bigNum, { color }]}>{fmt(gasto)} €</Text>
+              <Text style={s.microText}>/ {fmt(limite)} €</Text>
             </View>
           </View>
           <Pressable onPress={() => onDelete(meta.id)} hitSlop={10} style={s.deleteBtn}>
@@ -108,30 +112,33 @@ export default function MetasScreen() {
     ]);
   };
 
-  const totalGasto  = metas.reduce((a, m) => a + (m.gasto_atual || 0), 0);
-  const totalLimite = metas.reduce((a, m) => a + (m.valor_limite || 0), 0);
+  const totalGasto  = metas.reduce((a, m) => a + Number(m.gasto ?? m.gasto_atual ?? 0), 0);
+  const totalLimite = metas.reduce((a, m) => a + Number(m.limite ?? m.valor_limite ?? 0), 0);
 
   return (
     <View style={s.root}>
+      <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
+      <View style={s.decorOne} />
+      <View style={s.decorTwo} />
       <ScrollView
         contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} />}
       >
-        {/* Summary */}
-        {!loading && metas.length > 0 && (
-          <Reveal delay={0} style={[s.card, { padding: 20, marginBottom: 20, flexDirection: 'row', gap: 20 }]}>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={s.microText}>Total gasto</Text>
-              <Text style={[s.bigNum, { color: C.red, marginTop: 4 }]}>{fmt(totalGasto)} €</Text>
-            </View>
-            <View style={{ width: 1, backgroundColor: C.border }} />
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={s.microText}>Total orçado</Text>
-              <Text style={[s.bigNum, { marginTop: 4 }]}>{fmt(totalLimite)} €</Text>
-            </View>
-          </Reveal>
-        )}
+        <Reveal delay={0} style={s.hero}>
+          <View style={s.heroIcon}>
+            <Target size={22} color={C.brandMid || C.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.heroKicker}>METAS MENSAIS</Text>
+            <Text style={s.heroTitle}>{metas.length ? `${Math.round(totalLimite ? (totalGasto / totalLimite) * 100 : 0)}% usado` : 'Define limites claros'}</Text>
+            <Text style={s.heroSub}>
+              {metas.length
+                ? `${fmt(totalGasto)} EUR gastos de ${fmt(totalLimite)} EUR planeados.`
+                : 'Cria metas por categoria para a Verly conseguir avisar antes de passares do limite.'}
+            </Text>
+          </View>
+        </Reveal>
 
         <SectionHeader title="As tuas metas" action="Nova meta" onAction={() => setShowModal(true)} style={{ marginBottom: 14 }} />
 
@@ -144,6 +151,10 @@ export default function MetasScreen() {
             <View style={s.emptyIcon}><Target size={24} color={C.brand} /></View>
             <Text style={s.emptyTitle}>Sem metas definidas</Text>
             <Text style={s.emptySub}>Define limites de gasto por categoria.</Text>
+            <Pressable onPress={() => setShowModal(true)} style={s.emptyBtn}>
+              <Plus size={14} color="#fff" />
+              <Text style={s.emptyBtnText}>Criar primeira meta</Text>
+            </Pressable>
           </View>
         ) : (
           <View style={{ gap: 12 }}>
@@ -199,7 +210,55 @@ export default function MetasScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  card: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border },
+  decorOne: {
+    position: 'absolute',
+    width: 178,
+    height: 178,
+    borderRadius: 52,
+    right: -76,
+    top: 80,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    transform: [{ rotate: '18deg' }],
+  },
+  decorTwo: {
+    position: 'absolute',
+    width: 112,
+    height: 74,
+    borderRadius: 22,
+    left: -34,
+    top: 210,
+    backgroundColor: 'rgba(34,212,253,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.lg,
+    ...SHADOWS.card,
+  },
+  heroIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroKicker: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900', letterSpacing: 1.1 },
+  heroTitle: { color: C.text, fontSize: 26, fontWeight: '900', marginTop: 4 },
+  heroSub: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 4 },
+  card: { backgroundColor: C.glass, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.borderHi, overflow: 'hidden', ...SHADOWS.card },
+  cardAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
   bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },
   bigNum:   { fontSize: FONT.xxl, fontWeight: '900', color: C.text, letterSpacing: 0 },
   microText: { fontSize: FONT.xs, color: C.textMid },
@@ -214,9 +273,11 @@ const s = StyleSheet.create({
   emptyIcon: { width: 52, height: 52, borderRadius: 16, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand, justifyContent: 'center', alignItems: 'center' },
   emptyTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text },
   emptySub:  { fontSize: FONT.sm, color: C.textMid, textAlign: 'center' },
+  emptyBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill, paddingHorizontal: 18, paddingVertical: 12, ...SHADOWS.brandGlow },
+  emptyBtnText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalSheet:   { backgroundColor: C.surface2, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 44 },
+  modalSheet:   { backgroundColor: C.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24, paddingBottom: 44, borderWidth: 1, borderColor: C.borderHi },
   sheetHandle:  { width: 36, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 20 },
   sheetTitle:   { fontSize: FONT.lg, fontWeight: '800', color: C.text },
 

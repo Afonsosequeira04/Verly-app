@@ -55,7 +55,8 @@ function monthLabel(value) {
 function normalizeCategories(items = [], fallbackCurrency = 'EUR') {
   return (items || [])
     .map((item, index) => ({
-      id: keyOf(item.categoria || item.label || item.nome || index),
+      id: `${keyOf(item.categoria || item.label || item.nome || index)}-${index}`,
+      rawId: keyOf(item.categoria || item.label || item.nome || index),
       label: item.categoria || item.label || item.nome || `Categoria ${index + 1}`,
       value: Number(item.valor ?? item.total ?? item.value ?? 0),
       currency: item.currency || fallbackCurrency,
@@ -359,7 +360,7 @@ function CategoryExplorer({ categories, currency, itemsByCategory = {}, onSelect
           const isActive = selected === item.id;
           return (
             <Pressable
-              key={item.id}
+              key={`${item.id}-chip`}
               onPress={() => {
                 setSelected(item.id);
                 onSelected?.(item.id);
@@ -377,7 +378,7 @@ function CategoryExplorer({ categories, currency, itemsByCategory = {}, onSelect
         const pct = Math.max(5, (item.value / max) * 100);
         const isActive = selected === item.id;
         return (
-          <Pressable key={item.id} onPress={() => setSelected(item.id)} style={[styles.rankRow, isActive && styles.rankRowActive]}>
+          <Pressable key={`${item.id}-rank`} onPress={() => setSelected(item.id)} style={[styles.rankRow, isActive && styles.rankRowActive]}>
             <View style={[styles.rankBadge, { backgroundColor: item.color + '22' }]}>
               <Text style={[styles.rankBadgeText, { color: item.color }]}>#{index + 1}</Text>
             </View>

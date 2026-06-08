@@ -24,6 +24,7 @@ import FaturasScreen           from '../screens/FaturasScreen';
 import FaturaDetalheScreen     from '../screens/FaturaDetalheScreen';
 import ChatScreen              from '../screens/ChatScreen';
 import MinhasSubscricoesScreen from '../screens/MinhasSubscricoesScreen';
+import SubscricoesScreen       from '../screens/SubscricoesScreen';
 import PerfilScreen            from '../screens/PerfilScreen';
 import NotificacoesScreen      from '../screens/NotificacoesScreen';
 import MetasScreen             from '../screens/MetasScreen';
@@ -301,6 +302,7 @@ function MenuScreen({ navigation }) {
     {
       label: 'Conta',
       items: [
+        { label: 'Verly Pro',      screen: 'VerlyPro',      icon: 'star'     },
         { label: 'Configurações',  screen: 'Configuracoes', icon: 'settings' },
       ],
     },
@@ -586,6 +588,7 @@ function MainStackNav() {
       <MainStack.Screen name="Notificacoes"  component={NotificacoesScreen}  options={{ ...hdr, headerTitle: 'Notificações' }} />
       <MainStack.Screen name="Metas"         component={MetasScreen}         options={{ ...hdr, headerTitle: 'Metas' }} />
       <MainStack.Screen name="MinhasSubscricoes" component={MinhasSubscricoesScreen} options={{ ...hdr, headerTitle: 'Subscrições' }} />
+      <MainStack.Screen name="VerlyPro"      component={SubscricoesScreen}   options={{ ...hdr, headerTitle: 'Verly Pro' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...hdr, headerTitle: 'Estatísticas' }} />
       <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Score de compra' }} />
       <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...hdr, headerTitle: 'Relatório' }} />

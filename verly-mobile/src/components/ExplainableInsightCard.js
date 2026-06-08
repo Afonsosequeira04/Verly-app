@@ -98,7 +98,7 @@ function ContextBars({ insight, resumo }) {
     return (
       <View style={{ gap: 6, marginTop: 8 }}>
         {top_categorias.slice(0, 3).map((cat, i) => (
-          <MiniBar key={cat.categoria} label={cat.categoria} valor={cat.valor} max={max} cor={['#7C6FE0', '#FF4D6D', '#FFB300'][i]} />
+          <MiniBar key={`${cat.categoria}-${i}`} label={cat.categoria} valor={cat.valor} max={max} cor={['#7C6FE0', '#FF4D6D', '#FFB300'][i]} />
         ))}
       </View>
     );

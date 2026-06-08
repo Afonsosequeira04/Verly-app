@@ -32,11 +32,22 @@ function polarToCartesian(cx, cy, r, angle) {
   return { x: cx + (r * Math.cos(rad)), y: cy + (r * Math.sin(rad)) };
 }
 
-function arcPath(cx, cy, r, startAngle, endAngle) {
-  const start = polarToCartesian(cx, cy, r, endAngle);
-  const end = polarToCartesian(cx, cy, r, startAngle);
+function donutPath(cx, cy, outerR, innerR, startAngle, endAngle) {
+  const gap = 1.4;
+  const start = startAngle + gap / 2;
+  const end = Math.max(start + 0.01, endAngle - gap / 2);
+  const outerStart = polarToCartesian(cx, cy, outerR, end);
+  const outerEnd = polarToCartesian(cx, cy, outerR, start);
+  const innerStart = polarToCartesian(cx, cy, innerR, start);
+  const innerEnd = polarToCartesian(cx, cy, innerR, end);
   const largeArc = endAngle - startAngle <= 180 ? '0' : '1';
-  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y} Z`;
+  return [
+    `M ${outerStart.x} ${outerStart.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 0 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerStart.x} ${innerStart.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 1 ${innerEnd.x} ${innerEnd.y}`,
+    'Z',
+  ].join(' ');
 }
 
 function PieChart({ data = [] }) {
@@ -68,12 +79,16 @@ function PieChart({ data = [] }) {
         {slices.map((slice, index) => (
           <Path
             key={`${slice.categoria}-${index}`}
-            d={arcPath(95, 95, 86, slice.start, slice.end)}
+            d={donutPath(95, 95, 86, 54, slice.start, slice.end)}
             fill={slice.color}
-            opacity={0.92}
+            opacity={0.95}
           />
         ))}
       </Svg>
+      <View style={styles.pieCenter}>
+        <Text style={styles.pieCenterLabel}>Ativos</Text>
+        <Text style={styles.pieCenterValue}>{data.length}</Text>
+      </View>
       <View style={styles.legend}>
         {slices.map((slice, index) => (
           <View key={`${slice.categoria}-legend-${index}`} style={styles.legendRow}>
@@ -83,6 +98,23 @@ function PieChart({ data = [] }) {
           </View>
         ))}
       </View>
+    </View>
+  );
+}
+
+function TrackingSparkline({ points = [], color = C.brand }) {
+  const values = points.map(point => Number(point.valor || 0)).filter(value => value > 0);
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 1);
+  return (
+    <View style={styles.sparkline}>
+      {values.slice(-8).map((value, index) => (
+        <View key={`${value}-${index}`} style={[styles.sparkBar, {
+          height: Math.max(8, (value / max) * 30),
+          backgroundColor: color,
+          opacity: 0.38 + index * 0.07,
+        }]} />
+      ))}
     </View>
   );
 }
@@ -102,6 +134,7 @@ export default function NetWorthScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
   const [form, setForm] = useState({
     nome: '',
     tipo: 'asset',
@@ -128,7 +161,20 @@ export default function NetWorthScreen({ navigation }) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const openNew = () => {
+    setEditingItem(null);
     setForm({ nome: '', tipo: 'asset', categoria: 'Conta', valor: '', currency: summary?.currency || 'EUR' });
+    setModal(true);
+  };
+
+  const openEdit = (item) => {
+    setEditingItem(item);
+    setForm({
+      nome: item.nome || '',
+      tipo: item.tipo || 'asset',
+      categoria: item.categoria || (item.tipo === 'liability' ? 'Cartao' : 'Conta'),
+      valor: String(item.valor || '').replace('.', ','),
+      currency: item.currency || summary?.currency || 'EUR',
+    });
     setModal(true);
   };
 
@@ -147,14 +193,17 @@ export default function NetWorthScreen({ navigation }) {
 
     setSaving(true);
     try {
-      await netWorthAPI.criarItem({
+      const payload = {
         nome: form.nome.trim(),
         tipo: form.tipo,
         categoria: form.categoria,
         valor,
         currency: form.currency.trim().toUpperCase() || 'EUR',
-      });
+      };
+      if (editingItem) await netWorthAPI.atualizarItem(editingItem.id, payload);
+      else await netWorthAPI.criarItem(payload);
       setModal(false);
+      setEditingItem(null);
       await load(true);
     } catch (e) {
       Alert.alert('Net worth', e.message || 'Nao foi possivel guardar.');
@@ -254,8 +303,11 @@ export default function NetWorthScreen({ navigation }) {
               <Text style={styles.emptyActionText}>Adicionar primeiro item</Text>
             </Pressable>
           </View>
-        ) : items.map(item => (
-          <View key={item.id} style={styles.itemRow}>
+        ) : items.map(item => {
+          const delta = Number(item.tracking?.delta || 0);
+          const trendColor = delta > 0 ? C.green : delta < 0 ? C.red : C.textMid;
+          return (
+          <Pressable key={item.id} onPress={() => openEdit(item)} style={({ pressed }) => [styles.itemRow, pressed && styles.pressed]}>
             <View style={[styles.itemDot, { backgroundColor: item.tipo === 'asset' ? C.greenDim : C.redDim }]}>
               <Text style={[styles.itemDotText, { color: item.tipo === 'asset' ? C.green : C.red }]}>
                 {item.tipo === 'asset' ? '+' : '-'}
@@ -263,16 +315,24 @@ export default function NetWorthScreen({ navigation }) {
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.itemName} numberOfLines={1}>{item.nome}</Text>
-              <Text style={styles.itemMeta}>{item.categoria}</Text>
+              <Text style={styles.itemMeta}>{item.categoria} · toca para atualizar</Text>
+              <TrackingSparkline points={item.tracking?.points || []} color={item.tipo === 'asset' ? C.green : C.red} />
             </View>
-            <Text style={[styles.itemValue, { color: item.tipo === 'asset' ? C.green : C.red }]}>
-              {formatMoney(item.valor, item.currency)}
-            </Text>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[styles.itemValue, { color: item.tipo === 'asset' ? C.green : C.red }]}>
+                {formatMoney(item.valor, item.currency)}
+              </Text>
+              {item.tracking?.points?.length > 1 && (
+                <Text style={[styles.itemDelta, { color: trendColor }]}>
+                  {delta > 0 ? '+' : ''}{formatMoney(delta, item.currency)}
+                </Text>
+              )}
+            </View>
             <Pressable onPress={() => apagar(item)} hitSlop={8} style={styles.trashBtn}>
               <Trash2 size={15} color={C.textMid} />
             </Pressable>
-          </View>
-        ))}
+          </Pressable>
+        );})}
       </ScrollView>
 
       <Modal visible={modal} transparent animationType="slide" onRequestClose={() => setModal(false)}>
@@ -281,7 +341,7 @@ export default function NetWorthScreen({ navigation }) {
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
             <View style={styles.sheet}>
               <View style={styles.sheetHandle} />
-              <Text style={styles.sheetTitle}>Novo item</Text>
+              <Text style={styles.sheetTitle}>{editingItem ? 'Atualizar valor' : 'Novo item'}</Text>
               <TextInput
                 style={styles.input}
                 placeholder="Ex: Conta Santander, ETF, cartao credito..."
@@ -328,7 +388,7 @@ export default function NetWorthScreen({ navigation }) {
                 </Pressable>
                 <Pressable onPress={guardar} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.65 }]}>
                   <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.saveGradient}>
-                    {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>Guardar</Text>}
+                {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveText}>{editingItem ? 'Atualizar' : 'Guardar'}</Text>}
                   </LinearGradient>
                 </Pressable>
               </View>
@@ -409,7 +469,21 @@ const styles = StyleSheet.create({
   sectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACE.sm },
   sectionTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
   sectionCount: { color: C.brandMid, fontSize: FONT.sm, fontWeight: '900' },
-  pieWrap: { alignItems: 'center', gap: SPACE.md, marginTop: SPACE.md },
+  pieWrap: { alignItems: 'center', gap: SPACE.md, marginTop: SPACE.md, position: 'relative' },
+  pieCenter: {
+    position: 'absolute',
+    top: 61,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pieCenterLabel: { color: C.textMid, fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+  pieCenterValue: { color: C.text, fontSize: FONT.xl, fontWeight: '900', marginTop: 1 },
   legend: { width: '100%', gap: 8 },
   legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   legendDot: { width: 9, height: 9, borderRadius: 5 },
@@ -449,7 +523,10 @@ const styles = StyleSheet.create({
   itemName: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   itemMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
   itemValue: { fontSize: FONT.sm, fontWeight: '900' },
+  itemDelta: { fontSize: 10, fontWeight: '900', marginTop: 3 },
   trashBtn: { padding: 6 },
+  sparkline: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 34, marginTop: 7 },
+  sparkBar: { width: 5, borderRadius: 4 },
   overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.72)' },
   sheet: {
     backgroundColor: C.surface,

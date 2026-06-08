@@ -1,72 +1,78 @@
-// src/screens/GruposScreen.js — Grupos de despesas
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
-  View, Text, ScrollView, Pressable, TextInput,
-  Alert, ActivityIndicator, StyleSheet, RefreshControl, Modal,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { gruposAPI, amigosAPI } from '../services/api';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+import { ArrowLeft, Check, Plus, Users, WalletCards } from 'lucide-react-native';
 
-const C   = COLORS;
-const initials = (n = '') =>
-  n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
+import { amigosAPI, gruposAPI } from '../services/api';
+import { COLORS, FONT, RADIUS, SHADOWS, SPACE } from '../constants/theme';
+
+const C = COLORS;
+const ICONS = ['EUR', 'Trip', 'Home', 'Food', 'Ride', 'Team'];
+
+const initials = (name = '') =>
+  name.split(' ').slice(0, 2).map(part => part[0] || '').join('').toUpperCase() || '?';
 
 function Avatar({ nome, size = 38, color = C.brand }) {
   return (
-    <View style={{
-      width: size, height: size, borderRadius: size * 0.3,
-      backgroundColor: color + '22', borderWidth: 1.5, borderColor: color,
-      justifyContent: 'center', alignItems: 'center',
-    }}>
-      <Text style={{ fontSize: size * 0.36, fontWeight: '900', color }}>
-        {initials(nome)}
-      </Text>
+    <View style={[styles.avatar, {
+      width: size,
+      height: size,
+      borderRadius: size * 0.34,
+      backgroundColor: color + '22',
+      borderColor: color + '66',
+    }]}>
+      <Text style={[styles.avatarText, { fontSize: size * 0.34, color }]}>{initials(nome)}</Text>
     </View>
   );
 }
 
 function MembrosRow({ membros = [] }) {
   const shown = membros.slice(0, 4);
-  const extra = membros.length - shown.length;
+  const extra = Math.max(0, membros.length - shown.length);
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-      {shown.map((m, i) => (
-        <View key={m.id} style={{ marginLeft: i === 0 ? 0 : -10, zIndex: shown.length - i }}>
-          <Avatar nome={m.nome} size={28} />
+    <View style={styles.membersRow}>
+      {shown.map((membro, index) => (
+        <View key={`${membro.id}-${index}`} style={{ marginLeft: index === 0 ? 0 : -10, zIndex: shown.length - index }}>
+          <Avatar nome={membro.nome} size={28} color={index % 2 ? C.cyan : C.brand} />
         </View>
       ))}
       {extra > 0 && (
-        <View style={{
-          marginLeft: -10, width: 28, height: 28, borderRadius: 8,
-          backgroundColor: C.surface3, justifyContent: 'center', alignItems: 'center',
-        }}>
-          <Text style={{ fontSize: 9, fontWeight: '800', color: C.textMid }}>+{extra}</Text>
+        <View style={styles.extraBubble}>
+          <Text style={styles.extraText}>+{extra}</Text>
         </View>
       )}
     </View>
   );
 }
 
-const EMOJIS = ['💸', '🧾', '🏠', '✈️', '🍽️', '🛒', '🚕', '🎟️', '👥', '€'];
-
 export default function GruposScreen({ navigation }) {
-  const [grupos,   setGrupos]   = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [refresh,  setRefresh]  = useState(false);
-  const [modal,    setModal]    = useState(false);
-  const [amigos,   setAmigos]   = useState([]);
-
-  // Form criar grupo
-  const [nome,        setNome]       = useState('');
-  const [descricao,   setDescricao]  = useState('');
-  const [emoji,       setEmoji]      = useState('💸');
-  const [convidados,  setConvidados] = useState([]);
-  const [criando,     setCriando]    = useState(false);
+  const [grupos, setGrupos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [modal, setModal] = useState(false);
+  const [amigos, setAmigos] = useState([]);
+  const [nome, setNome] = useState('');
+  const [descricao, setDescricao] = useState('');
+  const [emoji, setEmoji] = useState('EUR');
+  const [convidados, setConvidados] = useState([]);
+  const [criando, setCriando] = useState(false);
 
   const load = useCallback(async (isRefresh = false) => {
-    if (!isRefresh) setLoading(true);
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     try {
       const data = await gruposAPI.listar();
       setGrupos(Array.isArray(data) ? data : []);
@@ -74,7 +80,7 @@ export default function GruposScreen({ navigation }) {
       console.log('grupos err', e);
     } finally {
       setLoading(false);
-      setRefresh(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -82,7 +88,7 @@ export default function GruposScreen({ navigation }) {
     try {
       const data = await amigosAPI.listar();
       setAmigos(Array.isArray(data?.amigos) ? data.amigos : []);
-    } catch {}
+    } catch (_) {}
   };
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -93,13 +99,11 @@ export default function GruposScreen({ navigation }) {
   };
 
   const toggleConvidado = (id) => {
-    setConvidados(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
+    setConvidados(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]));
   };
 
   const criar = async () => {
-    if (!nome.trim()) return Alert.alert('Ops', 'Dá um nome ao grupo');
+    if (!nome.trim()) return Alert.alert('Falta nome', 'Da um nome ao grupo.');
     setCriando(true);
     try {
       const grupo = await gruposAPI.criar({
@@ -109,11 +113,14 @@ export default function GruposScreen({ navigation }) {
         amigos_ids: convidados,
       });
       setModal(false);
-      setNome(''); setDescricao(''); setEmoji('💸'); setConvidados([]);
-      await load();
+      setNome('');
+      setDescricao('');
+      setEmoji('EUR');
+      setConvidados([]);
+      await load(true);
       navigation.navigate('GrupoDetalhe', { grupoId: grupo.id });
     } catch (e) {
-      Alert.alert('Erro', 'Não foi possível criar o grupo');
+      Alert.alert('Erro', e.message || 'Nao foi possivel criar o grupo.');
     } finally {
       setCriando(false);
     }
@@ -129,74 +136,94 @@ export default function GruposScreen({ navigation }) {
 
   return (
     <View style={styles.root}>
-      {/* Header */}
+      <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
+      <View style={styles.decorOne} />
+      <View style={styles.decorTwo} />
+
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backTxt}>←</Text>
+        <Pressable onPress={() => navigation.goBack()} style={styles.iconBtn}>
+          <ArrowLeft size={19} color={C.text} />
         </Pressable>
-        <View style={styles.headerCopy}>
-          <Text style={styles.headerTitle} numberOfLines={1}>Dividir despesas</Text>
-          <Text style={styles.headerSub} numberOfLines={1}>Grupos para contas partilhadas</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.headerTitle}>Dividir despesas</Text>
+          <Text style={styles.headerSub}>Grupos para contas partilhadas</Text>
         </View>
-        <Pressable onPress={() => navigation.navigate('Amigos')} style={styles.friendsBtn}>
-          <Text style={styles.friendsTxt}>Amigos</Text>
+        <Pressable onPress={() => navigation.navigate('Amigos')} style={styles.secondaryBtn}>
+          <Text style={styles.secondaryText}>Amigos</Text>
         </Pressable>
         <Pressable onPress={abrirModal} style={styles.addBtn}>
-          <Text style={styles.addTxt}>+ Grupo</Text>
+          <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.addGradient}>
+            <Plus size={16} color="#fff" />
+          </LinearGradient>
         </Pressable>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refresh} onRefresh={() => { setRefresh(true); load(true); }} tintColor={C.brand} />}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => load(true)} tintColor={C.brand} />}
       >
+        <Animated.View entering={FadeInDown.delay(40)} style={styles.heroCard}>
+          <View style={styles.heroIcon}>
+            <Users size={22} color={C.brandMid || C.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroKicker}>TRICOUNT VERLY</Text>
+            <Text style={styles.heroTitle}>{grupos.length ? `${grupos.length} grupo${grupos.length === 1 ? '' : 's'} ativo${grupos.length === 1 ? '' : 's'}` : 'Cria um grupo simples'}</Text>
+            <Text style={styles.heroSub}>Regista despesas, escolhe quem pagou e ve os acertos sem ruído.</Text>
+          </View>
+        </Animated.View>
+
         {grupos.length === 0 ? (
           <Animated.View entering={FadeIn} style={styles.empty}>
-            <Text style={styles.emptyEmoji}>🧾</Text>
+            <View style={styles.emptyIcon}>
+              <WalletCards size={30} color={C.cyan} />
+            </View>
             <Text style={styles.emptyTitle}>Ainda sem grupos</Text>
-            <Text style={styles.emptySub}>Cria um grupo para dividir contas, viagens, jantares ou despesas de casa.</Text>
+            <Text style={styles.emptySub}>Cria um grupo para dividir viagens, jantares, casa ou despesas recorrentes.</Text>
             <Pressable onPress={abrirModal} style={styles.emptyBtn}>
-              <Text style={styles.emptyBtnTxt}>Criar grupo</Text>
+              <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.emptyGradient}>
+                <Text style={styles.emptyBtnText}>Criar grupo</Text>
+              </LinearGradient>
             </Pressable>
           </Animated.View>
         ) : (
-          grupos.map((g, i) => (
-            <Animated.View key={g.id} entering={FadeInDown.delay(i * 60)}>
+          grupos.map((grupo, index) => (
+            <Animated.View key={grupo.id} entering={FadeInDown.delay(index * 55)}>
               <Pressable
-                style={styles.card}
-                onPress={() => navigation.navigate('GrupoDetalhe', { grupoId: g.id })}
+                style={({ pressed }) => [styles.groupCard, pressed && styles.pressed]}
+                onPress={() => navigation.navigate('GrupoDetalhe', { grupoId: grupo.id })}
               >
-                <View style={styles.cardLeft}>
-                  <Text style={styles.cardEmoji}>{g.emoji}</Text>
+                <LinearGradient colors={C.gradients.accent} style={styles.cardAccent} />
+                <View style={styles.groupIcon}>
+                  <Text style={styles.groupIconText}>{grupo.emoji || 'EUR'}</Text>
                 </View>
-                <View style={styles.cardBody}>
-                  <Text style={styles.cardNome}>{g.nome}</Text>
-                  {g.descricao ? <Text style={styles.cardDesc} numberOfLines={1}>{g.descricao}</Text> : null}
-                  <View style={styles.cardMeta}>
-                    <MembrosRow membros={g.membros} />
-                    <Text style={styles.cardMetaTxt}>{g.total_membros} membro{g.total_membros !== 1 ? 's' : ''}</Text>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={styles.groupName} numberOfLines={1}>{grupo.nome}</Text>
+                  {!!grupo.descricao && <Text style={styles.groupDesc} numberOfLines={1}>{grupo.descricao}</Text>}
+                  <View style={styles.groupMeta}>
+                    <MembrosRow membros={grupo.membros || []} />
+                    <Text style={styles.groupMetaText}>{grupo.total_membros || grupo.membros?.length || 1} membro{(grupo.total_membros || grupo.membros?.length || 1) === 1 ? '' : 's'}</Text>
                   </View>
                 </View>
-                <Text style={styles.cardArrow}>›</Text>
+                <Text style={styles.arrow}>›</Text>
               </Pressable>
             </Animated.View>
           ))
         )}
       </ScrollView>
 
-      {/* Modal criar grupo */}
       <Modal visible={modal} transparent animationType="slide" onRequestClose={() => setModal(false)}>
         <View style={styles.overlay}>
-          <Pressable style={styles.overlayBg} onPress={() => setModal(false)} />
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setModal(false)} />
           <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>Novo grupo de despesas</Text>
+            <Text style={styles.sheetTitle}>Novo grupo</Text>
 
-            {/* Emoji picker */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.emojiRow}>
-              {EMOJIS.map(e => (
-                <Pressable key={e} onPress={() => setEmoji(e)} style={[styles.emojiBtn, emoji === e && styles.emojiBtnActive]}>
-                  <Text style={styles.emojiTxt}>{e}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.iconRail}>
+              {ICONS.map(option => (
+                <Pressable key={option} onPress={() => setEmoji(option)} style={[styles.iconChoice, emoji === option && styles.iconChoiceActive]}>
+                  <Text style={[styles.iconChoiceText, emoji === option && { color: C.brandMid || C.brand }]}>{option}</Text>
                 </Pressable>
               ))}
             </ScrollView>
@@ -210,8 +237,8 @@ export default function GruposScreen({ navigation }) {
               maxLength={60}
             />
             <TextInput
-              style={[styles.input, { height: 70 }]}
-              placeholder="Descrição (opcional, ex: viagem, casa, férias)"
+              style={[styles.input, styles.textArea]}
+              placeholder="Descricao opcional"
               placeholderTextColor={C.textSub}
               value={descricao}
               onChangeText={setDescricao}
@@ -222,15 +249,14 @@ export default function GruposScreen({ navigation }) {
             {amigos.length > 0 && (
               <>
                 <Text style={styles.sheetLabel}>Convidar amigos</Text>
-                <ScrollView style={{ maxHeight: 160 }}>
-                  {amigos.map(a => {
-                    const sel = convidados.includes(a.id);
+                <ScrollView style={{ maxHeight: 170 }} showsVerticalScrollIndicator={false}>
+                  {amigos.map(amigo => {
+                    const selected = convidados.includes(amigo.id);
                     return (
-                      <Pressable key={a.id} onPress={() => toggleConvidado(a.id)}
-                        style={[styles.amigoRow, sel && styles.amigoRowSel]}>
-                        <Avatar nome={a.nome} size={34} color={sel ? C.green : C.brand} />
-                        <Text style={styles.amigoNome}>{a.nome}</Text>
-                        {sel && <Text style={styles.checkmark}>✓</Text>}
+                      <Pressable key={amigo.id} onPress={() => toggleConvidado(amigo.id)} style={[styles.friendRow, selected && styles.friendRowActive]}>
+                        <Avatar nome={amigo.nome} size={34} color={selected ? C.green : C.brand} />
+                        <Text style={styles.friendName}>{amigo.nome}</Text>
+                        {selected && <Check size={16} color={C.green} />}
                       </Pressable>
                     );
                   })}
@@ -238,8 +264,10 @@ export default function GruposScreen({ navigation }) {
               </>
             )}
 
-            <Pressable onPress={criar} disabled={criando} style={[styles.criarBtn, criando && { opacity: 0.5 }]}>
-              {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.criarBtnTxt}>Criar grupo</Text>}
+            <Pressable onPress={criar} disabled={criando} style={[styles.createBtn, criando && { opacity: 0.6 }]}>
+              <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.createGradient}>
+                {criando ? <ActivityIndicator color="#fff" /> : <Text style={styles.createText}>Criar grupo</Text>}
+              </LinearGradient>
             </Pressable>
           </View>
         </View>
@@ -249,52 +277,105 @@ export default function GruposScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  root:       { flex: 1, backgroundColor: C.bg },
-  center:     { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-  header:     { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 12 },
-  backBtn:    { width: 36, height: 36, borderRadius: 12, backgroundColor: C.surface, justifyContent: 'center', alignItems: 'center' },
-  backTxt:    { fontSize: 18, color: C.text },
-  headerCopy: { flex: 1, minWidth: 0 },
-  headerTitle:{ fontSize: FONT.xl, fontWeight: '800', color: C.text },
-  headerSub:  { fontSize: FONT.xs, color: C.textMid, marginTop: 1 },
-  friendsBtn: { marginLeft: 'auto', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.pill },
-  friendsTxt: { fontSize: FONT.sm, fontWeight: '800', color: C.textMid },
-  addBtn:     { paddingHorizontal: 14, paddingVertical: 8, backgroundColor: C.brand, borderRadius: RADIUS.pill },
-  addTxt:     { fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
-  scroll:     { padding: SPACE.lg, paddingBottom: 100 },
-  // Empty
-  empty:      { alignItems: 'center', paddingTop: 60 },
-  emptyEmoji: { fontSize: 48, marginBottom: 16 },
-  emptyTitle: { fontSize: FONT.lg, fontWeight: '800', color: C.text, marginBottom: 8 },
-  emptySub:   { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', lineHeight: 20, paddingHorizontal: 20, marginBottom: 24 },
-  emptyBtn:   { paddingHorizontal: 24, paddingVertical: 12, backgroundColor: C.brand, borderRadius: RADIUS.pill },
-  emptyBtnTxt:{ fontSize: FONT.sm, fontWeight: '800', color: '#fff' },
-  // Card
-  card:       { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: SPACE.md, marginBottom: SPACE.sm, gap: 12 },
-  cardLeft:   { width: 48, height: 48, borderRadius: 14, backgroundColor: C.brandDim, justifyContent: 'center', alignItems: 'center' },
-  cardEmoji:  { fontSize: 24 },
-  cardBody:   { flex: 1, gap: 3 },
-  cardNome:   { fontSize: FONT.md, fontWeight: '700', color: C.text },
-  cardDesc:   { fontSize: FONT.xs, color: C.textMid },
-  cardMeta:   { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  cardMetaTxt:{ fontSize: FONT.xs, color: C.textSub },
-  cardArrow:  { fontSize: 22, color: C.textSub },
-  // Modal
-  overlay:    { flex: 1, justifyContent: 'flex-end' },
-  overlayBg:  { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.6)' },
-  sheet:      { backgroundColor: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACE.lg, paddingBottom: 36 },
-  sheetHandle:{ width: 40, height: 4, borderRadius: 2, backgroundColor: C.border, alignSelf: 'center', marginBottom: 16 },
-  sheetTitle: { fontSize: FONT.xl, fontWeight: '800', color: C.text, marginBottom: 16 },
-  sheetLabel: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, letterSpacing: 1, marginBottom: 8, marginTop: 8 },
-  emojiRow:   { marginBottom: 14 },
-  emojiBtn:   { width: 44, height: 44, borderRadius: 12, backgroundColor: C.surface2, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
-  emojiBtnActive: { backgroundColor: C.brandDim, borderWidth: 1.5, borderColor: C.brand },
-  emojiTxt:   { fontSize: 22 },
-  input:      { backgroundColor: C.surface2, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, padding: 12, color: C.text, fontSize: FONT.md, marginBottom: 10 },
-  amigoRow:   { flexDirection: 'row', alignItems: 'center', padding: 10, borderRadius: RADIUS.sm, marginBottom: 4, gap: 10 },
-  amigoRowSel:{ backgroundColor: C.brandDim },
-  amigoNome:  { flex: 1, fontSize: FONT.md, color: C.text, fontWeight: '600' },
-  checkmark:  { fontSize: 16, color: C.green, fontWeight: '800' },
-  criarBtn:   { backgroundColor: C.brand, borderRadius: RADIUS.pill, padding: 14, alignItems: 'center', marginTop: 16 },
-  criarBtnTxt:{ fontSize: FONT.md, fontWeight: '800', color: '#fff' },
+  root: { flex: 1, backgroundColor: C.bg },
+  center: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
+  decorOne: {
+    position: 'absolute',
+    width: 180,
+    height: 180,
+    borderRadius: 54,
+    right: -78,
+    top: 86,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    transform: [{ rotate: '18deg' }],
+  },
+  decorTwo: {
+    position: 'absolute',
+    width: 110,
+    height: 74,
+    borderRadius: 22,
+    left: -36,
+    top: 220,
+    backgroundColor: 'rgba(34,212,253,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  header: { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 10 },
+  iconBtn: { width: 38, height: 38, borderRadius: 14, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { color: C.text, fontSize: FONT.xl, fontWeight: '900' },
+  headerSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  secondaryBtn: { borderRadius: RADIUS.pill, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, paddingHorizontal: 12, paddingVertical: 9 },
+  secondaryText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900' },
+  addBtn: { borderRadius: RADIUS.pill, overflow: 'hidden', ...SHADOWS.brandGlow },
+  addGradient: { width: 38, height: 38, borderRadius: RADIUS.pill, alignItems: 'center', justifyContent: 'center' },
+  scroll: { padding: SPACE.lg, paddingBottom: 100 },
+  heroCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.lg,
+    ...SHADOWS.card,
+  },
+  heroIcon: { width: 48, height: 48, borderRadius: 18, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '44', alignItems: 'center', justifyContent: 'center' },
+  heroKicker: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900', letterSpacing: 1.1 },
+  heroTitle: { color: C.text, fontSize: 25, fontWeight: '900', marginTop: 4 },
+  heroSub: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 5 },
+  empty: { alignItems: 'center', paddingTop: 58 },
+  emptyIcon: { width: 78, height: 78, borderRadius: 24, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.borderHi, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  emptyTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
+  emptySub: { color: C.textMid, fontSize: FONT.sm, lineHeight: 20, textAlign: 'center', paddingHorizontal: 22, marginTop: 8, marginBottom: 20 },
+  emptyBtn: { borderRadius: RADIUS.pill, overflow: 'hidden', ...SHADOWS.brandGlow },
+  emptyGradient: { borderRadius: RADIUS.pill, paddingHorizontal: 24, paddingVertical: 12 },
+  emptyBtnText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
+  groupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.md,
+    paddingLeft: SPACE.lg,
+    marginBottom: SPACE.sm,
+    overflow: 'hidden',
+    ...SHADOWS.card,
+  },
+  cardAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
+  groupIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand + '44', justifyContent: 'center', alignItems: 'center' },
+  groupIconText: { color: C.brandMid || C.brand, fontSize: FONT.sm, fontWeight: '900' },
+  groupName: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  groupDesc: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  groupMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  groupMetaText: { color: C.textSub, fontSize: FONT.xs, fontWeight: '700' },
+  arrow: { color: C.textSub, fontSize: 24, fontWeight: '700' },
+  membersRow: { flexDirection: 'row', alignItems: 'center' },
+  extraBubble: { marginLeft: -10, width: 28, height: 28, borderRadius: 10, backgroundColor: C.surface3, borderWidth: 1, borderColor: C.border, justifyContent: 'center', alignItems: 'center' },
+  extraText: { color: C.textMid, fontSize: 9, fontWeight: '900' },
+  avatar: { borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontWeight: '900' },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.72)' },
+  sheet: { backgroundColor: C.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: C.borderHi, padding: SPACE.lg, paddingBottom: 36 },
+  sheetHandle: { width: 42, height: 4, borderRadius: 3, backgroundColor: C.borderHi, alignSelf: 'center', marginBottom: SPACE.md },
+  sheetTitle: { color: C.text, fontSize: FONT.xxl, fontWeight: '900', marginBottom: SPACE.md },
+  sheetLabel: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 8, marginTop: 8 },
+  iconRail: { gap: 8, paddingBottom: SPACE.sm },
+  iconChoice: { minWidth: 56, height: 42, borderRadius: RADIUS.md, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10 },
+  iconChoiceActive: { backgroundColor: C.brandDim, borderColor: C.brand + '66' },
+  iconChoiceText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900' },
+  input: { backgroundColor: C.surface2, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, paddingHorizontal: 13, paddingVertical: 12, color: C.text, fontSize: FONT.md, marginBottom: SPACE.sm },
+  textArea: { height: 72, textAlignVertical: 'top' },
+  friendRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: RADIUS.md, marginBottom: 5, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border },
+  friendRowActive: { backgroundColor: C.greenDim, borderColor: C.green + '55' },
+  friendName: { flex: 1, color: C.text, fontSize: FONT.sm, fontWeight: '800' },
+  createBtn: { borderRadius: RADIUS.pill, overflow: 'hidden', marginTop: SPACE.md, ...SHADOWS.brandGlow },
+  createGradient: { borderRadius: RADIUS.pill, paddingVertical: 14, alignItems: 'center' },
+  createText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
+  pressed: { transform: [{ scale: 0.98 }], opacity: 0.92 },
 });

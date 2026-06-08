@@ -325,7 +325,7 @@ function SubscricoesCard({ resumo }) {
         </View>
 
         {visible.map((sub, i) => (
-          <View key={sub.nome} style={[styles.subRow, i < visible.length - 1 && styles.subRowBorder]}>
+          <View key={`${sub.nome}-${i}`} style={[styles.subRow, i < visible.length - 1 && styles.subRowBorder]}>
             <View style={[styles.subIcon, { backgroundColor: C.brand + '15' }]}>
               <Repeat size={14} color={C.brand} />
             </View>
@@ -382,7 +382,7 @@ function MetasCard({ resumo }) {
           const over = meta.ultrapassou;
           const color = over ? C.red : pct > 80 ? C.yellow : C.green;
           return (
-            <View key={meta.categoria} style={{ marginBottom: i < resumo.metas.length - 1 ? 16 : 0 }}>
+            <View key={`${meta.categoria}-${i}`} style={{ marginBottom: i < resumo.metas.length - 1 ? 16 : 0 }}>
               <View style={styles.metaHeader}>
                 <Text style={styles.metaName}>{meta.categoria}</Text>
                 <View style={styles.metaVals}>
@@ -568,6 +568,68 @@ function EmptyState({ onRefresh, semDados }) {
 }
 
 // ─── Ecrã Principal ───────────────────────────────────────────────────────────
+function PriorityInsightsSection({ items = [], onAction }) {
+  if (!items.length) return null;
+
+  const meta = {
+    critical: { label: 'Critico', color: C.red, icon: AlertTriangle },
+    warning: { label: 'Atencao', color: C.yellow, icon: AlertCircle },
+    opportunity: { label: 'Oportunidade', color: C.brand, icon: Zap },
+    positive: { label: 'Positivo', color: C.green, icon: CheckCircle },
+  };
+
+  return (
+    <Animated.View entering={FadeInDown.delay(90).duration(420).springify()} style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Brain size={16} color={C.brand} />
+          <Text style={styles.sectionTitle}>Prioridade agora</Text>
+        </View>
+        <Text style={styles.sectionCount}>{items.length}</Text>
+      </View>
+
+      {items.slice(0, 3).map((item, index) => {
+        const cfg = meta[item.severity] || meta.opportunity;
+        const Icon = cfg.icon;
+        return (
+          <View key={`${item.type || 'priority'}-${index}`} style={[styles.priorityCard, { borderColor: cfg.color + '44' }]}>
+            <View style={[styles.priorityAccent, { backgroundColor: cfg.color }]} />
+            <View style={styles.priorityHeader}>
+              <View style={[styles.priorityIcon, { backgroundColor: cfg.color + '18' }]}>
+                <Icon size={15} color={cfg.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.priorityLabel, { color: cfg.color }]}>{cfg.label}</Text>
+                <Text style={styles.priorityTitle}>{item.title}</Text>
+              </View>
+              {item.impactAmount != null && (
+                <View style={[styles.impactPill, { backgroundColor: cfg.color + '16' }]}>
+                  <Text style={[styles.impactText, { color: cfg.color }]}>{fmt(item.impactAmount)} {item.currency || 'EUR'}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.priorityMessage}>{item.message}</Text>
+            {!!item.explanation && <Text style={styles.priorityWhy}>{item.explanation}</Text>}
+            {!!item.actions?.length && (
+              <View style={styles.priorityActions}>
+                {item.actions.slice(0, 2).map((action, actionIndex) => (
+                  <Pressable
+                    key={`${action.type || action.label}-${actionIndex}`}
+                    onPress={() => onAction?.(action)}
+                    style={({ pressed }) => [styles.priorityAction, pressed && { opacity: 0.78 }]}
+                  >
+                    <Text style={styles.priorityActionText}>{action.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </Animated.View>
+  );
+}
+
 export default function InsightsScreen({ navigation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -592,9 +654,19 @@ export default function InsightsScreen({ navigation }) {
   useFocusEffect(useCallback(() => { fetchInsights(); }, []));
 
   const insights = data?.insights || [];
+  const priorityInsights = data?.priority_insights || [];
   const resumo = data?.resumo;
   const semDados = data?.sem_dados;
   const hasContent = insights.length > 0 || resumo;
+
+  const handlePriorityAction = useCallback((action) => {
+    if (!action) return;
+    if (action.type === 'open_transactions') navigation.navigate('Historico', action.filters || undefined);
+    else if (action.type === 'create_budget') navigation.navigate('Metas', action.category ? { categoria: action.category } : undefined);
+    else if (action.type === 'open_subscriptions') navigation.navigate('MinhasSubscricoes');
+    else if (action.type === 'open_score') navigation.navigate('Score');
+    else if (action.type === 'open_stats') navigation.navigate('Estatisticas');
+  }, [navigation]);
 
   return (
     <View style={styles.root}>
@@ -641,6 +713,8 @@ export default function InsightsScreen({ navigation }) {
         >
           {/* Score Hero */}
           <HeroCard resumo={resumo} />
+
+          <PriorityInsightsSection items={priorityInsights} onAction={handlePriorityAction} />
 
           {/* Tendência + Previsão */}
           <TendenciaPrevisaoCard resumo={resumo} />
@@ -757,6 +831,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.border,
   },
+  priorityCard: {
+    backgroundColor: C.glass || C.surface2,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    padding: 14,
+    paddingLeft: 18,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  priorityAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4 },
+  priorityHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 9 },
+  priorityIcon: { width: 34, height: 34, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  priorityLabel: { fontSize: 10, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.8 },
+  priorityTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900', marginTop: 2 },
+  priorityMessage: { color: C.text, fontSize: FONT.sm, lineHeight: 20 },
+  priorityWhy: { color: C.textMid, fontSize: FONT.xs, lineHeight: 17, marginTop: 8 },
+  priorityActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  priorityAction: {
+    borderRadius: RADIUS.pill,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  priorityActionText: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900' },
+  impactPill: { borderRadius: RADIUS.pill, paddingHorizontal: 9, paddingVertical: 6 },
+  impactText: { fontSize: 10, fontWeight: '900' },
 
   // Section wrapper
   section: {

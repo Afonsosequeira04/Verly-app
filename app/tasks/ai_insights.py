@@ -18,18 +18,20 @@ logger = logging.getLogger(__name__)
 )
 def gerar_insights_task(self, user_id: int):
     try:
-        from app.api.insights import _build_context, _gerar_insights_llm
+        from app.api.insights import _build_context, _build_priority_insights, _gerar_insights_llm
         from app.models import User
 
         ctx = _build_context(user_id)
         user = User.query.get(user_id)
         personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
         insights = _gerar_insights_llm(ctx, personalidade)
+        priority_insights = _build_priority_insights(ctx)
 
         # Guardar o resultado completo (mesmo formato que o frontend espera)
         result = {
             'success': True,
             'insights': insights,
+            'priority_insights': priority_insights,
             'resumo': {
                 'total_gasto':         ctx['total_gasto_mes'],
                 'num_faturas':         ctx['num_faturas_mes'],

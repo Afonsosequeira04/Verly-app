@@ -7,10 +7,11 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { LogOut, Save, Shield, Bell, Camera, Mail, Phone, ChevronRight, Check } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { LogOut, Save, Shield, Bell, Camera, Mail, Phone, ChevronRight, Check, Sparkles } from 'lucide-react-native';
 import { perfilAPI, authAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import { COLORS, RADIUS, FONT, SPACE, SHADOWS } from '../constants/theme';
 import { Reveal, SectionHeader } from '../components/UI';
 
 const C = COLORS;
@@ -18,10 +19,10 @@ const initials = (n = '') =>
   n.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PERSONALIDADES = [
-  { key: 'calm',      label: 'Calm',       desc: 'Neutro e informativo' },
-  { key: 'pro',       label: 'Pro',        desc: 'Profissional e direto' },
-  { key: 'sarcastic', label: 'Sarcástico', desc: 'Com pitada de humor' },
-  { key: 'savage',    label: 'Savage',     desc: 'Sem filtros' },
+  { key: 'calm', label: 'Calm', desc: 'Coach tranquilo. Ajuda sem drama.', color: C.green },
+  { key: 'pro', label: 'Pro', desc: 'CFO pessoal. Direto, analitico e limpo.', color: C.brand },
+  { key: 'sarcastic', label: 'Sarcastic', desc: 'Ironia leve para tornar insights partilhaveis.', color: C.yellow },
+  { key: 'savage', label: 'Savage', desc: 'Roast financeiro. Viral, mas ainda util.', color: C.red },
 ];
 
 // ─── Modal para associar número de telemóvel ──────────────────────────────────
@@ -154,7 +155,8 @@ export default function PerfilScreen({ navigation }) {
   const load = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const d = await perfilAPI.get();
+      const raw = await perfilAPI.get();
+      const d = raw.perfil || raw;
       setPerfil(d);
       setNome(d.nome || '');
       setOrcamento(d.orcamento_mensal ? String(d.orcamento_mensal) : '');
@@ -238,6 +240,10 @@ export default function PerfilScreen({ navigation }) {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
+      <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
+      <View style={pf.decorOne} />
+      <View style={pf.decorTwo} />
+
       <PhoneModal
         visible={phoneModal}
         onClose={() => setPhoneModal(false)}
@@ -255,13 +261,10 @@ export default function PerfilScreen({ navigation }) {
         }
       >
         {/* Avatar */}
-        <Reveal delay={0} style={{ alignItems: 'center', marginBottom: 28, marginTop: 8 }}>
+        <Reveal delay={0} style={pf.heroCard}>
           <Pressable onPress={handlePickAvatar} style={{ position: 'relative' }}>
             {avatarUri ? (
-              <Image
-                source={{ uri: avatarUri }}
-                style={pf.avatarImg}
-              />
+              <Image source={{ uri: avatarUri }} style={pf.avatarImg} />
             ) : (
               <View style={pf.avatar}>
                 <Text style={pf.avatarText}>{initials(nome || user?.nome)}</Text>
@@ -274,9 +277,14 @@ export default function PerfilScreen({ navigation }) {
               }
             </View>
           </Pressable>
-          <Pressable onPress={handlePickAvatar} style={{ marginTop: 8 }}>
-            <Text style={{ fontSize: 13, color: C.brand, fontWeight: '700' }}>Alterar foto</Text>
-          </Pressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={pf.heroKicker}>PERFIL VERLY</Text>
+            <Text style={pf.heroTitle} numberOfLines={1}>{nome || user?.nome || 'Utilizador'}</Text>
+            <Text style={pf.heroSub} numberOfLines={2}>{perfil?.email || user?.email || 'Personaliza a forma como a Verly fala contigo.'}</Text>
+          </View>
+          <View style={pf.heroSpark}>
+            <Sparkles size={18} color={C.brandMid || C.brand} />
+          </View>
         </Reveal>
 
         {/* Dados básicos */}
@@ -383,16 +391,19 @@ export default function PerfilScreen({ navigation }) {
                 onPress={() => setPersonalidade(p.key)}
                 style={[
                   pf.personalityRow,
-                  i < PERSONALIDADES.length - 1 && { borderBottomWidth: 1, borderBottomColor: C.border },
-                  personalidade === p.key && { backgroundColor: C.brandDim },
+                  { borderColor: personalidade === p.key ? p.color + '77' : C.border },
+                  personalidade === p.key && { backgroundColor: p.color + '14' },
                 ]}
               >
+                <View style={[pf.personalityIcon, { backgroundColor: p.color + '18' }]}>
+                  <Text style={[pf.personalityInitial, { color: p.color }]}>{p.label[0]}</Text>
+                </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[pf.linkTitle, personalidade === p.key && { color: C.brand }]}>{p.label}</Text>
+                  <Text style={[pf.linkTitle, personalidade === p.key && { color: p.color }]}>{p.label}</Text>
                   <Text style={pf.linkSub}>{p.desc}</Text>
                 </View>
                 {personalidade === p.key && (
-                  <View style={pf.checkDot} />
+                  <View style={[pf.checkDot, { backgroundColor: p.color }]} />
                 )}
               </Pressable>
             ))}
@@ -437,11 +448,60 @@ export default function PerfilScreen({ navigation }) {
 }
 
 const pf = StyleSheet.create({
+  decorOne: {
+    position: 'absolute',
+    width: 178,
+    height: 178,
+    borderRadius: 52,
+    right: -76,
+    top: 76,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    transform: [{ rotate: '18deg' }],
+  },
+  decorTwo: {
+    position: 'absolute',
+    width: 112,
+    height: 74,
+    borderRadius: 22,
+    left: -34,
+    top: 218,
+    backgroundColor: 'rgba(34,212,253,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  heroCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: 24,
+    marginTop: 8,
+    ...SHADOWS.card,
+  },
+  heroKicker: { fontSize: FONT.xs, fontWeight: '900', color: C.brandMid || C.brand, letterSpacing: 1.1 },
+  heroTitle: { fontSize: FONT.xl, fontWeight: '900', color: C.text, marginTop: 4 },
+  heroSub: { fontSize: FONT.xs, color: C.textMid, lineHeight: 17, marginTop: 3 },
+  heroSpark: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   card: {
-    backgroundColor: C.surface,
+    backgroundColor: C.glass,
     borderRadius: RADIUS.lg,
-    borderWidth: 1, borderColor: C.border,
+    borderWidth: 1, borderColor: C.borderHi,
     overflow: 'hidden',
+    ...SHADOWS.card,
   },
   field: { padding: 16 },
   label: { fontSize: FONT.xs, fontWeight: '700', color: C.textMid, marginBottom: 8, letterSpacing: 0.4 },
@@ -455,16 +515,16 @@ const pf = StyleSheet.create({
   inputFocused: { borderColor: C.brand },
 
   avatarImg: {
-    width: 88, height: 88, borderRadius: 26,
+    width: 82, height: 82, borderRadius: 25,
     borderWidth: 2, borderColor: C.brand,
   },
   avatar: {
-    width: 88, height: 88, borderRadius: 26,
+    width: 82, height: 82, borderRadius: 25,
     backgroundColor: C.brandDim,
     borderWidth: 2, borderColor: C.brand,
     justifyContent: 'center', alignItems: 'center',
   },
-  avatarText:  { fontSize: 30, fontWeight: '900', color: C.brand },
+  avatarText:  { fontSize: 28, fontWeight: '900', color: C.brandMid || C.brand },
   cameraBtn: {
     position: 'absolute', bottom: 0, right: 0,
     width: 28, height: 28, borderRadius: 10,
@@ -487,8 +547,13 @@ const pf = StyleSheet.create({
 
   personalityRow: {
     flexDirection: 'row', alignItems: 'center',
-    padding: 16, gap: 12,
+    padding: 14, gap: 12,
+    margin: 10,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
   },
+  personalityIcon: { width: 36, height: 36, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  personalityInitial: { fontSize: FONT.md, fontWeight: '900' },
   checkDot: {
     width: 10, height: 10, borderRadius: 5,
     backgroundColor: C.brand,

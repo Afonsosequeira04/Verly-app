@@ -181,6 +181,18 @@ class NetWorthItem(db.Model):
     criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
     atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    snapshots = db.relationship('NetWorthSnapshot', backref='item', lazy=True, cascade='all, delete-orphan')
+
+
+class NetWorthSnapshot(db.Model):
+    __tablename__ = 'net_worth_snapshots'
+
+    id            = db.Column(db.Integer, primary_key=True)
+    item_id       = db.Column(db.Integer, db.ForeignKey('net_worth_items.id'), nullable=False, index=True)
+    valor         = db.Column(db.Float, nullable=False, default=0)
+    currency      = db.Column(db.String(10), default='EUR')
+    criado_em     = db.Column(db.DateTime, default=datetime.utcnow)
+
 
 playlist_fatura = db.Table(
     'playlist_fatura',

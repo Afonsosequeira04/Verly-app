@@ -41,6 +41,34 @@ const TIPS = {
 
 const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
 
+function catKey(value) {
+  return String(value || 'outros')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function compactCategories(categorias = []) {
+  const byKey = new Map();
+  categorias.forEach((cat, index) => {
+    const label = cat.categoria || cat.nome || cat.label || `Categoria ${index + 1}`;
+    const key = catKey(label);
+    const current = byKey.get(key);
+    if (current) {
+      current.valor += Number(cat.valor || cat.total || cat.value || 0);
+    } else {
+      byKey.set(key, {
+        ...cat,
+        categoria: label,
+        valor: Number(cat.valor || cat.total || cat.value || 0),
+        _key: key,
+      });
+    }
+  });
+  return Array.from(byKey.values()).filter(cat => cat.valor > 0);
+}
+
 // ─── SVG helpers ──────────────────────────────────────────────────────────────
 function polarToCartesian(cx, cy, r, angleDeg) {
   const rad = ((angleDeg - 90) * Math.PI) / 180;
@@ -92,14 +120,14 @@ function DonutSvg({ categorias, selected, onSelect, total }) {
     <View style={{ alignItems: 'center', marginBottom: 4 }}>
       <Svg width={SIZE} height={SIZE}>
         <G>
-          {segments.map((seg) => {
+          {segments.map((seg, index) => {
             const isSelected = selected === seg.cat.categoria;
             const isDeselected = selected != null && !isSelected;
             const oR = isSelected ? outerR + 7 : outerR;
             const iR = isSelected ? innerR + 4 : innerR;
             return (
               <Path
-                key={seg.cat.categoria}
+                key={`${seg.cat._key || seg.cat.categoria}-${index}`}
                 d={donutSegmentPath(cx, cy, oR, iR, seg.startAngle, seg.endAngle)}
                 fill={seg.color}
                 opacity={isDeselected ? 0.3 : 1}
@@ -203,7 +231,7 @@ export default function DonutCategorias({ categorias, insights, itensPorCategori
 
   if (!categorias?.length) return null;
 
-  const top = categorias.slice(0, 7);
+  const top = compactCategories(categorias).slice(0, 7);
   const total = top.reduce((s, c) => s + c.valor, 0);
   const selectedCat = top.find(c => c.categoria === selected);
   const selectedColor = selectedCat
@@ -255,7 +283,7 @@ export default function DonutCategorias({ categorias, insights, itensPorCategori
 
           return (
             <Pressable
-              key={cat.categoria}
+              key={`${cat._key || cat.categoria}-${i}`}
               onPress={() => handleSelect(cat.categoria)}
               style={[
                 styles.catRow,

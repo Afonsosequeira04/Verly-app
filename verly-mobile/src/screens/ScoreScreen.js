@@ -1,144 +1,178 @@
-/**
- * src/screens/ScoreScreen.js — FASE 1: Animações
- * Substituições:
- *  - ScoreCircle (estático) → ScoreGauge SVG animado com fill suave de 0→score
- *  - Botão "Analisar" → scale press + loading shimmer
- *  - Fatores → barras animadas com AnimatedBar
- *  - Resultado entra com FadeInDown stagger
- */
-
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, ActivityIndicator, Alert,
-  Dimensions, Modal, Linking,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Linking,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import * as Location from 'expo-location';
-import Animated, {
-  useSharedValue, useAnimatedStyle, withSpring,
-  withTiming, FadeInDown, FadeIn, ZoomIn, SlideInDown,
-  Easing,
-} from 'react-native-reanimated';
-import { MotiView } from 'moti';
+import { LinearGradient } from 'expo-linear-gradient';
+import Animated, { FadeIn, FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { MapPin, Navigation, Search, ShoppingBag, Sparkles } from 'lucide-react-native';
+
 import { scoreAPI } from '../services/api';
-import { COLORS } from '../constants/theme';
+import { COLORS, FONT, RADIUS, SPACE, SHADOWS } from '../constants/theme';
 import { getMapComponents } from '../utils/maps';
-import {
-  ScoreGauge, AnimatedBar, useToast, PressCard,
-  AnimatedListItem, ShimmerCard,
-} from '../components/UI';
+import { AnimatedBar, ScoreGauge, ShimmerCard, useToast } from '../components/UI';
 
 const { width: W } = Dimensions.get('window');
-
-// ── Dados ─────────────────────────────────────────────────────────────────────
+const C = COLORS;
 
 const CATEGORIAS = [
-  'Tecnologia', 'Alimentação', 'Vestuário', 'Casa & Decoração',
-  'Saúde & Beleza', 'Desporto', 'Entretenimento', 'Transportes', 'Educação', 'Outros',
+  'Tecnologia',
+  'Alimentacao',
+  'Vestuario',
+  'Casa',
+  'Saude',
+  'Desporto',
+  'Entretenimento',
+  'Transportes',
+  'Educacao',
+  'Outros',
 ];
 
 const USO_OPCOES = [
-  { key: 'daily',   label: 'Uso diário',   emoji: '🔥' },
-  { key: 'weekly',  label: 'Uso regular',  emoji: '✅' },
-  { key: 'monthly', label: 'Ocasional',    emoji: '📅' },
-  { key: 'rarely',  label: 'Raramente',    emoji: '😬' },
-  { key: 'never',   label: 'Nunca usei',   emoji: '💸' },
+  { key: 'daily', label: 'Diario', sub: 'uso constante' },
+  { key: 'weekly', label: 'Regular', sub: 'varias vezes' },
+  { key: 'monthly', label: 'Ocasional', sub: 'as vezes' },
+  { key: 'rarely', label: 'Raro', sub: 'pouco uso' },
+  { key: 'never', label: 'Impulso', sub: 'nao planeado' },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const normalizeStoreName = (value = '') =>
+  String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const money = (value) => `${Number(value || 0).toFixed(2)} EUR`;
 
 function getScoreColor(score) {
-  if (score >= 75) return COLORS.green;
-  if (score >= 50) return COLORS.yellow;
-  if (score >= 25) return '#FF8C00';
-  return COLORS.red;
+  if (score >= 75) return C.green;
+  if (score >= 50) return C.yellow;
+  if (score >= 25) return C.orange;
+  return C.red;
 }
 
 function getScoreLabel(score) {
-  if (score >= 75) return 'Excelente compra! 🎉';
-  if (score >= 50) return 'Compra razoável 👍';
-  if (score >= 25) return 'Podes fazer melhor 😕';
-  return 'Compra questionável 🚨';
+  if (score >= 75) return 'Boa compra';
+  if (score >= 50) return 'Compra aceitavel';
+  if (score >= 25) return 'Pensa duas vezes';
+  return 'Compra fraca';
 }
 
-function getAvaliacaoLabel(av) {
+function marketLabel(av) {
   const map = {
-    barato:     { text: 'Preço abaixo do mercado 🟢', color: COLORS.green },
-    justo:      { text: 'Preço de mercado 🔵',         color: COLORS.brand },
-    caro:       { text: 'Acima do mercado 🟠',          color: COLORS.yellow },
-    muito_caro: { text: 'Muito acima do mercado 🔴',    color: COLORS.red },
+    barato: { text: 'Abaixo do mercado', color: C.green },
+    justo: { text: 'Preco justo', color: C.brandMid || C.brand },
+    caro: { text: 'Acima do mercado', color: C.yellow },
+    muito_caro: { text: 'Muito caro', color: C.red },
   };
-  return map[av] || { text: av, color: COLORS.textSub };
+  return map[av] || { text: av || 'Sem avaliacao', color: C.textMid };
 }
 
-// ── Botão animado ─────────────────────────────────────────────────────────────
+function findOfferForStore(loja, precos = []) {
+  const store = normalizeStoreName(loja?.nome || loja?.name);
+  if (!store) return null;
+  return precos.find((oferta) => {
+    const source = normalizeStoreName(oferta.loja || oferta.source || oferta.merchant);
+    return source && (store.includes(source) || source.includes(store));
+  }) || null;
+}
+
+function attachOffersToStores(lojas = [], precos = []) {
+  return lojas.map((loja) => ({
+    ...loja,
+    oferta: loja.oferta || findOfferForStore(loja, precos),
+  }));
+}
+
+function offerLabel(oferta) {
+  if (!oferta?.preco) return null;
+  return money(oferta.preco);
+}
 
 function AnimatedButton({ onPress, disabled, loading, label }) {
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-  const onIn  = () => { scale.value = withSpring(0.96, { damping: 20, stiffness: 400 }); };
-  const onOut = () => { scale.value = withSpring(1,    { damping: 18, stiffness: 300 }); };
+  const onIn = () => { scale.value = withSpring(0.97, { damping: 20, stiffness: 380 }); };
+  const onOut = () => { scale.value = withSpring(1, { damping: 18, stiffness: 300 }); };
 
   return (
-    <Animated.View style={[animStyle, { marginTop: 20 }]}>
+    <Animated.View style={[animStyle, { marginTop: SPACE.lg }]}>
       <TouchableOpacity
-        style={[s.analyzeBtn, disabled && { opacity: 0.6 }]}
         onPress={onPress}
         onPressIn={onIn}
         onPressOut={onOut}
         disabled={disabled}
         activeOpacity={1}
+        style={[s.primaryBtn, disabled && { opacity: 0.65 }]}
       >
-        {loading
-          ? <ActivityIndicator color="#fff" />
-          : <Text style={s.analyzeBtnText}>{label}</Text>
-        }
+        <LinearGradient colors={C.gradients.action} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.primaryGradient}>
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.primaryText}>{label}</Text>}
+        </LinearGradient>
       </TouchableOpacity>
     </Animated.View>
   );
 }
 
-// ── Mapa de lojas ─────────────────────────────────────────────────────────────
+function StoreMarker({ loja }) {
+  return (
+    <View style={mapStyles.markerBubble}>
+      {!!loja.oferta && <Text style={mapStyles.markerPrice}>{offerLabel(loja.oferta)}</Text>}
+      <Text style={mapStyles.markerName} numberOfLines={1}>{loja.nome}</Text>
+    </View>
+  );
+}
 
 function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
   const [MapView, setMapView] = useState(null);
-  const [Marker, setMarker]   = useState(null);
-  const [mapReady, setMapReady] = useState(false);
+  const [Marker, setMarker] = useState(null);
+  const [supported, setSupported] = useState(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!visible) return;
     const maps = getMapComponents();
     setMapView(() => maps.MapView);
     setMarker(() => maps.Marker);
-    setMapReady(!!maps.supported);
+    setSupported(!!maps.supported);
   }, [visible]);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
-        <View style={m.header}>
-          <TouchableOpacity onPress={onClose} style={m.closeBtn}>
-            <Text style={m.closeBtnText}>‹ Fechar</Text>
+      <View style={mapStyles.root}>
+        <View style={mapStyles.header}>
+          <TouchableOpacity onPress={onClose} style={mapStyles.closeBtn}>
+            <Text style={mapStyles.closeText}>Fechar</Text>
           </TouchableOpacity>
-          <Text style={m.headerTitle}>Lojas Próximas ({lojas.length})</Text>
-          <View style={{ width: 80 }} />
+          <View style={{ alignItems: 'center' }}>
+            <Text style={mapStyles.title}>Lojas proximas</Text>
+            <Text style={mapStyles.subtitle}>{lojas.length} resultado{lojas.length === 1 ? '' : 's'}</Text>
+          </View>
+          <View style={{ width: 70 }} />
         </View>
 
-        {!mapReady ? (
-          <ScrollView contentContainerStyle={{ padding: 16 }}>
-            <View style={m.noMapBanner}>
-              <Text style={m.noMapText}>
-                📍 Mapa não disponível.{'\n'}Instala react-native-maps para ver o mapa.
-              </Text>
-            </View>
-            {lojas.map((loja, i) => (
-              <AnimatedListItem key={i} index={i}>
-                <View style={m.lojaCard}>
-                  <Text style={m.lojaNome}>{loja.nome}</Text>
-                  <Text style={m.lojaMeta}>{loja.distancia} · {loja.endereco || ''}</Text>
-                  {loja.avaliacao ? <Text style={m.lojaRating}>⭐ {loja.avaliacao}</Text> : null}
+        {!supported ? (
+          <ScrollView contentContainerStyle={mapStyles.listFallback}>
+            {lojas.map((loja, index) => (
+              <View key={`${loja.place_id || loja.id || loja.nome}-${index}`} style={mapStyles.storeCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={mapStyles.storeTitle}>{loja.nome}</Text>
+                  <Text style={mapStyles.storeMeta} numberOfLines={1}>
+                    {[loja.distancia, loja.endereco].filter(Boolean).join(' · ')}
+                  </Text>
                 </View>
-              </AnimatedListItem>
+                {!!loja.oferta && <Text style={mapStyles.storePrice}>{offerLabel(loja.oferta)}</Text>}
+              </View>
             ))}
           </ScrollView>
         ) : (
@@ -146,31 +180,34 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
             {React.createElement(MapView, {
               style: { flex: 1 },
               initialRegion: {
-                latitude: userLat || 38.7, longitude: userLng || -9.14,
-                latitudeDelta: 0.05, longitudeDelta: 0.05,
+                latitude: userLat || 38.7223,
+                longitude: userLng || -9.1393,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
               },
             },
               userLat && React.createElement(Marker, {
                 key: 'user',
                 coordinate: { latitude: userLat, longitude: userLng },
-                title: 'A tua localização', pinColor: COLORS.brand,
+                title: 'Tu',
+                pinColor: C.brand,
               }),
-              ...lojas.map((loja, i) =>
-                loja.lat && React.createElement(Marker, {
-                  key: i,
-                  coordinate: { latitude: loja.lat, longitude: loja.lng },
-                  title: loja.nome,
-                  description: `${loja.distancia}${loja.avaliacao ? ` · ⭐ ${loja.avaliacao}` : ''}`,
-                })
-              )
+              ...lojas.map((loja, index) => loja.lat && React.createElement(Marker, {
+                key: `${loja.place_id || loja.id || loja.nome}-${index}`,
+                coordinate: { latitude: loja.lat, longitude: loja.lng },
+                title: loja.nome,
+                description: [offerLabel(loja.oferta), loja.distancia, loja.avaliacao ? `Nota ${loja.avaliacao}` : null].filter(Boolean).join(' · '),
+              }, <StoreMarker loja={loja} />)),
             )}
-            <View style={m.overlay}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ padding: 12, gap: 10 }}>
-                {lojas.map((loja, i) => (
-                  <View key={i} style={m.lojaChip}>
-                    <Text style={m.lojaNomeChip}>{loja.nome}</Text>
-                    <Text style={m.lojaDistChip}>{loja.distancia}</Text>
-                    {loja.avaliacao ? <Text style={m.lojaRating}>⭐ {loja.avaliacao}</Text> : null}
+
+            <View style={mapStyles.overlay}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={mapStyles.overlayContent}>
+                {lojas.map((loja, index) => (
+                  <View key={`${loja.place_id || loja.id || loja.nome}-chip-${index}`} style={mapStyles.storeChip}>
+                    <Text style={mapStyles.storeTitle} numberOfLines={1}>{loja.nome}</Text>
+                    <Text style={mapStyles.storeMeta} numberOfLines={1}>
+                      {[offerLabel(loja.oferta), loja.distancia].filter(Boolean).join(' · ')}
+                    </Text>
                   </View>
                 ))}
               </ScrollView>
@@ -181,23 +218,6 @@ function MapaLojas({ lojas, userLat, userLng, visible, onClose }) {
     </Modal>
   );
 }
-
-const m = StyleSheet.create({
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 56, paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: COLORS.border, backgroundColor: COLORS.bg },
-  closeBtn: { width: 80 },
-  closeBtnText: { color: COLORS.brand, fontSize: 16, fontWeight: '700' },
-  headerTitle: { fontSize: 16, fontWeight: '800', color: COLORS.text },
-  noMapBanner: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, marginBottom: 16, alignItems: 'center' },
-  noMapText: { color: COLORS.textSub, textAlign: 'center', lineHeight: 22 },
-  lojaCard: { backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: COLORS.border },
-  lojaNome: { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  lojaMeta: { fontSize: 12, color: COLORS.textSub, marginTop: 2 },
-  lojaRating: { fontSize: 12, color: COLORS.yellow, marginTop: 4 },
-  overlay: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.surface + 'EE' },
-  lojaChip: { backgroundColor: COLORS.surface2, borderRadius: 12, padding: 12, minWidth: 130, borderWidth: 1, borderColor: COLORS.border },
-  lojaNomeChip: { fontSize: 13, fontWeight: '700', color: COLORS.text },
-  lojaDistChip: { fontSize: 11, color: COLORS.textSub, marginTop: 2 },
-});
 
 function MiniMapa({ lojas, userCoords, onOpen }) {
   const [MapView, setMapView] = useState(null);
@@ -212,22 +232,26 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
   if (!lojas.length) return null;
 
   const hasMap = !!MapView && !!Marker && userCoords?.lat && userCoords?.lng;
-  const firstStores = lojas.slice(0, 3);
+  const firstStores = lojas.slice(0, 4);
 
   return (
-    <Animated.View entering={FadeInDown.delay(90).springify()} style={s.marketCard}>
-      <View style={s.marketHeader}>
-        <View>
-          <Text style={s.marketTitle}>Lojas próximas</Text>
-          <Text style={s.marketSub}>{lojas.length} resultado{lojas.length !== 1 ? 's' : ''} perto de ti</Text>
+    <Animated.View entering={FadeInDown.delay(80).springify()} style={s.marketCard}>
+      <View style={s.sectionTop}>
+        <View style={s.sectionTitleWrap}>
+          <MapPin size={16} color={C.cyan} />
+          <View>
+            <Text style={s.sectionTitle}>Mapa de lojas</Text>
+            <Text style={s.sectionSub}>Precos encontrados junto das lojas proximas</Text>
+          </View>
         </View>
-        <TouchableOpacity onPress={onOpen} style={s.marketGhostBtn}>
-          <Text style={s.marketGhostText}>Mapa</Text>
+        <TouchableOpacity onPress={onOpen} style={s.ghostBtn}>
+          <Navigation size={13} color={C.brandMid || C.brand} />
+          <Text style={s.ghostText}>Abrir</Text>
         </TouchableOpacity>
       </View>
 
       {hasMap && (
-        <View style={s.miniMapWrap}>
+        <View style={s.miniMap}>
           {React.createElement(MapView, {
             style: { flex: 1 },
             pointerEvents: 'none',
@@ -242,24 +266,26 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
               key: 'user',
               coordinate: { latitude: userCoords.lat, longitude: userCoords.lng },
               title: 'Tu',
-              pinColor: COLORS.brand,
+              pinColor: C.brand,
             }),
             ...firstStores.map((loja, index) => loja.lat && React.createElement(Marker, {
-              key: `${loja.nome}-${index}`,
+              key: `${loja.place_id || loja.id || loja.nome}-${index}`,
               coordinate: { latitude: loja.lat, longitude: loja.lng },
               title: loja.nome,
-            })),
+              description: [offerLabel(loja.oferta), loja.distancia].filter(Boolean).join(' · '),
+            }, <StoreMarker loja={loja} />)),
           )}
         </View>
       )}
 
       {firstStores.map((loja, index) => (
-        <View key={`${loja.nome}-${index}`} style={s.storeRow}>
-          <View style={s.storeDot} />
-          <View style={{ flex: 1 }}>
+        <View key={`${loja.place_id || loja.id || loja.nome}-row-${index}`} style={s.storeRow}>
+          <View style={s.storeIcon}><ShoppingBag size={14} color={C.cyan} /></View>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={s.storeName} numberOfLines={1}>{loja.nome}</Text>
-            <Text style={s.storeMeta} numberOfLines={1}>{loja.distancia}{loja.endereco ? ` · ${loja.endereco}` : ''}</Text>
+            <Text style={s.storeMeta} numberOfLines={1}>{[loja.distancia, loja.endereco].filter(Boolean).join(' · ')}</Text>
           </View>
+          {!!loja.oferta && <Text style={s.storePrice}>{offerLabel(loja.oferta)}</Text>}
         </View>
       ))}
     </Animated.View>
@@ -270,8 +296,8 @@ function PriceComparison({ precos, loading, message, precoPago }) {
   if (loading) {
     return (
       <View style={s.marketCard}>
-        <ActivityIndicator color={COLORS.brand} />
-        <Text style={[s.marketSub, { textAlign: 'center', marginTop: 8 }]}>A procurar preços reais...</Text>
+        <ActivityIndicator color={C.brand} />
+        <Text style={[s.sectionSub, { textAlign: 'center', marginTop: 8 }]}>A procurar precos reais...</Text>
       </View>
     );
   }
@@ -279,37 +305,36 @@ function PriceComparison({ precos, loading, message, precoPago }) {
   if (!precos.length && !message) return null;
 
   return (
-    <Animated.View entering={FadeInDown.delay(120).springify()} style={s.marketCard}>
-      <View style={s.marketHeader}>
-        <View>
-          <Text style={s.marketTitle}>Comparação de preços</Text>
-          <Text style={s.marketSub}>Outras lojas e preço mais barato encontrado</Text>
+    <Animated.View entering={FadeInDown.delay(110).springify()} style={s.marketCard}>
+      <View style={s.sectionTop}>
+        <View style={s.sectionTitleWrap}>
+          <Search size={16} color={C.brandMid || C.brand} />
+          <View>
+            <Text style={s.sectionTitle}>Comparacao de precos</Text>
+            <Text style={s.sectionSub}>Usada tambem no mapa das lojas</Text>
+          </View>
         </View>
       </View>
 
-      {!!message && !precos.length && (
-        <Text style={s.marketMessage}>{message}</Text>
-      )}
+      {!!message && !precos.length && <Text style={s.marketMessage}>{message}</Text>}
 
       {precos.slice(0, 5).map((oferta, index) => {
         const diff = Number(precoPago || 0) - Number(oferta.preco || 0);
         return (
           <TouchableOpacity
-            key={`${oferta.loja}-${oferta.preco}-${index}`}
+            key={`${oferta.loja || 'loja'}-${oferta.preco || 0}-${index}`}
             activeOpacity={oferta.link ? 0.78 : 1}
             onPress={() => oferta.link && Linking.openURL(oferta.link)}
-            style={[s.priceRow, oferta.mais_barato && s.priceRowBest]}
+            style={[s.priceRow, oferta.mais_barato && s.priceBest]}
           >
-            <View style={{ flex: 1 }}>
-              <Text style={s.priceStore} numberOfLines={1}>{oferta.loja}</Text>
-              <Text style={s.priceName} numberOfLines={1}>{oferta.nome}</Text>
-              {diff > 0 && <Text style={s.priceSaving}>Pouparias {diff.toFixed(2)}€ vs preço indicado</Text>}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={s.priceStore} numberOfLines={1}>{oferta.loja || 'Loja'}</Text>
+              <Text style={s.priceName} numberOfLines={1}>{oferta.nome || 'Oferta encontrada'}</Text>
+              {diff > 0 && <Text style={s.priceSaving}>Poupavas {money(diff)}</Text>}
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <Text style={[s.priceValue, oferta.mais_barato && { color: COLORS.green }]}>
-                {Number(oferta.preco || 0).toFixed(2)}€
-              </Text>
-              {oferta.mais_barato && <Text style={s.bestBadge}>Mais barato</Text>}
+              <Text style={[s.priceValue, oferta.mais_barato && { color: C.green }]}>{money(oferta.preco)}</Text>
+              {oferta.mais_barato && <Text style={s.bestBadge}>melhor</Text>}
             </View>
           </TouchableOpacity>
         );
@@ -318,24 +343,40 @@ function PriceComparison({ precos, loading, message, precoPago }) {
   );
 }
 
-// ── Ecrã principal ────────────────────────────────────────────────────────────
+function LocationHint({ message, permission, onEnable }) {
+  if (!message) return null;
+  return (
+    <View style={s.locationHint}>
+      <View style={s.locationIcon}>
+        <MapPin size={18} color={C.brandMid || C.brand} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={s.locationTitle}>Localizacao desligada</Text>
+        <Text style={s.locationText}>{message}</Text>
+      </View>
+      <TouchableOpacity onPress={onEnable} style={s.locationBtn}>
+        <Text style={s.locationBtnText}>{permission?.canAskAgain === false ? 'Definicoes' : 'Ativar'}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
 
 export default function ScoreScreen({ route }) {
-  const [item, setItem]           = useState('');
-  const [preco, setPreco]         = useState('');
+  const [item, setItem] = useState('');
+  const [preco, setPreco] = useState('');
   const [categoria, setCategoria] = useState(CATEGORIAS[0]);
-  const [uso, setUso]             = useState('weekly');
-  const [loading, setLoading]     = useState(false);
+  const [uso, setUso] = useState('weekly');
+  const [loading, setLoading] = useState(false);
   const [resultado, setResultado] = useState(null);
-
-  const [lojas, setLojas]         = useState([]);
+  const [lojas, setLojas] = useState([]);
   const [lojasLoad, setLojasLoad] = useState(false);
-  const [showMapa, setShowMapa]   = useState(false);
+  const [showMapa, setShowMapa] = useState(false);
   const [userCoords, setUserCoords] = useState({ lat: null, lng: null });
-  const [precos, setPrecos]       = useState([]);
+  const [precos, setPrecos] = useState([]);
   const [precosLoad, setPrecosLoad] = useState(false);
   const [precosMsg, setPrecosMsg] = useState('');
   const [marketError, setMarketError] = useState('');
+  const [locationPermission, setLocationPermission] = useState({ status: null, canAskAgain: true });
 
   const scrollRef = useRef(null);
   const marketSeqRef = useRef(0);
@@ -344,18 +385,23 @@ export default function ScoreScreen({ route }) {
   useEffect(() => {
     const prefill = route?.params?.prefill;
     if (!prefill) return;
-
     if (prefill.item) setItem(String(prefill.item));
     if (prefill.preco != null) setPreco(String(prefill.preco).replace('.', ','));
-    if (prefill.categoria && CATEGORIAS.includes(prefill.categoria)) {
-      setCategoria(prefill.categoria);
+    if (prefill.categoria) {
+      const match = CATEGORIAS.find(c => normalizeStoreName(c) === normalizeStoreName(prefill.categoria));
+      if (match) setCategoria(match);
     }
   }, [route?.params?.prefill]);
 
-  const resolveCoords = useCallback(async () => {
+  const resolveCoords = useCallback(async ({ force = false } = {}) => {
     if (userCoords.lat && userCoords.lng) return userCoords;
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return null;
+    const current = await Location.getForegroundPermissionsAsync();
+    let permission = current;
+    if (force || current.status !== 'granted') {
+      permission = await Location.requestForegroundPermissionsAsync();
+    }
+    setLocationPermission({ status: permission.status, canAskAgain: permission.canAskAgain });
+    if (permission.status !== 'granted') return null;
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
     const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
     setUserCoords(coords);
@@ -381,12 +427,13 @@ export default function ScoreScreen({ route }) {
       ]);
 
       if (seq !== marketSeqRef.current) return;
-      setPrecos(priceResult.items || []);
+      const nextPrecos = priceResult.items || [];
+      setPrecos(nextPrecos);
       setPrecosMsg(priceResult.message || '');
 
       if (!coords?.lat || !coords?.lng) {
         setLojas([]);
-        setMarketError('Ativa a localizacao para veres lojas proximas.');
+        setMarketError('Ativa a localizacao para veres lojas proximas e precos no mapa.');
         return;
       }
 
@@ -398,7 +445,7 @@ export default function ScoreScreen({ route }) {
       });
 
       if (seq !== marketSeqRef.current) return;
-      const nextLojas = lojasData.lojas || [];
+      const nextLojas = attachOffersToStores(lojasData.lojas || [], nextPrecos);
       setLojas(nextLojas);
       if (openMap && nextLojas.length) setShowMapa(true);
     } catch (e) {
@@ -414,6 +461,18 @@ export default function ScoreScreen({ route }) {
     }
   }, [categoria, item, resolveCoords]);
 
+  const handleEnableLocation = useCallback(async () => {
+    if (locationPermission.canAskAgain === false && Linking.openSettings) {
+      Linking.openSettings();
+      return;
+    }
+    const coords = await resolveCoords({ force: true }).catch(() => null);
+    if (coords?.lat && coords?.lng) {
+      setMarketError('');
+      loadMarketData({ silent: false });
+    }
+  }, [loadMarketData, locationPermission.canAskAgain, resolveCoords]);
+
   useEffect(() => {
     const cleanItem = item.trim();
     if (cleanItem.length < 3) {
@@ -423,16 +482,14 @@ export default function ScoreScreen({ route }) {
       setMarketError('');
       return undefined;
     }
-    const t = setTimeout(() => loadMarketData({ silent: true }), 850);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => loadMarketData({ silent: true }), 800);
+    return () => clearTimeout(timer);
   }, [categoria, item, loadMarketData]);
 
-  // ── Analisar ──────────────────────────────────────────────────────────────
-
   const handleAnalisar = async () => {
-    if (!item.trim()) return Alert.alert('Atenção', 'Indica o produto.');
-    const precoNum = parseFloat(preco.replace(',', '.'));
-    if (isNaN(precoNum) || precoNum <= 0) return Alert.alert('Atenção', 'Indica um preço válido.');
+    if (!item.trim()) return Alert.alert('Atencao', 'Indica o produto.');
+    const precoNum = parseFloat(String(preco).replace(',', '.'));
+    if (Number.isNaN(precoNum) || precoNum <= 0) return Alert.alert('Atencao', 'Indica um preco valido.');
 
     setLoading(true);
     setResultado(null);
@@ -440,8 +497,8 @@ export default function ScoreScreen({ route }) {
       const data = await scoreAPI.analisar({ item: item.trim(), preco: precoNum, categoria, uso });
       setResultado(data);
       loadMarketData({ silent: true });
-      showToast('Análise concluída!', 'success');
-      setTimeout(() => scrollRef.current?.scrollTo({ y: 420, animated: true }), 400);
+      showToast('Analise concluida', 'success');
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 420, animated: true }), 350);
     } catch (e) {
       Alert.alert('Erro', e.message);
     } finally {
@@ -449,301 +506,446 @@ export default function ScoreScreen({ route }) {
     }
   };
 
-  // ── Lojas próximas ─────────────────────────────────────────────────────────
-
   const handleLojas = () => loadMarketData({ openMap: true, silent: false });
-
   const score = resultado?.score_final ?? resultado?.score ?? 0;
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  const precoPago = parseFloat(String(preco).replace(',', '.'));
 
   return (
-    <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
+    <View style={s.root}>
+      <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
+      <View style={s.decorOne} />
+      <View style={s.decorTwo} />
       <ToastComponent />
+
       <ScrollView
         ref={scrollRef}
-        style={s.root}
-        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        style={{ flex: 1 }}
+        contentContainerStyle={s.content}
+        showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Hero */}
-        <Animated.View entering={FadeInDown.duration(400).springify()}>
-          <View style={s.hero}>
-            <Text style={s.heroTitle}>Valeu a Pena?</Text>
-            <Text style={s.heroSub}>Avalia qualquer compra com inteligência artificial.</Text>
+        <Animated.View entering={FadeInDown.duration(420).springify()} style={s.hero}>
+          <View style={s.heroIcon}>
+            <Sparkles size={18} color={C.brandMid || C.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.heroKicker}>SCORE DE COMPRA</Text>
+            <Text style={s.heroTitle}>Compra com contexto.</Text>
+            <Text style={s.heroSub}>Score financeiro, lojas proximas e comparacao de preco no mesmo fluxo.</Text>
           </View>
         </Animated.View>
 
-        {/* Formulário */}
-        <Animated.View entering={FadeInDown.delay(80).duration(400).springify()} style={s.card}>
-          <Text style={s.label}>Produto / Serviço</Text>
+        <Animated.View entering={FadeInDown.delay(70).springify()} style={s.card}>
+          <Text style={s.label}>Produto ou servico</Text>
           <TextInput
             style={s.input}
             value={item}
             onChangeText={setItem}
-            placeholder="Ex: Nike Air Max, iPhone 16, Café..."
-            placeholderTextColor={COLORS.textSub}
+            placeholder="Ex: AirPods, tenis Nike, cafe..."
+            placeholderTextColor={C.textSub}
           />
 
-          <Text style={s.label}>Preço Pago (€)</Text>
+          <Text style={s.label}>Preco pago</Text>
           <TextInput
-            style={s.input}
+            style={[s.input, s.moneyInput]}
             value={preco}
             onChangeText={setPreco}
-            placeholder="0.00"
-            placeholderTextColor={COLORS.textSub}
+            placeholder="0,00"
+            placeholderTextColor={C.textSub}
             keyboardType="decimal-pad"
           />
 
           <Text style={s.label}>Categoria</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
-            <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
-              {CATEGORIAS.map(c => (
-                <TouchableOpacity key={c} style={[s.chip, categoria === c && s.chipActive]} onPress={() => setCategoria(c)}>
-                  <Text style={[s.chipText, categoria === c && s.chipTextActive]}>{c}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRail}>
+            {CATEGORIAS.map(categoriaItem => (
+              <TouchableOpacity
+                key={categoriaItem}
+                style={[s.chip, categoria === categoriaItem && s.chipActive]}
+                onPress={() => setCategoria(categoriaItem)}
+              >
+                <Text style={[s.chipText, categoria === categoriaItem && s.chipTextActive]}>{categoriaItem}</Text>
+              </TouchableOpacity>
+            ))}
           </ScrollView>
 
-          <Text style={s.label}>Frequência de Uso</Text>
+          <Text style={s.label}>Frequencia de uso</Text>
           <View style={s.usoGrid}>
-            {USO_OPCOES.map(u => (
-              <TouchableOpacity key={u.key} style={[s.usoBtn, uso === u.key && s.usoBtnActive]} onPress={() => setUso(u.key)}>
-                <Text style={s.usoEmoji}>{u.emoji}</Text>
-                <Text style={[s.usoLabel, uso === u.key && { color: COLORS.brand }]}>{u.label}</Text>
+            {USO_OPCOES.map(opcao => (
+              <TouchableOpacity
+                key={opcao.key}
+                style={[s.usoBtn, uso === opcao.key && s.usoActive]}
+                onPress={() => setUso(opcao.key)}
+              >
+                <Text style={[s.usoTitle, uso === opcao.key && { color: C.text }]}>{opcao.label}</Text>
+                <Text style={s.usoSub}>{opcao.sub}</Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <AnimatedButton onPress={handleAnalisar} disabled={loading} loading={loading} label="Analisar Compra" />
+          <AnimatedButton onPress={handleAnalisar} disabled={loading} loading={loading} label="Analisar compra" />
         </Animated.View>
 
-        <PriceComparison
-          precos={precos}
-          loading={precosLoad}
-          message={precosMsg}
-          precoPago={parseFloat(preco.replace(',', '.'))}
-        />
-
+        <PriceComparison precos={precos} loading={precosLoad} message={precosMsg} precoPago={precoPago} />
         <MiniMapa lojas={lojas} userCoords={userCoords} onOpen={handleLojas} />
-
         {!!marketError && item.trim().length >= 3 && !lojas.length && (
-          <View style={s.marketHint}>
-            <Text style={s.marketHintText}>{marketError}</Text>
-          </View>
+          <LocationHint message={marketError} permission={locationPermission} onEnable={handleEnableLocation} />
         )}
 
         {lojasLoad && item.trim().length >= 3 && !lojas.length && (
-          <View style={s.marketHint}>
-            <ActivityIndicator color={COLORS.brand} size="small" />
-            <Text style={s.marketHintText}>A procurar lojas perto de ti...</Text>
+          <View style={s.loadingLine}>
+            <ActivityIndicator color={C.brand} size="small" />
+            <Text style={s.loadingLineText}>A procurar lojas perto de ti...</Text>
           </View>
         )}
 
-        {/* Loading shimmer */}
         {loading && (
           <Animated.View entering={FadeIn.duration(300)}>
-            <ShimmerCard style={{ marginBottom: 16 }} />
-            <ShimmerCard style={{ marginBottom: 16 }} />
+            <ShimmerCard style={{ marginBottom: 14 }} />
+            <ShimmerCard style={{ marginBottom: 14 }} />
           </Animated.View>
         )}
 
-        {/* Resultado — entra com stagger */}
         {resultado && !loading && (
           <>
-            {/* Score gauge animado */}
-            <Animated.View entering={FadeInDown.delay(0).duration(500).springify()} style={s.resultCard}>
-              <View style={{ alignItems: 'center', paddingTop: 8, paddingBottom: 16 }}>
-                {/* ScoreGauge SVG — substitui ScoreCircle estático */}
-                <ScoreGauge score={score} size={220} strokeWidth={16} />
-
-                <MotiView
-                  from={{ opacity: 0, translateY: 12 }}
-                  animate={{ opacity: 1, translateY: 0 }}
-                  transition={{ type: 'timing', duration: 500, delay: 800 }}
-                >
-                  <Text style={[s.scoreLabel, { color: getScoreColor(score) }]}>
-                    {getScoreLabel(score)}
-                  </Text>
-                </MotiView>
-              </View>
+            <Animated.View entering={FadeInDown.duration(500).springify()} style={s.resultCard}>
+              <ScoreGauge score={score} size={210} strokeWidth={15} />
+              <Text style={[s.scoreLabel, { color: getScoreColor(score) }]}>{getScoreLabel(score)}</Text>
+              <Text style={s.scoreSub}>Score {Math.round(score)}/100 calculado com o preco, uso e contexto financeiro.</Text>
             </Animated.View>
 
-            {/* Preço de mercado */}
             {resultado.avaliacao_mercado?.preco_medio && (
-              <Animated.View entering={FadeInDown.delay(120).duration(400).springify()} style={s.mercadoBox}>
-                <Text style={s.mercadoLabel}>Preço de mercado estimado</Text>
-                <Text style={s.mercadoPreco}>{resultado.avaliacao_mercado.preco_medio.toFixed(2)}€</Text>
-                <Text style={[s.mercadoAv, { color: getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).color }]}>
-                  {getAvaliacaoLabel(resultado.avaliacao_mercado.avaliacao).text}
+              <Animated.View entering={FadeInDown.delay(80).springify()} style={s.marketInsight}>
+                <Text style={s.label}>Preco de mercado estimado</Text>
+                <Text style={s.marketPrice}>{money(resultado.avaliacao_mercado.preco_medio)}</Text>
+                <Text style={[s.marketStatus, { color: marketLabel(resultado.avaliacao_mercado.avaliacao).color }]}>
+                  {marketLabel(resultado.avaliacao_mercado.avaliacao).text}
                 </Text>
-                {resultado.avaliacao_mercado.comentario ? (
-                  <Text style={s.mercadoCom}>{resultado.avaliacao_mercado.comentario}</Text>
-                ) : null}
+                {!!resultado.avaliacao_mercado.comentario && (
+                  <Text style={s.marketComment}>{resultado.avaliacao_mercado.comentario}</Text>
+                )}
               </Animated.View>
             )}
 
-            {/* Fatores — barras animadas */}
             {resultado.fatores?.length > 0 && (
-              <Animated.View entering={FadeInDown.delay(200).duration(400).springify()} style={s.resultCard}>
-                <Text style={s.fatoresTitle}>Análise Detalhada</Text>
-                {resultado.fatores.map((f, i) => (
-                  <View key={i} style={{ marginBottom: 14 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <Text style={s.fatorNome}>{f.nome || f.label}</Text>
-                      <Text style={{ fontSize: 13, fontWeight: '800', color: getScoreColor(f.score ?? f.valor ?? 50) }}>
-                        {f.score ?? f.valor ?? 0}
-                      </Text>
+              <Animated.View entering={FadeInDown.delay(130).springify()} style={s.card}>
+                <Text style={s.blockTitle}>Fatores do score</Text>
+                {resultado.fatores.map((fator, index) => {
+                  const value = fator.score ?? fator.valor ?? 0;
+                  return (
+                    <View key={`${fator.nome || fator.label || 'fator'}-${index}`} style={s.factorRow}>
+                      <View style={s.factorTop}>
+                        <Text style={s.factorName}>{fator.nome || fator.label}</Text>
+                        <Text style={[s.factorValue, { color: getScoreColor(value) }]}>{Math.round(value)}</Text>
+                      </View>
+                      <AnimatedBar pct={value / 100} color={getScoreColor(value)} height={7} delay={index * 80} />
                     </View>
-                    {/* AnimatedBar em vez da View estática */}
-                    <AnimatedBar
-                      pct={(f.score ?? f.valor ?? 0) / 100}
-                      color={getScoreColor(f.score ?? f.valor ?? 50)}
-                      height={7}
-                      delay={i * 100}
-                    />
-                  </View>
-                ))}
+                  );
+                })}
               </Animated.View>
             )}
 
-            {/* Conselho */}
-            {resultado.conselho && (
-              <Animated.View entering={FadeInDown.delay(300).duration(400).springify()} style={s.conselhoBox}>
-                <Text style={s.conselhoIcon}>✦</Text>
-                <Text style={s.conselhoText}>{resultado.conselho}</Text>
+            {!!resultado.conselho && (
+              <Animated.View entering={FadeInDown.delay(170).springify()} style={s.adviceCard}>
+                <Text style={s.adviceTitle}>Proximo passo</Text>
+                <Text style={s.adviceText}>{resultado.conselho}</Text>
               </Animated.View>
             )}
 
-            {/* Lojas */}
-            <Animated.View entering={FadeInDown.delay(380).duration(400).springify()}>
-              <TouchableOpacity style={[s.lojasBtn, lojasLoad && { opacity: 0.6 }]} onPress={handleLojas} disabled={lojasLoad}>
-                {lojasLoad
-                  ? <ActivityIndicator color={COLORS.brand} size="small" />
-                  : <Text style={s.lojasBtnText}>{lojas.length ? 'Abrir mapa completo' : 'Atualizar lojas e precos'}</Text>
-                }
-              </TouchableOpacity>
-            </Animated.View>
+            <TouchableOpacity style={s.secondaryBtn} onPress={handleLojas} disabled={lojasLoad}>
+              {lojasLoad ? <ActivityIndicator color={C.brand} size="small" /> : <Text style={s.secondaryText}>{lojas.length ? 'Abrir mapa completo' : 'Atualizar lojas e precos'}</Text>}
+            </TouchableOpacity>
           </>
         )}
-
-        <MapaLojas lojas={lojas} userLat={userCoords.lat} userLng={userCoords.lng} visible={showMapa} onClose={() => setShowMapa(false)} />
       </ScrollView>
+
+      <MapaLojas lojas={lojas} userLat={userCoords.lat} userLng={userCoords.lng} visible={showMapa} onClose={() => setShowMapa(false)} />
     </View>
   );
 }
 
-// ── Estilos ───────────────────────────────────────────────────────────────────
-
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg },
-
-  hero: { marginBottom: 20 },
-  heroTitle: { fontSize: 28, fontWeight: '900', color: COLORS.text },
-  heroSub: { fontSize: 14, color: COLORS.textSub, marginTop: 4 },
-
-  card: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
-  resultCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, borderWidth: 1, borderColor: COLORS.border },
-
-  label: { fontSize: 12, fontWeight: '700', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 8, marginTop: 14 },
-  input: { backgroundColor: COLORS.surface2, borderRadius: 10, borderWidth: 1, borderColor: COLORS.border, color: COLORS.text, fontSize: 15, padding: 12 },
-
-  chip: { backgroundColor: COLORS.surface2, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, borderWidth: 1, borderColor: COLORS.border },
-  chipActive: { backgroundColor: COLORS.brandDim, borderColor: COLORS.brand },
-  chipText: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
-  chipTextActive: { color: COLORS.brand },
-
-  usoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  usoBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.surface2, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, borderWidth: 1, borderColor: COLORS.border },
-  usoBtnActive: { borderColor: COLORS.brand, backgroundColor: COLORS.brandDim },
-  usoEmoji: { fontSize: 16 },
-  usoLabel: { fontSize: 13, color: COLORS.textSub, fontWeight: '600' },
-
-  analyzeBtn: { backgroundColor: COLORS.brand, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
-  analyzeBtnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
-
-  scoreLabel: { fontSize: 18, fontWeight: '800', marginTop: 8 },
-
-  mercadoBox: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, marginBottom: 16, alignItems: 'center', borderWidth: 1, borderColor: COLORS.border },
-  mercadoLabel: { fontSize: 11, color: COLORS.textSub, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 },
-  mercadoPreco: { fontSize: 26, fontWeight: '900', color: COLORS.text, marginBottom: 4 },
-  mercadoAv: { fontSize: 14, fontWeight: '700' },
-  mercadoCom: { fontSize: 12, color: COLORS.textSub, marginTop: 4, textAlign: 'center' },
-
-  fatoresTitle: { fontSize: 13, fontWeight: '800', color: COLORS.textSub, textTransform: 'uppercase', marginBottom: 16 },
-  fatorNome: { fontSize: 13, color: COLORS.textMid, fontWeight: '600' },
-
-  conselhoBox: { flexDirection: 'row', gap: 10, backgroundColor: COLORS.brandDim, borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: COLORS.brand + '40' },
-  conselhoIcon: { fontSize: 18, color: COLORS.brand },
-  conselhoText: { flex: 1, fontSize: 14, color: COLORS.text, lineHeight: 20 },
-
-  lojasBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, backgroundColor: COLORS.surface, borderRadius: 12, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.border, marginBottom: 16 },
-  lojasBtnText: { color: COLORS.text, fontWeight: '700', fontSize: 14 },
-
-  marketCard: {
-    backgroundColor: COLORS.glass || COLORS.surface,
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: COLORS.borderHi || COLORS.border,
+  root: { flex: 1, backgroundColor: C.bg },
+  content: { padding: SPACE.lg, paddingBottom: 56 },
+  decorOne: {
+    position: 'absolute',
+    width: 190,
+    height: 190,
+    borderRadius: 58,
+    right: -96,
+    top: 72,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    transform: [{ rotate: '18deg' }],
   },
-  marketHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 },
-  marketTitle: { color: COLORS.text, fontSize: 16, fontWeight: '900' },
-  marketSub: { color: COLORS.textMid || COLORS.textSub, fontSize: 12, marginTop: 3 },
-  marketGhostBtn: {
-    borderRadius: 999,
+  decorTwo: {
+    position: 'absolute',
+    width: 126,
+    height: 86,
+    borderRadius: 26,
+    left: -44,
+    top: 230,
+    backgroundColor: 'rgba(34,212,253,0.08)',
     borderWidth: 1,
-    borderColor: COLORS.brand + '55',
-    backgroundColor: COLORS.brandDim,
+    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-12deg' }],
+  },
+  hero: {
+    flexDirection: 'row',
+    gap: 14,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.md,
+    ...SHADOWS.card,
+  },
+  heroIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heroKicker: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900', letterSpacing: 1.1 },
+  heroTitle: { color: C.text, fontSize: 25, fontWeight: '900', marginTop: 4 },
+  heroSub: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 5 },
+  card: {
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.md,
+    ...SHADOWS.card,
+  },
+  label: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 8, marginTop: 8 },
+  input: {
+    backgroundColor: C.surface2,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    color: C.text,
+    fontSize: FONT.md,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    marginBottom: 8,
+  },
+  moneyInput: { fontSize: 24, fontWeight: '900' },
+  chipRail: { flexDirection: 'row', gap: 8, paddingBottom: 4 },
+  chip: {
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.pill,
     paddingHorizontal: 13,
     paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: C.border,
   },
-  marketGhostText: { color: COLORS.brandMid || COLORS.brand, fontSize: 12, fontWeight: '900' },
-  marketMessage: { color: COLORS.textMid || COLORS.textSub, fontSize: 13, lineHeight: 19 },
-  miniMapWrap: {
-    height: 138,
-    borderRadius: 16,
+  chipActive: { backgroundColor: C.brandDim, borderColor: C.brand + '66' },
+  chipText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '800' },
+  chipTextActive: { color: C.brandMid || C.brand },
+  usoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  usoBtn: {
+    width: (W - SPACE.lg * 2 - SPACE.lg * 2 - 8) / 2,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: 11,
+  },
+  usoActive: { backgroundColor: C.brandDim, borderColor: C.brand + '66' },
+  usoTitle: { color: C.textMid, fontSize: FONT.sm, fontWeight: '900' },
+  usoSub: { color: C.textSub, fontSize: 10, marginTop: 2 },
+  primaryBtn: { borderRadius: RADIUS.pill, overflow: 'hidden', ...SHADOWS.brandGlow },
+  primaryGradient: { minHeight: 52, borderRadius: RADIUS.pill, alignItems: 'center', justifyContent: 'center' },
+  primaryText: { color: '#fff', fontSize: FONT.md, fontWeight: '900' },
+  marketCard: {
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+  },
+  sectionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 },
+  sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sectionTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  sectionSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  ghostBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    backgroundColor: C.brandDim,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  ghostText: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900' },
+  marketMessage: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19 },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderTopWidth: 1, borderTopColor: C.border },
+  priceBest: { marginHorizontal: -8, paddingHorizontal: 8, borderRadius: RADIUS.md, backgroundColor: C.greenDim },
+  priceStore: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  priceName: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
+  priceSaving: { color: C.green, fontSize: FONT.xs, fontWeight: '900', marginTop: 5 },
+  priceValue: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
+  bestBadge: { color: C.green, fontSize: 10, fontWeight: '900', marginTop: 3 },
+  miniMap: {
+    height: 154,
+    borderRadius: RADIUS.lg,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: COLORS.border,
-    marginBottom: 12,
-    backgroundColor: COLORS.surface2,
+    borderColor: C.border,
+    marginBottom: 10,
+    backgroundColor: C.surface2,
   },
-  storeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, borderTopWidth: 1, borderTopColor: COLORS.border },
-  storeDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: COLORS.cyan },
-  storeName: { color: COLORS.text, fontSize: 13, fontWeight: '800' },
-  storeMeta: { color: COLORS.textSub, fontSize: 11, marginTop: 2 },
-  priceRow: {
+  storeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: C.border },
+  storeIcon: { width: 30, height: 30, borderRadius: 11, backgroundColor: 'rgba(34,212,253,0.10)', alignItems: 'center', justifyContent: 'center' },
+  storeName: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  storeMeta: { color: C.textSub, fontSize: FONT.xs, marginTop: 2 },
+  storePrice: { color: C.green, fontSize: FONT.sm, fontWeight: '900' },
+  locationHint: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
+    backgroundColor: C.glass,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
   },
-  priceRowBest: {
-    marginHorizontal: -8,
-    paddingHorizontal: 8,
-    borderRadius: 14,
-    backgroundColor: COLORS.greenDim,
+  locationIcon: { width: 38, height: 38, borderRadius: 14, backgroundColor: C.brandDim, alignItems: 'center', justifyContent: 'center' },
+  locationTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  locationText: { color: C.textMid, fontSize: FONT.xs, lineHeight: 16, marginTop: 2 },
+  locationBtn: {
+    borderRadius: RADIUS.pill,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  priceStore: { color: COLORS.text, fontSize: 13, fontWeight: '900' },
-  priceName: { color: COLORS.textMid || COLORS.textSub, fontSize: 11, marginTop: 3 },
-  priceSaving: { color: COLORS.green, fontSize: 11, fontWeight: '800', marginTop: 5 },
-  priceValue: { color: COLORS.text, fontSize: 16, fontWeight: '900' },
-  bestBadge: { color: COLORS.green, fontSize: 10, fontWeight: '900', marginTop: 3 },
-  marketHint: {
+  locationBtnText: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900' },
+  loadingLine: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 9,
-    backgroundColor: COLORS.surface,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.md,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 16,
+    borderColor: C.border,
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
   },
-  marketHintText: { flex: 1, color: COLORS.textMid || COLORS.textSub, fontSize: 12, lineHeight: 17 },
+  loadingLineText: { color: C.textMid, fontSize: FONT.xs },
+  resultCard: {
+    alignItems: 'center',
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.md,
+    ...SHADOWS.card,
+  },
+  scoreLabel: { fontSize: FONT.xl, fontWeight: '900', marginTop: 8 },
+  scoreSub: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', lineHeight: 19, marginTop: 6 },
+  marketInsight: {
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: SPACE.lg,
+    marginBottom: SPACE.md,
+  },
+  marketPrice: { color: C.text, fontSize: 30, fontWeight: '900' },
+  marketStatus: { fontSize: FONT.sm, fontWeight: '900', marginTop: 4 },
+  marketComment: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 7 },
+  blockTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900', marginBottom: SPACE.md },
+  factorRow: { marginBottom: 14 },
+  factorTop: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  factorName: { color: C.textMid, fontSize: FONT.sm, fontWeight: '800' },
+  factorValue: { fontSize: FONT.sm, fontWeight: '900' },
+  adviceCard: {
+    backgroundColor: C.brandDim,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.brand + '40',
+    padding: SPACE.md,
+    marginBottom: SPACE.md,
+  },
+  adviceTitle: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 6 },
+  adviceText: { color: C.text, fontSize: FONT.sm, lineHeight: 20 },
+  secondaryBtn: {
+    minHeight: 48,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    backgroundColor: C.glass,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: SPACE.md,
+  },
+  secondaryText: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+});
+
+const mapStyles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 56,
+    paddingHorizontal: SPACE.lg,
+    paddingBottom: SPACE.md,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    backgroundColor: C.bg,
+  },
+  closeBtn: { width: 70 },
+  closeText: { color: C.brandMid || C.brand, fontSize: FONT.sm, fontWeight: '900' },
+  title: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
+  subtitle: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  listFallback: { padding: SPACE.lg },
+  storeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: C.glass,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: SPACE.md,
+    marginBottom: SPACE.sm,
+  },
+  storeTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  storeMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
+  storePrice: { color: C.green, fontSize: FONT.sm, fontWeight: '900' },
+  overlay: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(5,8,18,0.82)' },
+  overlayContent: { padding: 12, gap: 10 },
+  storeChip: {
+    width: 148,
+    backgroundColor: 'rgba(13,18,32,0.92)',
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    padding: 12,
+  },
+  markerBubble: {
+    minWidth: 78,
+    maxWidth: 124,
+    borderRadius: 14,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(5,8,18,0.92)',
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    alignItems: 'center',
+  },
+  markerPrice: { color: C.green, fontSize: 11, fontWeight: '900' },
+  markerName: { color: C.text, fontSize: 9, fontWeight: '800', marginTop: 1 },
 });
