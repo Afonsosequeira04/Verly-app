@@ -47,6 +47,10 @@ import ImportScreen            from '../screens/ImportScreen';
 import NetWorthScreen          from '../screens/NetWorthScreen';
 import GruposScreen            from '../screens/GruposScreen';
 import GrupoDetalheScreen      from '../screens/GrupoDetalheScreen';
+import BillsScreen             from '../screens/BillsScreen';
+import FamilyPlanScreen        from '../screens/FamilyPlanScreen';
+import DiscoverScreen          from '../screens/DiscoverScreen';
+import RefundRadarScreen       from '../screens/RefundRadarScreen';
 import { COLORS as THEME_COLORS, RADIUS } from '../constants/theme';
 
 export const COLORS = THEME_COLORS;
@@ -294,9 +298,13 @@ function MenuScreen({ navigation }) {
       label: 'Organização',
       items: [
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
+        { label: 'Bills',        screen: 'Bills',        icon: 'clock'     },
+        { label: 'Refund Radar', screen: 'RefundRadar',  icon: 'star'      },
         { label: 'Net worth',    screen: 'NetWorth',     icon: 'pie'       },
         { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
         { label: 'Dividir despesas', screen: 'Grupos',    icon: 'users'     },
+        { label: 'Plano familiar', screen: 'FamilyPlan',  icon: 'users'     },
+        { label: 'Descobrir',    screen: 'Discover',     icon: 'filereport' },
       ],
     },
     {
@@ -607,6 +615,10 @@ function MainStackNav() {
       <MainStack.Screen name="FinancialGraph"   component={FinancialGraphScreen}   options={{ headerShown: false }} />
       <MainStack.Screen name="Grupos"          component={GruposScreen}          options={{ headerShown: false }} />
       <MainStack.Screen name="GrupoDetalhe"    component={GrupoDetalheScreen}    options={{ headerShown: false }} />
+      <MainStack.Screen name="Bills"           component={BillsScreen}           options={{ headerShown: false }} />
+      <MainStack.Screen name="FamilyPlan"      component={FamilyPlanScreen}      options={{ headerShown: false }} />
+      <MainStack.Screen name="Discover"        component={DiscoverScreen}        options={{ headerShown: false }} />
+      <MainStack.Screen name="RefundRadar"     component={RefundRadarScreen}     options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

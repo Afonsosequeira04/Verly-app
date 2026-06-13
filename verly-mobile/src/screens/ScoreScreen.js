@@ -343,7 +343,7 @@ function PriceComparison({ precos, loading, message, precoPago }) {
   );
 }
 
-function LocationHint({ message, permission, onEnable }) {
+function LocationHint({ message, permission, onEnable, loading }) {
   if (!message) return null;
   return (
     <View style={s.locationHint}>
@@ -354,8 +354,10 @@ function LocationHint({ message, permission, onEnable }) {
         <Text style={s.locationTitle}>Localizacao desligada</Text>
         <Text style={s.locationText}>{message}</Text>
       </View>
-      <TouchableOpacity onPress={onEnable} style={s.locationBtn}>
-        <Text style={s.locationBtnText}>{permission?.canAskAgain === false ? 'Definicoes' : 'Ativar'}</Text>
+      <TouchableOpacity onPress={onEnable} disabled={loading} style={[s.locationBtn, loading && { opacity: 0.65 }]}>
+        <Text style={s.locationBtnText}>
+          {loading ? 'A ativar...' : permission?.canAskAgain === false ? 'Definicoes' : 'Ativar'}
+        </Text>
       </TouchableOpacity>
     </View>
   );
@@ -377,6 +379,7 @@ export default function ScoreScreen({ route }) {
   const [precosMsg, setPrecosMsg] = useState('');
   const [marketError, setMarketError] = useState('');
   const [locationPermission, setLocationPermission] = useState({ status: null, canAskAgain: true });
+  const [locationLoading, setLocationLoading] = useState(false);
 
   const scrollRef = useRef(null);
   const marketSeqRef = useRef(0);
@@ -402,7 +405,13 @@ export default function ScoreScreen({ route }) {
     }
     setLocationPermission({ status: permission.status, canAskAgain: permission.canAskAgain });
     if (permission.status !== 'granted') return null;
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    let loc = null;
+    try {
+      loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    } catch (_) {
+      loc = await Location.getLastKnownPositionAsync();
+    }
+    if (!loc?.coords) return null;
     const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
     setUserCoords(coords);
     return coords;
@@ -462,16 +471,29 @@ export default function ScoreScreen({ route }) {
   }, [categoria, item, resolveCoords]);
 
   const handleEnableLocation = useCallback(async () => {
+    setLocationLoading(true);
     if (locationPermission.canAskAgain === false && Linking.openSettings) {
-      Linking.openSettings();
+      await Linking.openSettings();
+      setLocationLoading(false);
       return;
     }
-    const coords = await resolveCoords({ force: true }).catch(() => null);
-    if (coords?.lat && coords?.lng) {
-      setMarketError('');
-      loadMarketData({ silent: false });
+    try {
+      const coords = await resolveCoords({ force: true }).catch(() => null);
+      if (coords?.lat && coords?.lng) {
+        setMarketError('');
+        showToast('Localizacao ativa', 'success');
+        if (item.trim().length >= 3) {
+          await loadMarketData({ silent: false });
+        } else {
+          Alert.alert('Localizacao ativa', 'Agora escreve um produto para veres lojas proximas.');
+        }
+      } else {
+        setMarketError('Nao conseguimos obter a localizacao. Confirma permissoes e GPS do dispositivo.');
+      }
+    } finally {
+      setLocationLoading(false);
     }
-  }, [loadMarketData, locationPermission.canAskAgain, resolveCoords]);
+  }, [item, loadMarketData, locationPermission.canAskAgain, resolveCoords, showToast]);
 
   useEffect(() => {
     const cleanItem = item.trim();
@@ -588,7 +610,7 @@ export default function ScoreScreen({ route }) {
         <PriceComparison precos={precos} loading={precosLoad} message={precosMsg} precoPago={precoPago} />
         <MiniMapa lojas={lojas} userCoords={userCoords} onOpen={handleLojas} />
         {!!marketError && item.trim().length >= 3 && !lojas.length && (
-          <LocationHint message={marketError} permission={locationPermission} onEnable={handleEnableLocation} />
+          <LocationHint message={marketError} permission={locationPermission} onEnable={handleEnableLocation} loading={locationLoading} />
         )}
 
         {lojasLoad && item.trim().length >= 3 && !lojas.length && (

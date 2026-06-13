@@ -218,6 +218,14 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'Garantias',
         })
 
+    if any(k in texto for k in ['reembolso', 'refund', 'reclamar', 'reclamacao', 'cobranca duplicada', 'duplicado', 'devolver dinheiro']):
+        add({
+            'id': 'open_refund_radar',
+            'type': 'navigate',
+            'label': 'Abrir Refund Radar',
+            'route': 'RefundRadar',
+        })
+
     if any(k in texto for k in ['score', 'analisar compra', 'boa compra', 'vale a pena', 'comprar']):
         add({
             'id': 'open_score',

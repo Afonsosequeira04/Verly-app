@@ -58,6 +58,7 @@ def financial_cache_keys(user_id):
         yield f'{prefix}:{user_id}'
         for currency in currencies:
             yield f'{prefix}:{user_id}:{currency}'
+            yield f'{prefix}:{user_id}:{currency}:all'
     yield f'insights:{user_id}'
 
 
@@ -270,11 +271,18 @@ def get_expense_records(
     include_bank=True,
     include_non_spending=False,
     currency=None,
+    account_id=None,
 ):
     records = []
     selected_currency = clean_currency(currency) if currency else None
+    selected_account_id = None
+    if account_id not in (None, '', 'all'):
+        try:
+            selected_account_id = int(account_id)
+        except (TypeError, ValueError):
+            selected_account_id = None
 
-    if include_faturas:
+    if include_faturas and selected_account_id is None:
         for fatura in Fatura.query.filter_by(user_id=user_id).all():
             value = float(fatura.total or 0)
             if value <= 0:
@@ -300,6 +308,8 @@ def get_expense_records(
 
     if include_bank:
         query = BankTransaction.query.filter(BankTransaction.user_id == user_id)
+        if selected_account_id is not None:
+            query = query.filter(BankTransaction.conta_bancaria_id == selected_account_id)
         for transaction in query.all():
             record_date = transaction.booked_at or transaction.value_date
             amount = float(transaction.amount or 0)
@@ -389,13 +399,13 @@ def _primary_currency(records, current_start, current_end, requested=None):
     return 'EUR'
 
 
-def summarize_expenses(user_id, months=12, today=None, currency=None):
+def summarize_expenses(user_id, months=12, today=None, currency=None, account_id=None):
     today = today or datetime.utcnow().date()
     current_start, current_end = month_window(today.year, today.month)
     prev_year, prev_month = add_months(today.year, today.month, -1)
     previous_start, previous_end = month_window(prev_year, prev_month)
 
-    all_records = get_expense_records(user_id, include_non_spending=True)
+    all_records = get_expense_records(user_id, include_non_spending=True, account_id=account_id)
     spending_records = [record for record in all_records if record.get('is_spending')]
     non_spending_records = [
         record for record in all_records
@@ -549,6 +559,7 @@ def summarize_expenses(user_id, months=12, today=None, currency=None):
 
     return {
         'records': records,
+        'account_id': account_id if account_id not in (None, '', 'all') else None,
         'currency': selected_currency,
         'conversion': {
             'display_currency': selected_currency,

@@ -23,6 +23,7 @@ class User(UserMixin, db.Model):
     streak_dias = db.Column(db.Integer, default=0)
     streak_ultima_atualizacao = db.Column(db.DateTime)
     lingua = db.Column(db.String(10), default='pt')
+    moeda_preferida = db.Column(db.String(10), default='EUR')
 
     email_confirmado     = db.Column(db.Boolean, default=False)
     email_confirm_token  = db.Column(db.String(100))
@@ -148,6 +149,87 @@ class BankTransaction(db.Model):
 
     user = db.relationship('User', backref=db.backref('bank_transactions', lazy=True))
     conta = db.relationship('ContaBancaria', backref=db.backref('transactions', lazy=True))
+
+
+family_member = db.Table(
+    'family_members',
+    db.Column('family_id', db.Integer, db.ForeignKey('family_plans.id'), primary_key=True),
+    db.Column('user_id', db.Integer, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('role', db.String(20), default='member'),
+    db.Column('joined_at', db.DateTime, default=datetime.utcnow),
+)
+
+
+class FamilyPlan(db.Model):
+    __tablename__ = 'family_plans'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(120), nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    orcamento_mensal = db.Column(db.Float, default=0)
+    currency = db.Column(db.String(10), default='EUR')
+    ativo = db.Column(db.Boolean, default=True)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+
+    owner = db.relationship('User', foreign_keys=[owner_id])
+    membros = db.relationship('User', secondary=family_member, lazy='dynamic')
+
+
+class Bill(db.Model):
+    __tablename__ = 'bills'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    titulo = db.Column(db.String(160), nullable=False)
+    categoria = db.Column(db.String(80), default='Obrigacao')
+    valor = db.Column(db.Float, default=0)
+    currency = db.Column(db.String(10), default='EUR')
+    data_vencimento = db.Column(db.Date, nullable=False, index=True)
+    recorrencia = db.Column(db.String(20), default='none')
+    notas = db.Column(db.Text)
+    pago = db.Column(db.Boolean, default=False)
+    lembrar_dias_antes = db.Column(db.Integer, default=3)
+    calendar_event_id = db.Column(db.String(160))
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('bills', lazy=True, cascade='all, delete-orphan'))
+
+
+class CalendarConnection(db.Model):
+    __tablename__ = 'calendar_connections'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    provider = db.Column(db.String(30), nullable=False)
+    account_email = db.Column(db.String(200))
+    status = db.Column(db.String(30), default='not_configured')
+    credentials_json = db.Column(db.Text)
+    last_sync_at = db.Column(db.DateTime)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('calendar_connections', lazy=True, cascade='all, delete-orphan'))
+
+
+class RefundOpportunityState(db.Model):
+    __tablename__ = 'refund_opportunity_states'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    opportunity_key = db.Column(db.String(220), nullable=False)
+    status = db.Column(db.String(30), default='new')
+    notes = db.Column(db.Text)
+    recovered_amount = db.Column(db.Float, default=0)
+    currency = db.Column(db.String(10), default='EUR')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('refund_opportunity_states', lazy=True, cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'opportunity_key', name='uq_refund_state_user_key'),
+    )
 
 
 class Subscricao(db.Model):

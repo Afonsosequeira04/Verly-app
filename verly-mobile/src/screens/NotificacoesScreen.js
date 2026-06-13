@@ -45,7 +45,10 @@ export default function NotificacoesScreen({ navigation }) {
           return (
             <TouchableOpacity
               style={[styles.card, { borderLeftColor: color, borderLeftWidth: 3 }]}
-              onPress={() => {}}
+              onPress={() => {
+                if (item.action_route) navigation.navigate(item.action_route, { refundKey: item.refund_key });
+                else if (String(item.tipo || '').startsWith('refund_')) navigation.navigate('RefundRadar', { refundKey: item.refund_key });
+              }}
               activeOpacity={0.7}
             >
               <Text style={styles.cardIcon}>{item.icone}</Text>

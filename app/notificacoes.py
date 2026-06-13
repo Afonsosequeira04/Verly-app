@@ -146,6 +146,12 @@ def gerar_notificacoes(user_id: int, orcamento: float = 0) -> list:
         })
 
     # ── Ordenar: alta primeiro, depois media, depois info ─────────────────────
+    try:
+        from app.refund_radar import refund_notifications
+        notifs.extend(refund_notifications(user_id, limit=5))
+    except Exception:
+        pass
+
     order = {'alta': 0, 'media': 1, 'info': 2}
     notifs.sort(key=lambda n: order.get(n['urgencia'], 9))
 

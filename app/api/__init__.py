@@ -27,3 +27,5 @@ from app.api import open_banking   # noqa
 from app.api import semantic       # noqa
 from app.api import subscricoes    # noqa
 from app.api import networth       # noqa
+from app.api import planning       # noqa
+from app.api import refund_radar   # noqa

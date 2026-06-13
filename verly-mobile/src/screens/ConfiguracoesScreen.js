@@ -8,7 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Trash2, LogOut, Lock, Bell, Globe, Download,
-  Info, Shield, FileText, ChevronRight, LayoutDashboard,
+  Info, Shield, FileText, ChevronRight, LayoutDashboard, Coins,
 } from 'lucide-react-native';
 import { authAPI, perfilAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -63,6 +63,7 @@ export default function ConfiguracoesScreen({ navigation }) {
 
   const [notificacoes,   setNotificacoes]   = useState(false);
   const [lingua,         setLingua]         = useState('pt');
+  const [moeda,          setMoeda]          = useState('EUR');
   const [dashPrefs,      setDashPrefs]      = useState(DEFAULT_PREFS);
   const [loadingDelete,  setLoadingDelete]  = useState(false);
   const [loadingExport,  setLoadingExport]  = useState(false);
@@ -73,6 +74,7 @@ export default function ConfiguracoesScreen({ navigation }) {
     perfilAPI.get().then(d => {
       if (d.notificacoes_email != null) setNotificacoes(d.notificacoes_email);
       if (d.lingua) setLingua(d.lingua);
+      if (d.moeda_preferida) setMoeda(d.moeda_preferida);
     }).catch(() => {});
     // Carregar prefs do dashboard
     AsyncStorage.getItem(PREFS_KEY).then(raw => {
@@ -132,6 +134,42 @@ export default function ConfiguracoesScreen({ navigation }) {
         { text: '🇬🇧 English',   onPress: () => { setLingua('en'); perfilAPI.update({ lingua: 'en' }).catch(() => {}); } },
         { text: 'Cancelar', style: 'cancel' },
       ]
+    );
+  };
+
+  const handleLinguaCompleta = () => {
+    const langs = [
+      ['pt', 'Portugues'],
+      ['en', 'English'],
+      ['es', 'Espanol'],
+      ['fr', 'Francais'],
+      ['de', 'Deutsch'],
+      ['it', 'Italiano'],
+    ];
+    Alert.alert(
+      'Lingua',
+      'Escolhe a lingua da app:',
+      langs.map(([code, label]) => ({
+        text: label,
+        onPress: () => {
+          setLingua(code);
+          perfilAPI.update({ lingua: code }).catch(() => {});
+        },
+      })).concat([{ text: 'Cancelar', style: 'cancel' }])
+    );
+  };
+
+  const handleMoeda = () => {
+    Alert.alert(
+      'Moeda',
+      'Escolhe a moeda em que queres ver valores:',
+      ['EUR', 'USD', 'GBP', 'DKK', 'SEK', 'NOK'].map(code => ({
+        text: code,
+        onPress: () => {
+          setMoeda(code);
+          perfilAPI.update({ moeda_preferida: code }).catch(() => {});
+        },
+      })).concat([{ text: 'Cancelar', style: 'cancel' }])
     );
   };
 
@@ -208,7 +246,14 @@ export default function ConfiguracoesScreen({ navigation }) {
     ]);
   };
 
-  const linguaLabel = lingua === 'en' ? '🇬🇧 English' : '🇵🇹 Português';
+  const linguaLabel = ({
+    pt: 'Portugues',
+    en: 'English',
+    es: 'Espanol',
+    fr: 'Francais',
+    de: 'Deutsch',
+    it: 'Italiano',
+  })[lingua] || 'Portugues';
 
   return (
     <ScrollView
@@ -293,7 +338,14 @@ export default function ConfiguracoesScreen({ navigation }) {
             icon={<Globe />}
             label="Língua"
             sub={linguaLabel}
-            onPress={handleLingua}
+            onPress={handleLinguaCompleta}
+          />
+          <Divider />
+          <SettingRow
+            icon={<Coins />}
+            label="Moeda"
+            sub={moeda}
+            onPress={handleMoeda}
           />
         </View>
       </Reveal>

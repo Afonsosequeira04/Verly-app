@@ -214,6 +214,7 @@ def _migrate_db():
         ('users',   'streak_dias',               'INTEGER DEFAULT 0'),
         ('users',   'streak_ultima_atualizacao', 'TIMESTAMP'),
         ('users',   'lingua',                    "VARCHAR(10) DEFAULT 'pt'"),
+        ('users',   'moeda_preferida',           "VARCHAR(10) DEFAULT 'EUR'"),
         ('users',   'fcm_token',                 'VARCHAR(512)'),
         ('users',   'fcm_token_updated',         'TIMESTAMP'),
         ('users',   'push_ativas',               'BOOLEAN DEFAULT true'),

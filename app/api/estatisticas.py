@@ -58,7 +58,8 @@ def estatisticas_geral():
     Usado pela EstatisticasScreen.
     """
     user_id = int(get_jwt_identity())
-    summary = summarize_expenses(user_id, currency=request.args.get('currency'))
+    requested_account_id = request.args.get('account_id') or 'all'
+    summary = summarize_expenses(user_id, currency=request.args.get('currency'), account_id=requested_account_id)
     from app.models import User
     from app.subscriptions import detect_subscriptions
     user = User.query.get_or_404(user_id)
@@ -68,7 +69,7 @@ def estatisticas_geral():
         subs_data = {}
     budget_summary = (
         summary if summary['currency'] == 'EUR'
-        else summarize_expenses(user_id, currency='EUR')
+        else summarize_expenses(user_id, currency='EUR', account_id=requested_account_id)
     )
     financial_intelligence = build_financial_intelligence(user, summary, budget_summary, subs_data)
     return jsonify({
@@ -85,6 +86,7 @@ def estatisticas_geral():
         'mes_atual': summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
         'currency': summary['currency'],
+        'account_id': summary.get('account_id'),
         'conversion': summary['conversion'],
         'financial_intelligence': financial_intelligence,
         'available_currencies': summary['available_currencies'],
@@ -168,9 +170,10 @@ def estatisticas_mensal():
     except (TypeError, ValueError):
         return jsonify({'error': 'ano e mes inválidos'}), 400
 
-    selected_summary = summarize_expenses(user_id, currency=request.args.get('currency'))
+    requested_account_id = request.args.get('account_id') or 'all'
+    selected_summary = summarize_expenses(user_id, currency=request.args.get('currency'), account_id=requested_account_id)
     selected_currency = selected_summary['currency']
-    records = get_expense_records(user_id, currency=selected_currency)
+    records = get_expense_records(user_id, currency=selected_currency, account_id=requested_account_id)
     por_mes_dict: dict[str, list] = defaultdict(list)
     for record in records:
         if record['month']:
@@ -226,6 +229,7 @@ def estatisticas_mensal():
         'mes': mes,
         'mes_nome': MESES_PT[mes],
         'currency': selected_currency,
+        'account_id': selected_summary.get('account_id'),
         'total': round(total_mes, 2),
         'num_faturas': num_faturas,
         'num_registos': num_registos,

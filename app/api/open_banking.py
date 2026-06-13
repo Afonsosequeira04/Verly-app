@@ -387,11 +387,12 @@ def open_banking_summary():
     user_id = int(get_jwt_identity())
     user = User.query.get_or_404(user_id)
     requested_currency = request.args.get('currency')
-    summary = summarize_expenses(user_id, currency=requested_currency)
+    requested_account_id = request.args.get('account_id') or 'all'
+    summary = summarize_expenses(user_id, currency=requested_currency, account_id=requested_account_id)
     budget_currency = 'EUR'
     budget_summary = (
         summary if summary['currency'] == budget_currency
-        else summarize_expenses(user_id, currency=budget_currency)
+        else summarize_expenses(user_id, currency=budget_currency, account_id=requested_account_id)
     )
 
     current_total = budget_summary['mes_atual']['total']

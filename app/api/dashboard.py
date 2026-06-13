@@ -35,18 +35,19 @@ def dashboard():
     from app.models import User
     user_id = int(get_jwt_identity())
     requested_currency = request.args.get('currency')
+    requested_account_id = request.args.get('account_id') or 'all'
 
     # Cache por utilizador (5 min) — invalida no upload de faturas
-    cache_key = f'dashboard:{user_id}:{requested_currency or "auto"}'
+    cache_key = f'dashboard:{user_id}:{requested_currency or "auto"}:{requested_account_id}'
     cached = cache.get(cache_key)
     if cached:
         return jsonify(cached)
 
     user = User.query.get_or_404(user_id)
-    real_summary = summarize_expenses(user_id, currency=requested_currency)
+    real_summary = summarize_expenses(user_id, currency=requested_currency, account_id=requested_account_id)
     budget_summary = (
         real_summary if real_summary['currency'] == 'EUR'
-        else summarize_expenses(user_id, currency='EUR')
+        else summarize_expenses(user_id, currency='EUR', account_id=requested_account_id)
     )
     real_summary_public = json_safe_financial_summary(real_summary)
     budget_summary_public = json_safe_financial_summary(budget_summary)
@@ -128,6 +129,7 @@ def dashboard():
     result = {
         'currency':          budget_summary['currency'],
         'active_currency':   real_summary['currency'],
+        'active_account_id': real_summary.get('account_id'),
         'total_gasto':       round(total_gasto, 2),
         'total_gasto_real':  real_summary['mes_atual']['total'],
         'total_faturas':     round(total_faturas, 2),
@@ -204,13 +206,14 @@ def _parse_date_str(s):
 def estatisticas():
     user_id = int(get_jwt_identity())
     requested_currency = request.args.get('currency')
+    requested_account_id = request.args.get('account_id') or 'all'
 
-    cache_key = f'estatisticas:{user_id}:{requested_currency or "auto"}'
+    cache_key = f'estatisticas:{user_id}:{requested_currency or "auto"}:{requested_account_id}'
     cached = cache.get(cache_key)
     if cached:
         return jsonify(cached)
 
-    summary = summarize_expenses(user_id, currency=requested_currency)
+    summary = summarize_expenses(user_id, currency=requested_currency, account_id=requested_account_id)
     from app.models import User
     user = User.query.get_or_404(user_id)
     try:
@@ -219,7 +222,7 @@ def estatisticas():
         subs_data = {}
     budget_summary = (
         summary if summary['currency'] == 'EUR'
-        else summarize_expenses(user_id, currency='EUR')
+        else summarize_expenses(user_id, currency='EUR', account_id=requested_account_id)
     )
     financial_intelligence = build_financial_intelligence(user, summary, budget_summary, subs_data)
 
@@ -238,6 +241,7 @@ def estatisticas():
             'itens_por_categoria': {},
             'top_lojas':     [],
             'currency':      summary['currency'],
+            'account_id':    summary.get('account_id'),
             'conversion':    summary['conversion'],
             'financial_intelligence': financial_intelligence,
             'available_currencies': summary['available_currencies'],
@@ -268,6 +272,7 @@ def estatisticas():
         'mes_atual':     summary['mes_atual'],
         'previsao_mensal': summary['previsao_mensal'],
         'currency':      summary['currency'],
+        'account_id':    summary.get('account_id'),
         'conversion':    summary['conversion'],
         'financial_intelligence': financial_intelligence,
         'available_currencies': summary['available_currencies'],

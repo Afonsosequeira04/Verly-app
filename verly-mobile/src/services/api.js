@@ -464,6 +464,62 @@ export const gmailAPI = {
   disconnect: () => apiFetch('/gmail/disconnect', { method: 'DELETE' }),
 };
 
+export const preferencesAPI = {
+  get: () => apiFetch('/preferences'),
+  update: (data) =>
+    apiFetch('/preferences', { method: 'PATCH', body: JSON.stringify(data) }),
+};
+
+export const billsAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/bills${query ? `?${query}` : ''}`);
+  },
+  criar: (data) =>
+    apiFetch('/bills', { method: 'POST', body: JSON.stringify(data) }),
+  atualizar: (id, data) =>
+    apiFetch(`/bills/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  apagar: (id) =>
+    apiFetch(`/bills/${id}`, { method: 'DELETE' }),
+};
+
+export const calendarAPI = {
+  status: () => apiFetch('/calendar/status'),
+  connect: (provider) =>
+    apiFetch('/calendar/connect', { method: 'POST', body: JSON.stringify({ provider }) }),
+  exportUrl: async () => {
+    const token = await getToken();
+    return `${BASE_URL}/calendar/export.ics?_token=${token}`;
+  },
+};
+
+export const familiaAPI = {
+  get: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/familia${query ? `?${query}` : ''}`);
+  },
+  criar: (data) =>
+    apiFetch('/familia', { method: 'POST', body: JSON.stringify(data) }),
+  convidar: (email) =>
+    apiFetch('/familia/invite', { method: 'POST', body: JSON.stringify({ email }) }),
+};
+
+export const discoverAPI = {
+  news: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/discover/news${query ? `?${query}` : ''}`);
+  },
+};
+
+export const refundRadarAPI = {
+  listar: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/refund-radar${query ? `?${query}` : ''}`);
+  },
+  atualizarEstado: (data) =>
+    apiFetch('/refund-radar/state', { method: 'PATCH', body: JSON.stringify(data) }),
+};
+
 export const openBankingAPI = {
   status: () => apiFetch('/open-banking/status'),
 

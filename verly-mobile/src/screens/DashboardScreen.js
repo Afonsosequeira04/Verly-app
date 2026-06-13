@@ -27,7 +27,7 @@ import {
   AlertCircle, Target, BarChart2,
   Shield, Flame, Download, WalletCards,
 } from 'lucide-react-native';
-import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch } from '../services/api';
+import { dashboardAPI, faturasAPI, notificacoesAPI, insightsAPI, apiFetch, openBankingAPI, preferencesAPI } from '../services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
@@ -54,6 +54,7 @@ const DEFAULT_PREFS = {
   mostrarGraficos: true,
   mostrarFaturas:  true,
 };
+const CURRENCIES = ['EUR', 'USD', 'GBP', 'DKK', 'SEK', 'NOK'];
 
 function normalizeDashboardData(data) {
   if (!data) return { porCategoria: [], porMes: [], chartCurrency: 'EUR', chartSources: [] };
@@ -279,6 +280,65 @@ function BankingContext({ data }) {
           </Text>
         )}
       </Pressable>
+    </Reveal>
+  );
+}
+
+function ContextSelector({ currency, onCurrency, accountId, onAccount, accounts = [] }) {
+  return (
+    <Reveal delay={70} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
+      <View style={[s.card, { padding: 12, gap: 10 }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {CURRENCIES.map(code => {
+            const active = code === currency;
+            return (
+              <Pressable
+                key={code}
+                onPress={() => onCurrency(code)}
+                style={{
+                  minWidth: 54,
+                  height: 34,
+                  borderRadius: 10,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1,
+                  borderColor: active ? C.brand : C.border,
+                  backgroundColor: active ? C.brandDim : C.surface2,
+                }}
+              >
+                <Text style={{ color: active ? C.brand : C.textMid, fontSize: 12, fontWeight: '900' }}>{code}</Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {[{ id: 'all', nome_banco: 'Todas' }, ...accounts].map(account => {
+            const id = account.id === 'all' ? 'all' : String(account.id);
+            const active = id === String(accountId || 'all');
+            return (
+              <Pressable
+                key={id}
+                onPress={() => onAccount(id)}
+                style={{
+                  maxWidth: 190,
+                  height: 34,
+                  borderRadius: 10,
+                  paddingHorizontal: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1,
+                  borderColor: active ? C.green : C.border,
+                  backgroundColor: active ? C.green + '16' : C.surface2,
+                }}
+              >
+                <Text numberOfLines={1} style={{ color: active ? C.green : C.textMid, fontSize: 12, fontWeight: '800' }}>
+                  {account.nome_banco || account.iban || account.account_id || 'Conta'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </View>
     </Reveal>
   );
 }
@@ -769,6 +829,9 @@ export default function DashboardScreen({ navigation, route }) {
   const [previsao,     setPrevisao]     = useState(null);
   const [orcamento,    setOrcamento]    = useState(0);
   const [prefs,        setPrefs]        = useState(DEFAULT_PREFS);
+  const [selectedCurrency, setSelectedCurrency] = useState('EUR');
+  const [selectedAccount, setSelectedAccount] = useState('all');
+  const [accounts, setAccounts] = useState([]);
 
   const fetchNotifs = useCallback(async () => {
     setNotifLoad(true);
@@ -811,6 +874,17 @@ export default function DashboardScreen({ navigation, route }) {
 
   useEffect(() => { fetchExtras(); }, [fetchExtras]);
 
+  useEffect(() => {
+    preferencesAPI.get()
+      .then(res => {
+        if (res.moeda_preferida) setSelectedCurrency(res.moeda_preferida);
+      })
+      .catch(() => {});
+    openBankingAPI.accounts()
+      .then(res => setAccounts(res.accounts || []))
+      .catch(() => {});
+  }, []);
+
   // Carrega preferências do dashboard
   useEffect(() => {
     AsyncStorage.getItem(PREFS_KEY).then(raw => {
@@ -831,10 +905,17 @@ export default function DashboardScreen({ navigation, route }) {
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefresh(true); else setLoading(true);
     try {
-      const d = await dashboardAPI.get();
+      const params = { currency: selectedCurrency };
+      if (selectedAccount && selectedAccount !== 'all') params.account_id = selectedAccount;
+      const d = await dashboardAPI.get(params);
       setData(d);
     } catch (e) { console.warn('Dashboard:', e.message); }
     finally { setLoading(false); setRefresh(false); }
+  }, [selectedAccount, selectedCurrency]);
+
+  const updateCurrency = useCallback((code) => {
+    setSelectedCurrency(code);
+    preferencesAPI.update({ moeda_preferida: code }).catch(() => {});
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -1005,7 +1086,16 @@ export default function DashboardScreen({ navigation, route }) {
         }
       >
         {loading ? <LoadingSkeleton /> : (
-          CARDS_DEFAULT.map((id) => renderCard(id))
+          <>
+            <ContextSelector
+              currency={selectedCurrency}
+              onCurrency={updateCurrency}
+              accountId={selectedAccount}
+              onAccount={setSelectedAccount}
+              accounts={accounts}
+            />
+            {CARDS_DEFAULT.map((id) => renderCard(id))}
+          </>
         )}
       </ScrollView>
 

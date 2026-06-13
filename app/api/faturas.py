@@ -14,25 +14,49 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
 from app.models import Fatura, CATEGORIAS
+from app.financial_records import clean_currency, convert_currency
 from app.extensions import limiter
 from app import db
 
 logger = logging.getLogger(__name__)
 
 
-def _fatura_to_dict(f):
+def _convert_item_money(item, target_currency):
+    if not isinstance(item, dict):
+        return item
+    converted = dict(item)
+    for key in ('valor', 'preco', 'preco_unitario', 'total'):
+        if key in converted:
+            try:
+                converted_value, did_convert = convert_currency(converted[key], 'EUR', target_currency)
+                converted[f'original_{key}'] = converted[key]
+                converted[key] = round(converted_value, 2)
+                converted['currency'] = target_currency
+                converted['converted'] = did_convert
+            except Exception:
+                pass
+    return converted
+
+
+def _fatura_to_dict(f, currency='EUR'):
+    target_currency = clean_currency(currency)
     try:
         items = json.loads(f.items) if f.items else []
     except Exception:
         items = []
+    total, converted = convert_currency(f.total or 0, 'EUR', target_currency)
     return {
         'id':             f.id,
         'nome_ficheiro':  f.nome_ficheiro,
         'loja':           f.loja,
         'data_compra':    f.data_compra,
         'data_upload':    f.data_upload.isoformat() if f.data_upload else None,
-        'total':          f.total or 0,
-        'items':          items,
+        'total':          round(total, 2),
+        'currency':       target_currency,
+        'original_total': round(f.total or 0, 2),
+        'original_currency': 'EUR',
+        'converted':      converted,
+        'items':          [_convert_item_money(item, target_currency) for item in items],
         'categoria':      f.categoria or 'Outros',
         'data_garantia':  f.data_garantia,
         'data_devolucao': f.data_devolucao,
@@ -49,6 +73,7 @@ def listar_faturas():
     search    = request.args.get('q', '').strip()[:200]
     categoria = request.args.get('categoria', '').strip()
     ordenar   = request.args.get('ordenar', 'recente').strip()
+    currency  = clean_currency(request.args.get('currency') or 'EUR')
 
     if categoria and categoria not in CATEGORIAS:
         categoria = ''
@@ -75,8 +100,9 @@ def listar_faturas():
     faturas = query.order_by(order_map[ordenar]).all()
 
     return jsonify({
-        'faturas':    [_fatura_to_dict(f) for f in faturas],
-        'total':      round(sum(f.total or 0 for f in faturas), 2),
+        'faturas':    [_fatura_to_dict(f, currency) for f in faturas],
+        'total':      round(sum(convert_currency(f.total or 0, 'EUR', currency)[0] for f in faturas), 2),
+        'currency':   currency,
         'categorias': CATEGORIAS,
     })
 
@@ -88,7 +114,7 @@ def listar_faturas():
 def detalhe_fatura(fatura_id):
     user_id = int(get_jwt_identity())
     f = Fatura.query.filter_by(id=fatura_id, user_id=user_id).first_or_404()
-    return jsonify(_fatura_to_dict(f))
+    return jsonify(_fatura_to_dict(f, request.args.get('currency') or 'EUR'))
 
 
 # ── Signed URL para download ──────────────────────────────────────────────────
