@@ -345,6 +345,10 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
             loc = place['geometry']['location']
             elat, elng = loc['lat'], loc['lng']
             km = _distancia_km(lat, lng, elat, elng)
+            photo_ref = None
+            photos = place.get('photos') or []
+            if photos:
+                photo_ref = photos[0].get('photo_reference')
 
             lojas.append({
                 'nome':      nome,
@@ -353,6 +357,15 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
                 'endereco':  place.get('vicinity', ''),
                 'distancia': _distancia_label(km),
                 'km':        km,
+                'place_id':  place.get('place_id'),
+                'rating':    place.get('rating'),
+                'reviews':   place.get('user_ratings_total'),
+                'open_now':  (place.get('opening_hours') or {}).get('open_now'),
+                'photo_url': (
+                    'https://maps.googleapis.com/maps/api/place/photo'
+                    f'?maxwidth=640&photo_reference={photo_ref}&key={api_key}'
+                ) if photo_ref else None,
+                'fonte':     'Google Places',
             })
 
         lojas.sort(key=lambda x: x['km'])

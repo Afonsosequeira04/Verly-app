@@ -52,6 +52,7 @@ import FamilyPlanScreen        from '../screens/FamilyPlanScreen';
 import DiscoverScreen          from '../screens/DiscoverScreen';
 import RefundRadarScreen       from '../screens/RefundRadarScreen';
 import LiveDealsScreen         from '../screens/LiveDealsScreen';
+import MonthlyReplayScreen     from '../screens/MonthlyReplayScreen';
 import { COLORS as THEME_COLORS, RADIUS } from '../constants/theme';
 
 export const COLORS = THEME_COLORS;
@@ -70,6 +71,7 @@ const linking = {
       Main: {
         screens: {
           OpenBanking: 'open-banking/callback',
+          FamilyPlan: 'family-invite/:token',
         },
       },
     },
@@ -301,6 +303,7 @@ function MenuScreen({ navigation }) {
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
         { label: 'Bills',        screen: 'Bills',        icon: 'clock'     },
         { label: 'Live Deals',   screen: 'LiveDeals',    icon: 'star'      },
+        { label: 'Replay do mes', screen: 'MonthlyReplay', icon: 'clock'    },
         { label: 'Refund Radar', screen: 'RefundRadar',  icon: 'star'      },
         { label: 'Net worth',    screen: 'NetWorth',     icon: 'pie'       },
         { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
@@ -622,6 +625,7 @@ function MainStackNav() {
       <MainStack.Screen name="Discover"        component={DiscoverScreen}        options={{ headerShown: false }} />
       <MainStack.Screen name="RefundRadar"     component={RefundRadarScreen}     options={{ headerShown: false }} />
       <MainStack.Screen name="LiveDeals"       component={LiveDealsScreen}       options={{ headerShown: false }} />
+      <MainStack.Screen name="MonthlyReplay"   component={MonthlyReplayScreen}   options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

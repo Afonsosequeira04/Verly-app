@@ -505,8 +505,28 @@ export const familiaAPI = {
   },
   criar: (data) =>
     apiFetch('/familia', { method: 'POST', body: JSON.stringify(data) }),
-  convidar: (email) =>
-    apiFetch('/familia/invite', { method: 'POST', body: JSON.stringify({ email }) }),
+  atualizar: (data) =>
+    apiFetch('/familia', { method: 'PATCH', body: JSON.stringify(data) }),
+  convidar: (email, role = 'partner') =>
+    apiFetch('/familia/invite', { method: 'POST', body: JSON.stringify({ email, role }) }),
+  convites: () => apiFetch('/familia/invites'),
+  aceitarConvite: (token) =>
+    apiFetch(`/familia/invites/${token}/accept`, { method: 'POST' }),
+  recusarConvite: (token) =>
+    apiFetch(`/familia/invites/${token}/decline`, { method: 'POST' }),
+  atualizarMembro: (memberId, data) =>
+    apiFetch(`/familia/members/${memberId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  removerMembro: (memberId) =>
+    apiFetch(`/familia/members/${memberId}`, { method: 'DELETE' }),
+  contas: () => apiFetch('/familia/accounts'),
+  atualizarContas: (account_ids) =>
+    apiFetch('/familia/accounts', { method: 'PATCH', body: JSON.stringify({ account_ids }) }),
+  salvarBudgetCategoria: (data) =>
+    apiFetch('/familia/category-budgets', { method: 'POST', body: JSON.stringify(data) }),
+  apagarBudgetCategoria: (id) =>
+    apiFetch(`/familia/category-budgets/${id}`, { method: 'DELETE' }),
+  marcarDespesa: (data) =>
+    apiFetch('/familia/expenses/tag', { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
 export const discoverAPI = {
@@ -547,6 +567,13 @@ export const liveDealsAPI = {
     apiFetch(`/live-deals/watchlist/${id}/check`, { method: 'POST' }),
 
   replay: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/live-deals/replay${query ? `?${query}` : ''}`);
+  },
+};
+
+export const replayAPI = {
+  mensal: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return apiFetch(`/live-deals/replay${query ? `?${query}` : ''}`);
   },

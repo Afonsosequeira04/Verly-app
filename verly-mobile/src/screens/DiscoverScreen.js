@@ -96,7 +96,7 @@ export default function DiscoverScreen({ navigation }) {
         <Animated.View entering={FadeInDown.delay(40)} style={styles.hero}>
           <Newspaper size={24} color={C.brand} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.kicker}>{source === 'gnews' ? 'Noticias reais' : 'Radar local'}</Text>
+            <Text style={styles.kicker}>{source === 'gnews' || source === 'google_news_rss' ? 'Noticias reais' : 'Radar local'}</Text>
             <Text style={styles.heroTitle}>Contexto para o teu dinheiro</Text>
             <Text style={styles.heroSub}>Inflacao, juros, banca e consumo filtrados pela localizacao.</Text>
           </View>
@@ -118,6 +118,12 @@ export default function DiscoverScreen({ navigation }) {
             </Pressable>
           </Animated.View>
         ))}
+        {!articles.length && (
+          <View style={styles.empty}>
+            <Newspaper size={24} color={C.textMid} />
+            <Text style={styles.emptyText}>Ainda nao apareceram noticias. Tenta atualizar ou usar a localizacao.</Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -140,4 +146,6 @@ const styles = StyleSheet.create({
   articleSource: { color: C.brand, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
   articleTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900', lineHeight: 20 },
   articleDesc: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 6 },
+  empty: { alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 36 },
+  emptyText: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', lineHeight: 19 },
 });

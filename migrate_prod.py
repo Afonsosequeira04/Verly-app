@@ -12,7 +12,8 @@ from app import create_app, db, _migrate_db
 from app.models import (
     User, Fatura, Conversa, Meta, ContaBancaria,
     Subscricao, Playlist, playlist_fatura, playlist_membro,
-    OpenBankingConnection, BankTransaction, DealWatchlistItem
+    OpenBankingConnection, BankTransaction, DealWatchlistItem,
+    FamilyInvite, FamilySharedAccount, FamilyCategoryBudget, FamilyExpenseTag
 )
 
 try:

@@ -2,6 +2,7 @@ import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   Pressable,
   RefreshControl,
@@ -34,6 +35,7 @@ import {
 import { liveDealsAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
+import { getMapComponents } from '../utils/maps';
 
 const C = COLORS;
 
@@ -67,7 +69,7 @@ function SectionTitle({ icon, title, action, onAction }) {
 }
 
 function OptionRow({ option }) {
-  const color = option.type === 'nearby' ? C.cyan : C.brandMid;
+  const color = option.type === 'nearby' ? C.cyan : option.type === 'coupon' ? C.yellow : C.brandMid;
   return (
     <Pressable
       onPress={() => option.link && Linking.openURL(option.link)}
@@ -75,15 +77,25 @@ function OptionRow({ option }) {
       style={styles.optionRow}
     >
       <View style={[styles.optionIcon, { backgroundColor: `${color}18` }]}>
-        {option.type === 'nearby' ? <MapPin size={15} color={color} /> : <ShoppingBag size={15} color={color} />}
+        {option.thumbnail ? (
+          <Image source={{ uri: option.thumbnail }} style={styles.optionImage} />
+        ) : option.type === 'nearby' ? (
+          <MapPin size={15} color={color} />
+        ) : (
+          <ShoppingBag size={15} color={color} />
+        )}
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={styles.optionMerchant} numberOfLines={1}>{option.merchant}</Text>
         <Text style={styles.optionMeta} numberOfLines={1}>
           {[
-            option.type === 'nearby' ? option.distance_label : `entrega ${option.delivery_label}`,
+            option.type === 'nearby'
+              ? option.distance_label
+              : option.type === 'coupon'
+                ? 'cupao/desconto'
+                : `entrega ${option.delivery_label}`,
             option.estimated_price ? 'estimado' : option.price_confidence === 'high' ? 'preco real' : null,
-            option.coupon_signal ? 'cupao' : null,
+            option.promotion_label || (option.coupon_signal ? 'cupao' : null),
           ].filter(Boolean).join(' - ')}
         </Text>
       </View>
@@ -94,6 +106,70 @@ function OptionRow({ option }) {
         {!!option.link && <ExternalLink size={13} color={C.textMid} />}
       </View>
     </Pressable>
+  );
+}
+
+function PromotionsBlock({ promotions = [] }) {
+  if (!promotions.length) return null;
+  return (
+    <View style={styles.subPanel}>
+      <SectionTitle icon={<Sparkles size={16} color={C.yellow} />} title="Descontos e cupoes agora" />
+      {promotions.slice(0, 5).map((promo, index) => (
+        <OptionRow key={`${promo.type || 'promo'}-${promo.merchant}-${index}`} option={promo} />
+      ))}
+    </View>
+  );
+}
+
+function LiveDealsMap({ options = [] }) {
+  const nearby = options.filter(item => item.type === 'nearby' && item.lat && item.lng).slice(0, 8);
+  const [MapView, setMapView] = useState(null);
+  const [Marker, setMarker] = useState(null);
+
+  React.useEffect(() => {
+    const maps = getMapComponents();
+    if (maps.supported) {
+      setMapView(() => maps.MapView);
+      setMarker(() => maps.Marker);
+    }
+  }, []);
+
+  if (!nearby.length) return null;
+
+  const center = nearby[0];
+  const hasMap = !!MapView && !!Marker;
+
+  return (
+    <View style={styles.subPanel}>
+      <SectionTitle icon={<MapPin size={16} color={C.cyan} />} title="Lojas perto de ti" />
+      {hasMap && (
+        <View style={styles.dealsMap}>
+          {React.createElement(MapView, {
+            style: { flex: 1 },
+            initialRegion: {
+              latitude: center.lat,
+              longitude: center.lng,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            },
+          },
+            ...nearby.map((store, index) => React.createElement(Marker, {
+              key: `${store.merchant}-${index}`,
+              coordinate: { latitude: store.lat, longitude: store.lng },
+              title: store.merchant,
+              description: [
+                store.price == null ? 'preco a confirmar' : formatMoney(store.price, store.currency),
+                store.distance_label,
+                store.open_now === true ? 'aberta' : store.open_now === false ? 'fechada' : null,
+              ].filter(Boolean).join(' - '),
+            })),
+          )}
+        </View>
+      )}
+      {nearby.map((store, index) => (
+        <OptionRow key={`${store.merchant}-nearby-${index}`} option={store} />
+      ))}
+    </View>
   );
 }
 
@@ -139,6 +215,9 @@ function ResultBlock({ result, onSave }) {
       {(result.options || []).slice(0, 6).map((option, index) => (
         <OptionRow key={`${option.type}-${option.merchant}-${index}`} option={option} />
       ))}
+
+      <PromotionsBlock promotions={result.promotions || []} />
+      <LiveDealsMap options={result.nearby_options || result.options || []} />
 
       <Pressable onPress={onSave} style={styles.saveBtn}>
         <Bell size={15} color="#fff" />
@@ -373,7 +452,6 @@ export default function LiveDealsScreen({ navigation }) {
         {[
           ['search', 'Procurar'],
           ['watchlist', 'Wishlist'],
-          ['replay', 'Replay'],
         ].map(([key, label]) => (
           <Pressable key={key} onPress={() => setTab(key)} style={[styles.tab, tab === key && styles.tabActive]}>
             <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
@@ -470,7 +548,6 @@ export default function LiveDealsScreen({ navigation }) {
           </View>
         )}
 
-        {tab === 'replay' && <ReplayBlock replay={replay} currency={currency} />}
       </ScrollView>
     </View>
   );
@@ -490,6 +567,7 @@ const styles = StyleSheet.create({
   tabTextActive: { color: C.text },
   content: { padding: SPACE.lg, paddingBottom: 120 },
   panel: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 14 },
+  subPanel: { backgroundColor: C.surface2, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: 12, marginTop: 12 },
   sectionTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   sectionTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900' },
@@ -528,10 +606,12 @@ const styles = StyleSheet.create({
   todayBox: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: C.yellowDim, borderRadius: RADIUS.sm, padding: 11, marginBottom: 12 },
   todayText: { flex: 1, color: C.text, fontSize: FONT.sm, fontWeight: '800', lineHeight: 18 },
   optionRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 10 },
-  optionIcon: { width: 34, height: 34, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center' },
+  optionIcon: { width: 42, height: 42, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  optionImage: { width: '100%', height: '100%' },
   optionMerchant: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   optionMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
   optionPrice: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  dealsMap: { height: 178, borderRadius: RADIUS.md, overflow: 'hidden', borderWidth: 1, borderColor: C.border, marginBottom: 8 },
   saveBtn: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: C.green, borderRadius: RADIUS.sm, marginTop: 14 },
   saveText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
   watchCard: { borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 13 },

@@ -175,6 +175,87 @@ class FamilyPlan(db.Model):
     membros = db.relationship('User', secondary=family_member, lazy='dynamic')
 
 
+class FamilyInvite(db.Model):
+    __tablename__ = 'family_invites'
+
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('family_plans.id'), nullable=False, index=True)
+    invited_email = db.Column(db.String(150), nullable=False, index=True)
+    invited_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    token = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    role = db.Column(db.String(20), default='partner')
+    status = db.Column(db.String(20), default='pending', index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime)
+    responded_at = db.Column(db.DateTime)
+
+    family = db.relationship('FamilyPlan', backref=db.backref('invites', lazy=True, cascade='all, delete-orphan'))
+    invited_user = db.relationship('User', foreign_keys=[invited_user_id])
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+
+class FamilySharedAccount(db.Model):
+    __tablename__ = 'family_shared_accounts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('family_plans.id'), nullable=False, index=True)
+    conta_bancaria_id = db.Column(db.Integer, db.ForeignKey('contas_bancarias.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    added_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    family = db.relationship('FamilyPlan', backref=db.backref('shared_accounts', lazy=True, cascade='all, delete-orphan'))
+    conta = db.relationship('ContaBancaria')
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('family_id', 'conta_bancaria_id', name='uq_family_shared_account'),
+    )
+
+
+class FamilyCategoryBudget(db.Model):
+    __tablename__ = 'family_category_budgets'
+
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('family_plans.id'), nullable=False, index=True)
+    category = db.Column(db.String(80), nullable=False)
+    amount = db.Column(db.Float, default=0)
+    currency = db.Column(db.String(10), default='EUR')
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    family = db.relationship('FamilyPlan', backref=db.backref('category_budgets', lazy=True, cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.UniqueConstraint('family_id', 'category', name='uq_family_category_budget'),
+    )
+
+
+class FamilyExpenseTag(db.Model):
+    __tablename__ = 'family_expense_tags'
+
+    id = db.Column(db.Integer, primary_key=True)
+    family_id = db.Column(db.Integer, db.ForeignKey('family_plans.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    source_type = db.Column(db.String(30), nullable=False)
+    source_id = db.Column(db.Integer, nullable=False)
+    include_family = db.Column(db.Boolean, default=True)
+    category = db.Column(db.String(80))
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    family = db.relationship('FamilyPlan', backref=db.backref('expense_tags', lazy=True, cascade='all, delete-orphan'))
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('family_id', 'source_type', 'source_id', name='uq_family_expense_tag'),
+    )
+
+
 class Bill(db.Model):
     __tablename__ = 'bills'
 

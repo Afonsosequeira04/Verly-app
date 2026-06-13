@@ -1,7 +1,10 @@
 import json
 import math
+import os
 from collections import defaultdict
 from datetime import date, datetime
+
+import requests
 
 from app import db
 from app.financial_records import clean_currency, convert_currency, normalize_text
@@ -93,8 +96,68 @@ def _coupon_signal(option):
         option.get('merchant') or '',
         option.get('source') or '',
         option.get('loja') or '',
+        option.get('snippet') or '',
     ]))
     return any(token in text for token in ('cupao', 'coupon', 'promo', 'desconto', 'sale', 'codigo'))
+
+
+def _promotion_label(option):
+    text = normalize_text(' '.join([
+        option.get('title') or '',
+        option.get('name') or '',
+        option.get('nome') or '',
+        option.get('snippet') or '',
+        option.get('source') or '',
+        option.get('loja') or '',
+    ]))
+    if any(token in text for token in ('cupao', 'coupon', 'codigo')):
+        return 'Cupao possivel'
+    if any(token in text for token in ('desconto', 'promo', 'sale', 'black friday', 'outlet')):
+        return 'Desconto atual'
+    return None
+
+
+def _coupon_options(product_name, currency):
+    api_key = os.getenv('SERPAPI_KEY') or os.getenv('SERP_API_KEY')
+    if not api_key:
+        return {'configured': False, 'items': [], 'message': 'Configura SERPAPI_KEY para procurar cupoes atuais.'}
+    try:
+        response = requests.get(
+            'https://serpapi.com/search.json',
+            params={
+                'engine': 'google',
+                'q': f'{product_name} cupao desconto promocao codigo Portugal',
+                'gl': 'pt',
+                'hl': 'pt',
+                'api_key': api_key,
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        return {'configured': True, 'items': [], 'message': f'Nao foi possivel procurar cupoes agora: {exc}'}
+
+    items = []
+    for raw in (data.get('organic_results') or [])[:6]:
+        title = raw.get('title') or ''
+        snippet = raw.get('snippet') or ''
+        if not _coupon_signal({'title': title, 'snippet': snippet, 'source': raw.get('source') or ''}):
+            continue
+        items.append({
+            'type': 'coupon',
+            'title': title,
+            'merchant': raw.get('source') or raw.get('displayed_link') or 'Cupao',
+            'price': None,
+            'currency': currency,
+            'link': raw.get('link'),
+            'snippet': snippet,
+            'coupon_signal': True,
+            'promotion_label': _promotion_label({'title': title, 'snippet': snippet}) or 'Cupao atual',
+            'source': 'Google Search',
+            'reasons': ['Cupao/desconto encontrado agora'],
+        })
+    return {'configured': True, 'items': items, 'message': '' if items else 'Sem cupoes atuais encontrados.'}
 
 
 def _store_offer_match(store_name, offers):
@@ -167,6 +230,7 @@ def _online_options(product_name, category, currency):
             'source_currency': offer.get('moeda') or 'EUR',
             'link': offer.get('link'),
             'thumbnail': offer.get('thumbnail'),
+            'promotion_label': _promotion_label(offer),
             'delivery_days': days,
             'delivery_label': _delivery_label(days),
             'distance_km': None,
@@ -226,8 +290,15 @@ def _nearby_options(product_name, category, lat, lng, radius_km, currency, onlin
             'lat': store.get('lat'),
             'lng': store.get('lng'),
             'address': store.get('endereco'),
+            'place_id': store.get('place_id'),
+            'rating': store.get('rating'),
+            'reviews': store.get('reviews'),
+            'open_now': store.get('open_now'),
+            'thumbnail': (match or {}).get('thumbnail') or store.get('photo_url'),
+            'store_photo_url': store.get('photo_url'),
             'stock': 'por_confirmar',
             'coupon_signal': _coupon_signal(match or store),
+            'promotion_label': _promotion_label(match or store),
             'price_confidence': 'medium' if match else ('low' if estimated else 'unknown'),
             'source': store.get('fonte') or 'Google Places/OSM',
             'matched_online_offer': match,
@@ -289,6 +360,8 @@ def _decorate_option(option, urgency, budget_context, online_prices):
             reasons.append('Abaixo da mediana encontrada')
     if option.get('coupon_signal'):
         reasons.append('Sinal de promocao/cupao')
+    if option.get('promotion_label'):
+        reasons.append(option.get('promotion_label'))
 
     remaining = budget_context.get('remaining')
     if remaining is not None and option.get('price') is not None:
@@ -337,6 +410,7 @@ def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=No
     budget_context = _budget_context(user_id, budget_limit)
     online = _online_options(product_name, category, currency)
     nearby = _nearby_options(product_name, category, lat, lng, radius_km, currency, online.get('raw_items'))
+    coupons = _coupon_options(product_name, currency)
 
     online_prices = [row.get('price') for row in online['options'] if row.get('price') is not None]
     all_options = [
@@ -355,6 +429,11 @@ def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=No
     decision_text = _decision_text(best, today_best, urgency, currency)
     online_sorted = sorted([o for o in all_options if o.get('type') == 'online'], key=lambda r: r.get('effective_cost', 999999))
     nearby_sorted = sorted([o for o in all_options if o.get('type') == 'nearby'], key=lambda r: r.get('effective_cost', 999999))
+    promotions = [
+        option for option in all_options
+        if option.get('coupon_signal') or option.get('promotion_label')
+    ]
+    promotions = [*promotions[:5], *coupons.get('items', [])[:5]]
 
     return {
         'success': True,
@@ -372,12 +451,15 @@ def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=No
         'options': all_options[:12],
         'online_options': online_sorted[:8],
         'nearby_options': nearby_sorted[:8],
+        'promotions': promotions[:8],
         'budget_context': budget_context,
         'sources': {
             'online_prices_configured': online['configured'],
             'online_message': online['message'],
             'nearby_configured': nearby['configured'],
             'nearby_message': nearby['message'],
+            'coupons_configured': coupons['configured'],
+            'coupons_message': coupons['message'],
         },
         'generated_at': datetime.utcnow().isoformat(),
     }
@@ -417,7 +499,7 @@ def build_watchlist_alerts(item, analysis, previous_price=None):
             'message': f'{nearest.get("merchant")} fica a {nearest.get("distance_label") or "pouca distancia"}; stock a confirmar.',
         })
 
-    coupon = next((o for o in options if o.get('coupon_signal')), None)
+    coupon = next((o for o in [*options, *((analysis.get('promotions') or []))] if o.get('coupon_signal')), None)
     if item.notify_coupon and coupon:
         alerts.append({
             'type': 'coupon',

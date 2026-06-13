@@ -229,7 +229,7 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
     setMarker(() => maps.Marker);
   }, []);
 
-  if (!lojas.length) return null;
+  if (!userCoords?.lat || !userCoords?.lng) return null;
 
   const hasMap = !!MapView && !!Marker && userCoords?.lat && userCoords?.lng;
   const firstStores = lojas.slice(0, 4);
@@ -241,7 +241,9 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
           <MapPin size={16} color={C.cyan} />
           <View>
             <Text style={s.sectionTitle}>Mapa de lojas</Text>
-            <Text style={s.sectionSub}>Precos encontrados junto das lojas proximas</Text>
+            <Text style={s.sectionSub}>
+              {lojas.length ? 'Precos encontrados junto das lojas proximas' : 'Localizacao ativa - procura lojas para este produto'}
+            </Text>
           </View>
         </View>
         <TouchableOpacity onPress={onOpen} style={s.ghostBtn}>
@@ -278,7 +280,7 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
         </View>
       )}
 
-      {firstStores.map((loja, index) => (
+      {firstStores.length ? firstStores.map((loja, index) => (
         <View key={`${loja.place_id || loja.id || loja.nome}-row-${index}`} style={s.storeRow}>
           <View style={s.storeIcon}><ShoppingBag size={14} color={C.cyan} /></View>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -287,7 +289,9 @@ function MiniMapa({ lojas, userCoords, onOpen }) {
           </View>
           {!!loja.oferta && <Text style={s.storePrice}>{offerLabel(loja.oferta)}</Text>}
         </View>
-      ))}
+      )) : (
+        <Text style={s.marketMessage}>Ainda nao ha lojas para mostrar. Toca em Abrir para procurar outra vez.</Text>
+      )}
     </Animated.View>
   );
 }
@@ -351,7 +355,7 @@ function LocationHint({ message, permission, onEnable, loading }) {
         <MapPin size={18} color={C.brandMid || C.brand} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={s.locationTitle}>Localizacao desligada</Text>
+        <Text style={s.locationTitle}>Mapa e localizacao</Text>
         <Text style={s.locationText}>{message}</Text>
       </View>
       <TouchableOpacity onPress={onEnable} disabled={loading} style={[s.locationBtn, loading && { opacity: 0.65 }]}>
@@ -398,6 +402,11 @@ export default function ScoreScreen({ route }) {
 
   const resolveCoords = useCallback(async ({ force = false } = {}) => {
     if (userCoords.lat && userCoords.lng) return userCoords;
+    const servicesEnabled = await Location.hasServicesEnabledAsync().catch(() => true);
+    if (!servicesEnabled) {
+      setLocationPermission(prev => ({ ...prev, status: 'services_off' }));
+      return null;
+    }
     const current = await Location.getForegroundPermissionsAsync();
     let permission = current;
     if (force || current.status !== 'granted') {
@@ -407,9 +416,12 @@ export default function ScoreScreen({ route }) {
     if (permission.status !== 'granted') return null;
     let loc = null;
     try {
-      loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    } catch (_) {
       loc = await Location.getLastKnownPositionAsync();
+      if (!loc?.coords) {
+        loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      }
+    } catch (_) {
+      loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low }).catch(() => null);
     }
     if (!loc?.coords) return null;
     const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
@@ -417,7 +429,7 @@ export default function ScoreScreen({ route }) {
     return coords;
   }, [userCoords]);
 
-  const loadMarketData = useCallback(async ({ openMap = false, silent = true } = {}) => {
+  const loadMarketData = useCallback(async ({ openMap = false, silent = true, coordsOverride = null, forceLocation = false } = {}) => {
     const cleanItem = item.trim();
     if (cleanItem.length < 3) return;
 
@@ -432,7 +444,7 @@ export default function ScoreScreen({ route }) {
           items: [],
           message: e.message || 'Nao foi possivel procurar precos agora.',
         })),
-        resolveCoords().catch(() => null),
+        coordsOverride || resolveCoords({ force: forceLocation }).catch(() => null),
       ]);
 
       if (seq !== marketSeqRef.current) return;
@@ -483,7 +495,7 @@ export default function ScoreScreen({ route }) {
         setMarketError('');
         showToast('Localizacao ativa', 'success');
         if (item.trim().length >= 3) {
-          await loadMarketData({ silent: false });
+          await loadMarketData({ silent: false, coordsOverride: coords });
         } else {
           Alert.alert('Localizacao ativa', 'Agora escreve um produto para veres lojas proximas.');
         }
@@ -528,7 +540,7 @@ export default function ScoreScreen({ route }) {
     }
   };
 
-  const handleLojas = () => loadMarketData({ openMap: true, silent: false });
+  const handleLojas = () => loadMarketData({ openMap: true, silent: false, forceLocation: true });
   const score = resultado?.score_final ?? resultado?.score ?? 0;
   const precoPago = parseFloat(String(preco).replace(',', '.'));
 
