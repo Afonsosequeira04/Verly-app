@@ -96,7 +96,12 @@ async function parseJsonResponse(response) {
   try {
     return JSON.parse(text);
   } catch (_) {
-    return { error: text };
+    const looksLikeHtml = /^\s*</.test(text) || /<!doctype|<html|<body/i.test(text);
+    return {
+      error: looksLikeHtml
+        ? 'Erro interno do servidor. Tenta novamente daqui a pouco.'
+        : text.slice(0, 300),
+    };
   }
 }
 
@@ -166,7 +171,7 @@ export async function apiFetch(path, options = {}) {
   }
 
   if (!response.ok) {
-    const err = new Error(data.error || `Erro ${response.status}`);
+    const err = new Error(data.error || data.message || `Erro ${response.status}`);
     err.code = data.code;
     throw err;
   }
@@ -199,7 +204,7 @@ async function apiUpload(path, formData) {
   const data = await parseJsonResponse(response);
 
   if (!response.ok) {
-    throw new Error(data.error || `Erro ${response.status}`);
+    throw new Error(data.error || data.message || `Erro ${response.status}`);
   }
 
   return data;

@@ -390,37 +390,46 @@ def firebase_login():
         logger.warning(f'Firebase token inválido: {e}')
         return jsonify({'error': 'Token Firebase inválido ou expirado.'}), 401
 
-    uid   = decoded.get('uid', '')
+    uid   = (decoded.get('uid') or '').strip()
     email = decoded.get('email', '').lower().strip()
     nome  = decoded.get('name') or (email.split('@')[0] if email else 'Utilizador')
     foto  = decoded.get('picture', '')
 
-    user = None
-    if uid:
-        user = User.query.filter_by(google_id=uid).first()
-    if not user and email:
-        user = User.query.filter_by(email=email).first()
+    if not email:
+        logger.warning('Firebase token sem email: uid=%s', uid or 'sem-uid')
+        return jsonify({'error': 'A conta Google nao devolveu email. Verifica as permissoes do Firebase/Google Sign-In.'}), 400
 
-    if not user:
-        user = User(
-            nome=nome[:100],
-            email=email,
-            google_id=uid,
-            password_hash='',
-            onboarding_completo=False,
-            avatar_url=foto or None,
-            email_confirmado=True,
-        )
-        db.session.add(user)
-        db.session.flush()
-    else:
-        if uid and not user.google_id:
-            user.google_id = uid
-        if foto and not user.avatar_url:
-            user.avatar_url = foto
-        user.email_confirmado = True
+    try:
+        user = None
+        if uid:
+            user = User.query.filter_by(google_id=uid).first()
+        if not user:
+            user = User.query.filter_by(email=email).first()
 
-    db.session.commit()
+        if not user:
+            user = User(
+                nome=nome[:100],
+                email=email,
+                google_id=uid or None,
+                password_hash='',
+                onboarding_completo=False,
+                avatar_url=foto or None,
+                email_confirmado=True,
+            )
+            db.session.add(user)
+            db.session.flush()
+        else:
+            if uid and not user.google_id:
+                user.google_id = uid
+            if foto and not user.avatar_url:
+                user.avatar_url = foto
+            user.email_confirmado = True
+
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.exception('Erro no login Firebase para email=%s uid=%s: %s', email, uid or 'sem-uid', e)
+        return jsonify({'error': 'Nao foi possivel concluir o login Google. Tenta novamente ou entra com email/password.'}), 500
 
     access_token  = create_access_token(identity=str(user.id))
     refresh_token = create_refresh_token(identity=str(user.id))
