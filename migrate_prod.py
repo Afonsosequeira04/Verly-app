@@ -8,7 +8,7 @@ import sys
 # Forçar ambiente de produção
 os.environ['FLASK_ENV'] = 'production'
 
-from app import create_app, db
+from app import create_app, db, _migrate_db
 from app.models import (
     User, Fatura, Conversa, Meta, ContaBancaria,
     Subscricao, Playlist, playlist_fatura, playlist_membro,
@@ -25,6 +25,9 @@ app = create_app()
 with app.app_context():
     print("A criar tabelas no PostgreSQL...")
     db.create_all()
+    print("A verificar colunas em falta...")
+    _migrate_db()
+    print("Colunas verificadas com sucesso!")
     print("✅ Todas as tabelas criadas com sucesso!")
 
     # Listar tabelas criadas
