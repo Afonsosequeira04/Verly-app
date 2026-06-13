@@ -1,19 +1,26 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import {
   AlertTriangle,
   ArrowRight,
+  Banknote,
+  Bell,
   Brain,
-  CheckCircle2,
-  Gauge,
+  CalendarDays,
+  LineChart,
+  Radar,
+  Receipt,
+  Search,
   ShieldCheck,
   Sparkles,
   Target,
-  Users,
+  UploadCloud,
+  WalletCards,
 } from 'lucide-react-native';
+
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
-import { formatCompactMoney, formatMoney } from '../utils/money';
-import { BitReveal, GlowShell, KineticPressable, MorphingBars, SignalPill } from './AnimatedBits';
+import { formatCompactMoney } from '../utils/money';
+import { BitReveal, KineticPressable, SignalPill } from './AnimatedBits';
 
 const C = COLORS;
 
@@ -24,44 +31,68 @@ function priorityColor(priority) {
   return C.green;
 }
 
-function routeToLabel(route) {
-  if (route === 'OpenBanking') return 'Banco';
-  if (route === 'ImportarDados') return 'Importar';
+function routeToLabel(route, action) {
+  if (action === 'upload') return 'Adicionar';
+  if (route === 'ImportarDados' || route === 'OpenBanking') return 'Banco';
   if (route === 'MinhasSubscricoes') return 'Subscricoes';
+  if (route === 'LiveDeals') return 'Live Deals';
+  if (route === 'RefundRadar') return 'Reembolsos';
+  if (route === 'Bills') return 'Bills';
   if (route === 'Metas') return 'Metas';
   if (route === 'Estatisticas') return 'Analise';
   if (route === 'Score') return 'Score';
   if (route === 'NetWorth') return 'Patrimonio';
-  if (route === 'Grupos') return 'Grupos';
+  if (route === 'Chat') return 'Ask';
   return 'Abrir';
 }
 
-function ActionCard({ item, index, navigation }) {
+function actionIcon(item, color, size = 17) {
+  if (item.action === 'upload') return <UploadCloud size={size} color={color} />;
+  if (item.route === 'ImportarDados' || item.route === 'OpenBanking') return <Banknote size={size} color={color} />;
+  if (item.route === 'LiveDeals') return <Search size={size} color={color} />;
+  if (item.route === 'RefundRadar') return <Radar size={size} color={color} />;
+  if (item.route === 'Bills') return <CalendarDays size={size} color={color} />;
+  if (item.route === 'Metas') return <Target size={size} color={color} />;
+  if (item.route === 'Estatisticas') return <LineChart size={size} color={color} />;
+  if (item.route === 'MinhasSubscricoes') return <Bell size={size} color={color} />;
+  if (item.route === 'NetWorth') return <WalletCards size={size} color={color} />;
+  if (item.route === 'Faturas') return <Receipt size={size} color={color} />;
+  if (item.priority === 'critical') return <AlertTriangle size={size} color={color} />;
+  return <Sparkles size={size} color={color} />;
+}
+
+function runAction(item, navigation, onUpload) {
+  if (item.action === 'upload') {
+    onUpload?.();
+    return;
+  }
+  if (item.route) navigation?.navigate?.(item.route, item.params || undefined);
+}
+
+function ActionCard({ item, index, navigation, onUpload }) {
   const color = priorityColor(item.priority);
   const metric = item.metric != null
     ? (item.currency ? formatCompactMoney(item.metric, item.currency) : String(item.metric))
     : null;
 
   return (
-    <BitReveal delay={120 + index * 55}>
+    <BitReveal delay={110 + index * 45}>
       <KineticPressable
-        onPress={() => item.route && navigation?.navigate?.(item.route)}
-        style={[styles.actionCard, { borderColor: color + '42' }]}
+        onPress={() => runAction(item, navigation, onUpload)}
+        style={[styles.actionCard, { borderColor: color + '3F' }]}
       >
         <View style={[styles.actionIcon, { backgroundColor: color + '18' }]}>
-          {item.priority === 'critical'
-            ? <AlertTriangle size={15} color={color} />
-            : <Target size={15} color={color} />}
+          {actionIcon(item, color, 16)}
         </View>
-        <View style={{ flex: 1 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
           <View style={styles.actionTop}>
             <Text style={styles.actionTitle} numberOfLines={1}>{item.title}</Text>
             {!!metric && <Text style={[styles.actionMetric, { color }]}>{metric}</Text>}
           </View>
-          <Text style={styles.actionBody} numberOfLines={2}>{item.body}</Text>
+          {!!item.body && <Text style={styles.actionBody} numberOfLines={2}>{item.body}</Text>}
         </View>
         <View style={styles.actionRoute}>
-          <Text style={styles.actionRouteText}>{routeToLabel(item.route)}</Text>
+          <Text style={styles.actionRouteText}>{routeToLabel(item.route, item.action)}</Text>
           <ArrowRight size={12} color={color} />
         </View>
       </KineticPressable>
@@ -69,46 +100,70 @@ function ActionCard({ item, index, navigation }) {
   );
 }
 
-function ChallengeCard({ item, index, navigation }) {
-  const days = item.days || 1;
+function ToolTile({ item, index, navigation, onUpload }) {
+  const color = item.color || priorityColor(item.priority);
   return (
-    <BitReveal delay={220 + index * 70} style={{ flex: 1 }}>
-      <Pressable
-        onPress={() => navigation?.navigate?.('Grupos')}
-        style={styles.challengeCard}
+    <BitReveal delay={180 + index * 35} style={styles.toolTileWrap}>
+      <KineticPressable
+        onPress={() => runAction(item, navigation, onUpload)}
+        style={styles.toolTile}
       >
-        <View style={styles.challengeTop}>
-          <Users size={14} color={C.green} />
-          <Text style={styles.challengeDays}>{days} {days === 1 ? 'dia' : 'dias'}</Text>
+        <View style={[styles.toolIcon, { backgroundColor: color + '18' }]}>
+          {actionIcon(item, color, 16)}
         </View>
-        <Text style={styles.challengeTitle} numberOfLines={2}>{item.title}</Text>
-        <Text style={styles.challengeText} numberOfLines={2}>{item.description}</Text>
-        {Number(item.target || 0) > 0 && (
-          <Text style={styles.challengeTarget}>
-            Alvo {formatMoney(item.target, item.currency || 'EUR', { maximumFractionDigits: 0, minimumFractionDigits: 0 })}
-          </Text>
-        )}
-      </Pressable>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.toolTitle} numberOfLines={1}>{item.title}</Text>
+          <Text style={styles.toolBody} numberOfLines={1}>{item.body}</Text>
+        </View>
+      </KineticPressable>
     </BitReveal>
   );
+}
+
+function mergeTools(actions, baseTools) {
+  const seen = new Set();
+  const merged = [];
+  [...actions, ...baseTools].forEach((item) => {
+    const key = item.action ? `action:${item.action}` : item.route ? `route:${item.route}` : item.id || item.title;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  });
+  return merged;
 }
 
 export default function IntelligenceDeck({
   intelligence,
   navigation,
   compact = false,
-  title = 'Cockpit inteligente',
+  title = 'Copiloto financeiro',
+  onUpload,
 }) {
-  if (!intelligence) return null;
-
-  const action = intelligence.primary_action || {};
-  const actions = intelligence.next_actions || [];
-  const quality = intelligence.data_quality || {};
-  const budget = intelligence.budget || {};
-  const challenges = intelligence.social_challenges || [];
-  const score = Number(intelligence.score || 0);
+  const action = intelligence?.primary_action || {
+    id: 'import_sources',
+    priority: 'high',
+    title: 'Ligar dados reais',
+    body: 'Importa banco, Gmail ou faturas para a Verly conseguir agir por ti.',
+    route: 'ImportarDados',
+  };
+  const actions = intelligence?.next_actions || [];
+  const quality = intelligence?.data_quality || {};
+  const budget = intelligence?.budget || {};
+  const score = Number(intelligence?.score || 0);
   const scoreColor = score >= 75 ? C.green : score >= 50 ? C.yellow : C.red;
-  const bars = actions.map((item, index) => Math.max(0.25, 0.92 - index * 0.12));
+
+  const baseTools = [
+    { id: 'upload_invoice', priority: 'medium', title: 'Fatura', body: 'Digitalizar', action: 'upload', color: C.brand },
+    { id: 'connect_bank_tool', priority: 'medium', title: 'Banco', body: 'Sincronizar', route: 'ImportarDados', color: C.green },
+    { id: 'live_deals_tool', priority: 'medium', title: 'Live Deals', body: 'Comparar antes', route: 'LiveDeals', color: C.cyan },
+    { id: 'bills_tool', priority: 'medium', title: 'Bills', body: 'Prazos', route: 'Bills', color: C.yellow },
+    { id: 'refund_tool', priority: 'medium', title: 'Refund Radar', body: 'Recuperar', route: 'RefundRadar', color: C.orange },
+    { id: 'stats_tool', priority: 'medium', title: 'Analise', body: 'Gastos', route: 'Estatisticas', color: C.brandMid },
+  ];
+  const tools = mergeTools(actions, baseTools).slice(0, compact ? 4 : 8);
+  const recommended = actions
+    .filter(item => (item.id || item.route) !== (action.id || action.route))
+    .slice(0, compact ? 1 : 2);
 
   return (
     <View style={[styles.wrap, compact && styles.compactWrap]}>
@@ -117,32 +172,35 @@ export default function IntelligenceDeck({
           <Brain size={15} color={C.brand} />
           <Text style={styles.sectionTitle}>{title}</Text>
         </View>
-        <SignalPill label={quality.label || 'A analisar'} value={`${quality.score || 0}%`} color={scoreColor} />
+        <SignalPill
+          label={quality.label || 'A analisar'}
+          value={score ? `${score}/100` : `${quality.score || 0}%`}
+          color={score ? scoreColor : C.brand}
+        />
       </View>
 
-      <GlowShell delay={40} colors={[scoreColor + '66', C.brand + '44', C.surface]}>
-        <View style={styles.hero}>
-          <View style={{ flex: 1 }}>
-            <View style={styles.heroBadge}>
-              <Sparkles size={13} color={scoreColor} />
-              <Text style={[styles.heroBadgeText, { color: scoreColor }]}>Score {score}/100</Text>
-            </View>
-            <Text style={styles.heroTitle}>{intelligence.headline || 'Analise pronta'}</Text>
-            <Text style={styles.heroAction} numberOfLines={2}>{action.title || 'Sem acao critica'}</Text>
-            {!!action.body && <Text style={styles.heroBody} numberOfLines={3}>{action.body}</Text>}
+      <KineticPressable
+        onPress={() => runAction(action, navigation, onUpload)}
+        style={[styles.primary, { borderColor: priorityColor(action.priority) + '55' }]}
+      >
+        <View style={styles.primaryTop}>
+          <View style={[styles.primaryIcon, { backgroundColor: priorityColor(action.priority) + '18' }]}>
+            {actionIcon(action, priorityColor(action.priority), 20)}
           </View>
-          <View style={styles.heroViz}>
-            <Gauge size={24} color={scoreColor} />
-            <MorphingBars bars={bars} color={scoreColor} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.kicker}>Proximo melhor passo</Text>
+            <Text style={styles.primaryTitle} numberOfLines={2}>{action.title || 'Abrir analise'}</Text>
           </View>
+          <ArrowRight size={18} color={priorityColor(action.priority)} />
         </View>
-      </GlowShell>
+        {!!action.body && <Text style={styles.primaryBody} numberOfLines={3}>{action.body}</Text>}
+      </KineticPressable>
 
       <View style={styles.signalRow}>
         <SignalPill
           label="Orcamento"
           value={budget.pct != null ? `${Math.round(budget.pct)}%` : 'sem limite'}
-          color={budget.status === 'over' ? C.red : budget.status === 'watch' ? C.yellow : C.green}
+          color={budget.status === 'over' ? C.red : budget.status === 'watch' || budget.status === 'forecast_over' ? C.yellow : C.green}
         />
         <SignalPill
           label="Banco"
@@ -156,27 +214,23 @@ export default function IntelligenceDeck({
         />
       </View>
 
-      {!compact && actions.length > 0 && (
+      {!compact && recommended.length > 0 && (
         <View style={styles.actions}>
-          {actions.slice(0, 3).map((item, index) => (
-            <ActionCard key={item.id || index} item={item} index={index} navigation={navigation} />
+          {recommended.map((item, index) => (
+            <ActionCard key={item.id || index} item={item} index={index} navigation={navigation} onUpload={onUpload} />
           ))}
         </View>
       )}
 
-      {!compact && challenges.length > 0 && (
-        <View style={styles.challengeSection}>
-          <View style={styles.challengeHeader}>
-            <ShieldCheck size={14} color={C.green} />
-            <Text style={styles.challengeHeaderText}>Acoes colaborativas</Text>
-          </View>
-          <View style={styles.challengeGrid}>
-            {challenges.slice(0, 2).map((item, index) => (
-              <ChallengeCard key={`${item.title}-${index}`} item={item} index={index} navigation={navigation} />
-            ))}
-          </View>
-        </View>
-      )}
+      <View style={styles.toolsHeader}>
+        <ShieldCheck size={14} color={C.green} />
+        <Text style={styles.toolsHeaderText}>Ferramentas rapidas</Text>
+      </View>
+      <View style={styles.toolGrid}>
+        {tools.map((item, index) => (
+          <ToolTile key={item.id || `${item.route}-${index}`} item={item} index={index} navigation={navigation} onUpload={onUpload} />
+        ))}
+      </View>
     </View>
   );
 }
@@ -199,18 +253,17 @@ const styles = StyleSheet.create({
     letterSpacing: 1.1,
     textTransform: 'uppercase',
   },
-  hero: {
-    minHeight: 176,
-    flexDirection: 'row',
-    gap: SPACE.md,
+  primary: {
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
     padding: SPACE.md,
   },
-  heroBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  heroBadgeText: { fontSize: FONT.xs, fontWeight: '900' },
-  heroTitle: { color: C.text, fontSize: FONT.xl, fontWeight: '900', letterSpacing: 0 },
-  heroAction: { color: C.text, fontSize: FONT.md, fontWeight: '900', marginTop: 10 },
-  heroBody: { color: C.textMid, fontSize: FONT.sm, fontWeight: '600', lineHeight: 19, marginTop: 5 },
-  heroViz: { width: 82, alignItems: 'center', justifyContent: 'space-between' },
+  primaryTop: { flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  primaryIcon: { width: 42, height: 42, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center' },
+  kicker: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase' },
+  primaryTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900', marginTop: 2, lineHeight: 21 },
+  primaryBody: { color: C.textMid, fontSize: FONT.sm, fontWeight: '600', lineHeight: 19, marginTop: 10 },
   signalRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -219,7 +272,7 @@ const styles = StyleSheet.create({
   },
   actions: { gap: 8, marginTop: SPACE.sm },
   actionCard: {
-    minHeight: 76,
+    minHeight: 72,
     flexDirection: 'row',
     alignItems: 'center',
     gap: SPACE.sm,
@@ -235,21 +288,22 @@ const styles = StyleSheet.create({
   actionBody: { color: C.textMid, fontSize: FONT.xs, fontWeight: '600', lineHeight: 16 },
   actionRoute: { alignItems: 'center', gap: 4 },
   actionRouteText: { color: C.textSub, fontSize: 9, fontWeight: '900' },
-  challengeSection: { marginTop: SPACE.md },
-  challengeHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  challengeHeaderText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase' },
-  challengeGrid: { flexDirection: 'row', gap: 8 },
-  challengeCard: {
-    minHeight: 128,
+  toolsHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: SPACE.md, marginBottom: 8 },
+  toolsHeaderText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase' },
+  toolGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  toolTileWrap: { width: '48%' },
+  toolTile: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
     backgroundColor: C.surface,
     borderRadius: RADIUS.md,
     borderWidth: 1,
-    borderColor: C.green + '33',
-    padding: SPACE.sm,
+    borderColor: C.border,
+    padding: 10,
   },
-  challengeTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  challengeDays: { color: C.green, fontSize: 10, fontWeight: '900' },
-  challengeTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
-  challengeText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '600', lineHeight: 16, marginTop: 5 },
-  challengeTarget: { color: C.green, fontSize: FONT.xs, fontWeight: '900', marginTop: 8 },
+  toolIcon: { width: 34, height: 34, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center' },
+  toolTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  toolBody: { color: C.textMid, fontSize: FONT.xs, fontWeight: '700', marginTop: 2 },
 });

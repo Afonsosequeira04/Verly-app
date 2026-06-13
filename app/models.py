@@ -232,6 +232,36 @@ class RefundOpportunityState(db.Model):
     )
 
 
+class DealWatchlistItem(db.Model):
+    __tablename__ = 'deal_watchlist_items'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    product_name = db.Column(db.String(220), nullable=False)
+    category = db.Column(db.String(80), default='Outros')
+    target_price = db.Column(db.Float)
+    currency = db.Column(db.String(10), default='EUR')
+    urgency = db.Column(db.String(20), default='flexible')
+    budget_limit = db.Column(db.Float)
+    radius_km = db.Column(db.Float, default=5)
+    lat = db.Column(db.Float)
+    lng = db.Column(db.Float)
+    active = db.Column(db.Boolean, default=True, index=True)
+    notify_price_drop = db.Column(db.Boolean, default=True)
+    notify_stock = db.Column(db.Boolean, default=True)
+    notify_coupon = db.Column(db.Boolean, default=True)
+    notify_good_time = db.Column(db.Boolean, default=True)
+    last_price = db.Column(db.Float)
+    last_store = db.Column(db.String(160))
+    last_checked_at = db.Column(db.DateTime)
+    last_result_json = db.Column(db.Text)
+    last_alerts_json = db.Column(db.Text)
+    criado_em = db.Column(db.DateTime, default=datetime.utcnow)
+    atualizado_em = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = db.relationship('User', backref=db.backref('deal_watchlist_items', lazy=True, cascade='all, delete-orphan'))
+
+
 class Subscricao(db.Model):
     __tablename__ = 'subscricoes'
 

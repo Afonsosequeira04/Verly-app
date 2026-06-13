@@ -152,6 +152,12 @@ def gerar_notificacoes(user_id: int, orcamento: float = 0) -> list:
     except Exception:
         pass
 
+    try:
+        from app.live_deals import watchlist_notifications
+        notifs.extend(watchlist_notifications(user_id, limit=4))
+    except Exception:
+        pass
+
     order = {'alta': 0, 'media': 1, 'info': 2}
     notifs.sort(key=lambda n: order.get(n['urgencia'], 9))
 

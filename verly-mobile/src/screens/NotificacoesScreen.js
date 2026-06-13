@@ -46,8 +46,9 @@ export default function NotificacoesScreen({ navigation }) {
             <TouchableOpacity
               style={[styles.card, { borderLeftColor: color, borderLeftWidth: 3 }]}
               onPress={() => {
-                if (item.action_route) navigation.navigate(item.action_route, { refundKey: item.refund_key });
+                if (item.action_route) navigation.navigate(item.action_route, { refundKey: item.refund_key, watchlistId: item.watchlist_id });
                 else if (String(item.tipo || '').startsWith('refund_')) navigation.navigate('RefundRadar', { refundKey: item.refund_key });
+                else if (String(item.tipo || '').startsWith('live_deal_')) navigation.navigate('LiveDeals', { watchlistId: item.watchlist_id });
               }}
               activeOpacity={0.7}
             >

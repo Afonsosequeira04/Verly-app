@@ -51,6 +51,7 @@ import BillsScreen             from '../screens/BillsScreen';
 import FamilyPlanScreen        from '../screens/FamilyPlanScreen';
 import DiscoverScreen          from '../screens/DiscoverScreen';
 import RefundRadarScreen       from '../screens/RefundRadarScreen';
+import LiveDealsScreen         from '../screens/LiveDealsScreen';
 import { COLORS as THEME_COLORS, RADIUS } from '../constants/theme';
 
 export const COLORS = THEME_COLORS;
@@ -299,6 +300,7 @@ function MenuScreen({ navigation }) {
       items: [
         { label: 'Metas',        screen: 'Metas',        icon: 'target'    },
         { label: 'Bills',        screen: 'Bills',        icon: 'clock'     },
+        { label: 'Live Deals',   screen: 'LiveDeals',    icon: 'star'      },
         { label: 'Refund Radar', screen: 'RefundRadar',  icon: 'star'      },
         { label: 'Net worth',    screen: 'NetWorth',     icon: 'pie'       },
         { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
@@ -619,6 +621,7 @@ function MainStackNav() {
       <MainStack.Screen name="FamilyPlan"      component={FamilyPlanScreen}      options={{ headerShown: false }} />
       <MainStack.Screen name="Discover"        component={DiscoverScreen}        options={{ headerShown: false }} />
       <MainStack.Screen name="RefundRadar"     component={RefundRadarScreen}     options={{ headerShown: false }} />
+      <MainStack.Screen name="LiveDeals"       component={LiveDealsScreen}       options={{ headerShown: false }} />
     </MainStack.Navigator>
   );
 }

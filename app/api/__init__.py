@@ -29,3 +29,4 @@ from app.api import subscricoes    # noqa
 from app.api import networth       # noqa
 from app.api import planning       # noqa
 from app.api import refund_radar   # noqa
+from app.api import live_deals     # noqa

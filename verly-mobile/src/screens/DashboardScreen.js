@@ -3,7 +3,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, Pressable, TouchableOpacity,
   StatusBar, RefreshControl, Modal, Alert,
-  StyleSheet, Dimensions,
+  StyleSheet, Dimensions, ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from '@react-navigation/native';
@@ -48,7 +48,7 @@ const initials = (name = '') =>
   name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PREFS_KEY = '@verly_dashboard_prefs';
-const CARDS_DEFAULT = ['hero', 'intelligence', 'metricas', 'graficos', 'faturas'];
+const CARDS_DEFAULT = ['hero', 'contexto', 'intelligence', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
   mostrarGraficos: true,
@@ -287,51 +287,31 @@ function BankingContext({ data }) {
 function ContextSelector({ currency, onCurrency, accountId, onAccount, accounts = [] }) {
   return (
     <Reveal delay={70} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <View style={[s.card, { padding: 12, gap: 10 }]}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+      <View style={s.contextStrip}>
+        <Text style={s.contextLabel}>Vista</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.contextScroll}>
           {CURRENCIES.map(code => {
             const active = code === currency;
             return (
               <Pressable
                 key={code}
                 onPress={() => onCurrency(code)}
-                style={{
-                  minWidth: 54,
-                  height: 34,
-                  borderRadius: 10,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  borderColor: active ? C.brand : C.border,
-                  backgroundColor: active ? C.brandDim : C.surface2,
-                }}
+                style={[s.contextChip, active && s.contextChipActive]}
               >
-                <Text style={{ color: active ? C.brand : C.textMid, fontSize: 12, fontWeight: '900' }}>{code}</Text>
+                <Text style={[s.contextChipText, active && s.contextChipTextActive]}>{code}</Text>
               </Pressable>
             );
           })}
-        </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {[{ id: 'all', nome_banco: 'Todas' }, ...accounts].map(account => {
+          {[{ id: 'all', nome_banco: 'Todas as contas' }, ...accounts].map(account => {
             const id = account.id === 'all' ? 'all' : String(account.id);
             const active = id === String(accountId || 'all');
             return (
               <Pressable
                 key={id}
                 onPress={() => onAccount(id)}
-                style={{
-                  maxWidth: 190,
-                  height: 34,
-                  borderRadius: 10,
-                  paddingHorizontal: 12,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  borderColor: active ? C.green : C.border,
-                  backgroundColor: active ? C.green + '16' : C.surface2,
-                }}
+                style={[s.contextChip, active && s.contextChipBank]}
               >
-                <Text numberOfLines={1} style={{ color: active ? C.green : C.textMid, fontSize: 12, fontWeight: '800' }}>
+                <Text numberOfLines={1} style={[s.contextChipText, active && s.contextChipBankText]}>
                   {account.nome_banco || account.iban || account.account_id || 'Conta'}
                 </Text>
               </Pressable>
@@ -928,12 +908,24 @@ export default function DashboardScreen({ navigation, route }) {
     switch (id) {
       case 'hero':
         return <HeroCard key="hero" data={data} />;
+      case 'contexto':
+        return (
+          <ContextSelector
+            key="contexto"
+            currency={selectedCurrency}
+            onCurrency={updateCurrency}
+            accountId={selectedAccount}
+            onAccount={setSelectedAccount}
+            accounts={accounts}
+          />
+        );
       case 'intelligence':
         return (
           <IntelligenceDeck
             key="intelligence"
             intelligence={data?.financial_intelligence}
             navigation={navigation}
+            onUpload={() => { haptic.medium(); setUpload(true); }}
           />
         );
       case 'metricas':
@@ -1087,13 +1079,6 @@ export default function DashboardScreen({ navigation, route }) {
       >
         {loading ? <LoadingSkeleton /> : (
           <>
-            <ContextSelector
-              currency={selectedCurrency}
-              onCurrency={updateCurrency}
-              accountId={selectedAccount}
-              onAccount={setSelectedAccount}
-              accounts={accounts}
-            />
             {CARDS_DEFAULT.map((id) => renderCard(id))}
           </>
         )}
@@ -1175,6 +1160,51 @@ const s = StyleSheet.create({
   bigNum:   { fontSize: FONT.h1, fontWeight: '900', color: C.text, letterSpacing: 0 },
   subText:  { fontSize: FONT.sm, color: C.textMid, marginTop: 2 },
   metricVal:{ fontSize: FONT.xl, fontWeight: '900', letterSpacing: 0 },
+  contextStrip: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: C.surface,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  contextLabel: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  contextScroll: { gap: 8, alignItems: 'center', paddingRight: 4 },
+  contextChip: {
+    maxWidth: 180,
+    minHeight: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface2,
+    paddingHorizontal: 10,
+  },
+  contextChipActive: {
+    borderColor: C.brand,
+    backgroundColor: C.brandDim,
+  },
+  contextChipBank: {
+    borderColor: C.green + '66',
+    backgroundColor: C.green + '16',
+  },
+  contextChipText: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+    fontWeight: '900',
+  },
+  contextChipTextActive: { color: C.brand },
+  contextChipBankText: { color: C.green },
   iconBtn: {
     width: 40, height: 40, borderRadius: RADIUS.sm,
     backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,

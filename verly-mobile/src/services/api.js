@@ -520,6 +520,33 @@ export const refundRadarAPI = {
     apiFetch('/refund-radar/state', { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
+export const liveDealsAPI = {
+  search: (data) =>
+    apiFetch('/live-deals/search', { method: 'POST', body: JSON.stringify(data) }),
+
+  watchlist: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/live-deals/watchlist${query ? `?${query}` : ''}`);
+  },
+
+  addWatch: (data) =>
+    apiFetch('/live-deals/watchlist', { method: 'POST', body: JSON.stringify(data) }),
+
+  updateWatch: (id, data) =>
+    apiFetch(`/live-deals/watchlist/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  deleteWatch: (id) =>
+    apiFetch(`/live-deals/watchlist/${id}`, { method: 'DELETE' }),
+
+  checkWatch: (id) =>
+    apiFetch(`/live-deals/watchlist/${id}/check`, { method: 'POST' }),
+
+  replay: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return apiFetch(`/live-deals/replay${query ? `?${query}` : ''}`);
+  },
+};
+
 export const openBankingAPI = {
   status: () => apiFetch('/open-banking/status'),
 

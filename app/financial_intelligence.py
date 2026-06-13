@@ -241,10 +241,42 @@ def _next_actions(summary, budget, subs, quality):
 
     if quality['records'] > 0:
         actions.append({
+            'id': 'live_deals_next_purchase',
+            'priority': 'low',
+            'title': 'Comparar proxima compra',
+            'body': 'Antes de comprares, compara preco online, lojas perto, urgencia e orcamento.',
+            'metric': None,
+            'currency': currency,
+            'route': 'LiveDeals',
+        })
+
+    if quality['records'] > 0:
+        actions.append({
+            'id': 'refund_radar',
+            'priority': 'medium',
+            'title': 'Procurar dinheiro recuperavel',
+            'body': 'Ve devolucoes, duplicados, subscricoes e possiveis price drops nas compras recentes.',
+            'metric': None,
+            'currency': currency,
+            'route': 'RefundRadar',
+        })
+
+    actions.append({
+        'id': 'bill_planner',
+        'priority': 'low',
+        'title': 'Planear proximos pagamentos',
+        'body': 'Regista contas e obrigacoes para a Verly avisar antes do prazo.',
+        'metric': None,
+        'currency': currency,
+        'route': 'Bills',
+    })
+
+    if quality['records'] > 0:
+        actions.append({
             'id': 'score_next_purchase',
             'priority': 'low',
-            'title': 'Testar proxima compra',
-            'body': 'Antes de comprares, compara score, preco e lojas proximas para evitar pagar demais.',
+            'title': 'Fazer score de compra',
+            'body': 'Usa o score quando quiseres uma leitura rapida de custo, uso e contexto.',
             'metric': None,
             'currency': currency,
             'route': 'Score',

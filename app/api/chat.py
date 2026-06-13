@@ -226,6 +226,14 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'RefundRadar',
         })
 
+    if any(k in texto for k in ['live deal', 'live deals', 'wishlist', 'seguir produto', 'baixar preco', 'cupao', 'cupoes', 'stock perto', 'melhor preco']):
+        add({
+            'id': 'open_live_deals',
+            'type': 'navigate',
+            'label': 'Abrir Live Deals',
+            'route': 'LiveDeals',
+        })
+
     if any(k in texto for k in ['score', 'analisar compra', 'boa compra', 'vale a pena', 'comprar']):
         add({
             'id': 'open_score',
