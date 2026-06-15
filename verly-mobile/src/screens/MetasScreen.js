@@ -21,6 +21,31 @@ const CATS = [
   'Educação', 'Subscrições', 'Outros',
 ];
 
+function MetasDepthScene() {
+  return (
+    <View style={s.goalDepthScene} pointerEvents="none">
+      <LinearGradient
+        colors={['rgba(139,92,246,0.26)', 'rgba(34,212,253,0.10)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={s.goalDepthCard}
+      >
+        <View style={s.goalTargetOuter}>
+          <View style={s.goalTargetInner}>
+            <Target size={15} color={C.brandMid || C.brand} />
+          </View>
+        </View>
+        <View style={{ gap: 5, flex: 1 }}>
+          <View style={[s.goalDepthLine, { width: '76%' }]} />
+          <View style={[s.goalDepthLine, { width: '45%', opacity: 0.45 }]} />
+        </View>
+      </LinearGradient>
+      <View style={s.goalDepthFloor} />
+      <View style={s.goalDepthTick} />
+    </View>
+  );
+}
+
 function MetaBar({ pct = 0, color = C.brand }) {
   const width = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -118,8 +143,7 @@ export default function MetasScreen() {
   return (
     <View style={s.root}>
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <View style={s.decorOne} />
-      <View style={s.decorTwo} />
+      <MetasDepthScene />
       <ScrollView
         contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
@@ -210,27 +234,67 @@ export default function MetasScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
-  decorOne: {
+  goalDepthScene: {
     position: 'absolute',
-    width: 178,
-    height: 178,
-    borderRadius: 52,
-    right: -76,
-    top: 80,
-    backgroundColor: 'rgba(139,92,246,0.12)',
-    transform: [{ rotate: '18deg' }],
+    right: -12,
+    top: 82,
+    width: 154,
+    height: 128,
   },
-  decorTwo: {
-    position: 'absolute',
-    width: 112,
-    height: 74,
-    borderRadius: 22,
-    left: -34,
-    top: 210,
-    backgroundColor: 'rgba(34,212,253,0.08)',
+  goalDepthCard: {
+    width: 128,
+    height: 76,
+    borderRadius: 26,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    transform: [{ rotate: '-12deg' }],
+    borderColor: C.borderHi,
+    transform: [{ rotate: '8deg' }],
+  },
+  goalTargetOuter: {
+    width: 38,
+    height: 38,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.brand + '66',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.bg,
+  },
+  goalTargetInner: {
+    width: 26,
+    height: 26,
+    borderRadius: 12,
+    backgroundColor: C.brandDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalDepthLine: {
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255,255,255,0.30)',
+  },
+  goalDepthFloor: {
+    position: 'absolute',
+    width: 100,
+    height: 12,
+    borderRadius: 12,
+    right: 28,
+    bottom: 18,
+    backgroundColor: C.cyan + '22',
+  },
+  goalDepthTick: {
+    position: 'absolute',
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    right: 6,
+    top: 2,
+    backgroundColor: C.surface2,
+    borderWidth: 1,
+    borderColor: C.border,
   },
   hero: {
     flexDirection: 'row',

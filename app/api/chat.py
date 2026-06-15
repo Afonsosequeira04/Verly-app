@@ -11,6 +11,7 @@ import logging
 import requests
 import re
 import unicodedata
+import uuid
 from datetime import date, timedelta
 from flask import request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -110,14 +111,33 @@ def _build_metas_context(user_id) -> str:
     return "\n".join(linhas)
 
 
-def _get_historico_recente(user_id, limite=10):
-    conversas = (
-        Conversa.query
-        .filter_by(user_id=user_id)
-        .order_by(Conversa.timestamp.desc())
-        .limit(limite)
-        .all()
-    )
+def _thread_title_from_message(message: str):
+    title = re.sub(r'\s+', ' ', (message or '').strip())
+    title = re.sub(r'^(?:ol[aá]|hey|ei|verly)[,!\s]+', '', title, flags=re.IGNORECASE)
+    return (title[:52] + '...') if len(title) > 55 else (title or 'Nova conversa')
+
+
+def _normalize_thread_id(raw):
+    value = str(raw or '').strip()
+    if not value or value == 'new':
+        return str(uuid.uuid4())
+    if value == 'legacy':
+        return None
+    return value[:36]
+
+
+def _thread_filter(query, thread_id):
+    if thread_id == 'legacy':
+        return query.filter(Conversa.thread_id.is_(None))
+    if thread_id:
+        return query.filter(Conversa.thread_id == thread_id)
+    return query
+
+
+def _get_historico_recente(user_id, limite=10, thread_id=None):
+    query = Conversa.query.filter_by(user_id=user_id)
+    query = _thread_filter(query, thread_id)
+    conversas = query.order_by(Conversa.timestamp.desc()).limit(limite).all()
     historico = []
     for c in reversed(conversas):
         historico.append({"role": "user", "content": c.pergunta})
@@ -703,7 +723,7 @@ def _chat_actions(mensagem: str, user_id: int):
 
 # ── Groq chat direto (sem índice — funciona mesmo sem ficheiros carregados) ────
 
-def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
+def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str, thread_id=None) -> str:
     """Chama Groq diretamente com contexto das faturas — sem dependência do índice LlamaIndex."""
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -713,7 +733,7 @@ def _chat_groq_direto(mensagem: str, user_id: int, personalidade: str) -> str:
     system_prompt = SYSTEM_PROMPTS.get(personalidade, SYSTEM_PROMPTS['calm'])
     faturas_ctx   = _build_faturas_context(faturas)
     metas_ctx     = _build_metas_context(user_id)
-    historico     = _get_historico_recente(user_id, limite=10)
+    historico     = _get_historico_recente(user_id, limite=10, thread_id=thread_id)
     try:
         from app.semantic_finance import semantic_context
         memoria_semantica = semantic_context(user_id, mensagem, top_k=6)
@@ -765,6 +785,17 @@ def chat_mensagem():
     user     = User.query.get_or_404(user_id)
     data     = request.get_json(silent=True) or {}
     mensagem = (data.get('mensagem') or '').strip()[:2000]
+    raw_thread_id = data.get('thread_id') if 'thread_id' in data else data.get('threadId')
+    if raw_thread_id is None:
+        latest = (
+            Conversa.query
+            .filter_by(user_id=user_id)
+            .order_by(Conversa.timestamp.desc())
+            .first()
+        )
+        thread_id = latest.thread_id if latest and latest.thread_id else (None if latest else str(uuid.uuid4()))
+    else:
+        thread_id = _normalize_thread_id(raw_thread_id)
 
     if not mensagem:
         return jsonify({'error': 'Mensagem vazia.'}), 400
@@ -772,17 +803,39 @@ def chat_mensagem():
     personalidade = _normalise_personality(getattr(user, 'personalidade', 'calm'))
 
     try:
-        resposta = _chat_groq_direto(mensagem, user_id, personalidade)
+        resposta = _chat_groq_direto(mensagem, user_id, personalidade, thread_id=thread_id)
         actions = _chat_actions(mensagem, user_id)
     except Exception as e:
         logger.error(f'Erro no chat API: {e}')
         return jsonify({'error': 'Erro ao processar a mensagem.'}), 500
 
-    conversa = Conversa(user_id=user_id, pergunta=mensagem, resposta=resposta)
+    existing = None
+    if thread_id:
+        existing = (
+            Conversa.query
+            .filter_by(user_id=user_id, thread_id=thread_id)
+            .order_by(Conversa.timestamp.asc())
+            .first()
+        )
+    thread_title = existing.thread_title if existing and existing.thread_title else _thread_title_from_message(mensagem)
+
+    conversa = Conversa(
+        user_id=user_id,
+        thread_id=thread_id,
+        thread_title=thread_title,
+        pergunta=mensagem,
+        resposta=resposta,
+    )
     db.session.add(conversa)
     db.session.commit()
 
-    return jsonify({'resposta': resposta, 'id': conversa.id, 'actions': actions})
+    return jsonify({
+        'resposta': resposta,
+        'id': conversa.id,
+        'thread_id': thread_id,
+        'thread_title': thread_title,
+        'actions': actions,
+    })
 
 
 @api_bp.route('/chat/historico', methods=['GET'])
@@ -790,16 +843,15 @@ def chat_mensagem():
 def chat_historico():
     user_id   = int(get_jwt_identity())
     limite    = min(int(request.args.get('limite', 20)), 50)
-    conversas = (
-        Conversa.query
-        .filter_by(user_id=user_id)
-        .order_by(Conversa.timestamp.desc())
-        .limit(limite)
-        .all()
-    )
+    thread_id = request.args.get('thread_id') or request.args.get('threadId')
+    query = Conversa.query.filter_by(user_id=user_id)
+    query = _thread_filter(query, thread_id)
+    conversas = query.order_by(Conversa.timestamp.desc()).limit(limite).all()
     return jsonify({'historico': [
         {
             'id':        c.id,
+            'thread_id': c.thread_id or 'legacy',
+            'thread_title': c.thread_title or _thread_title_from_message(c.pergunta),
             'pergunta':  c.pergunta,
             'resposta':  c.resposta,
             'actions':   _chat_actions(c.pergunta, user_id),
@@ -807,6 +859,48 @@ def chat_historico():
         }
         for c in reversed(conversas)
     ]})
+
+
+@api_bp.route('/chat/threads', methods=['GET'])
+@jwt_required()
+def chat_threads():
+    user_id = int(get_jwt_identity())
+    limite = min(int(request.args.get('limite', 40)), 100)
+    rows = (
+        Conversa.query
+        .filter_by(user_id=user_id)
+        .order_by(Conversa.timestamp.desc())
+        .limit(300)
+        .all()
+    )
+    grouped = {}
+    for row in rows:
+        tid = row.thread_id or 'legacy'
+        item = grouped.get(tid)
+        if not item:
+            grouped[tid] = {
+                'id': tid,
+                'title': row.thread_title or _thread_title_from_message(row.pergunta),
+                'preview': row.pergunta,
+                'updated_at': row.timestamp.isoformat() if row.timestamp else None,
+                'count': 1,
+            }
+        else:
+            item['count'] += 1
+            if row.timestamp and (not item.get('updated_at') or row.timestamp.isoformat() > item['updated_at']):
+                item['updated_at'] = row.timestamp.isoformat()
+    return jsonify({'threads': list(grouped.values())[:limite]})
+
+
+@api_bp.route('/chat/threads/<thread_id>', methods=['DELETE'])
+@jwt_required()
+def chat_delete_thread(thread_id):
+    user_id = int(get_jwt_identity())
+    query = Conversa.query.filter_by(user_id=user_id)
+    query = _thread_filter(query, thread_id)
+    deleted = query.delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({'success': True, 'deleted': deleted})
 
 
 @api_bp.route('/chat/limpar', methods=['POST'])

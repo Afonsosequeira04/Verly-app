@@ -77,6 +77,8 @@ class Conversa(db.Model):
 
     id        = db.Column(db.Integer, primary_key=True)
     user_id   = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    thread_id = db.Column(db.String(36), index=True)
+    thread_title = db.Column(db.String(160))
     pergunta  = db.Column(db.Text, nullable=False)
     resposta  = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)

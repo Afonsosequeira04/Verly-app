@@ -46,6 +46,34 @@ const USO_OPCOES = [
   { key: 'never', label: 'Impulso', sub: 'nao planeado' },
 ];
 
+function ScoreDepthScene() {
+  return (
+    <View style={s.scoreDepthScene} pointerEvents="none">
+      <View style={s.scoreRouteLine} />
+      <LinearGradient
+        colors={['rgba(34,212,253,0.18)', 'rgba(139,92,246,0.24)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={s.scoreDepthCard}
+      >
+        <View style={s.scoreDepthPin}>
+          <MapPin size={14} color={C.cyan || C.brand} />
+        </View>
+        <View style={{ flex: 1, gap: 5 }}>
+          <View style={[s.scoreDepthLine, { width: '80%' }]} />
+          <View style={[s.scoreDepthLine, { width: '52%', opacity: 0.45 }]} />
+        </View>
+      </LinearGradient>
+      <View style={s.scoreDepthBag}>
+        <ShoppingBag size={13} color={C.yellow || C.brand} />
+      </View>
+      <View style={s.scoreDepthSearch}>
+        <Search size={13} color={C.brandMid || C.brand} />
+      </View>
+    </View>
+  );
+}
+
 const normalizeStoreName = (value = '') =>
   String(value)
     .normalize('NFD')
@@ -547,8 +575,7 @@ export default function ScoreScreen({ route }) {
   return (
     <View style={s.root}>
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <View style={s.decorOne} />
-      <View style={s.decorTwo} />
+      <ScoreDepthScene />
       <ToastComponent />
 
       <ScrollView
@@ -700,27 +727,75 @@ export default function ScoreScreen({ route }) {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   content: { padding: SPACE.lg, paddingBottom: 56 },
-  decorOne: {
+  scoreDepthScene: {
     position: 'absolute',
-    width: 190,
-    height: 190,
-    borderRadius: 58,
-    right: -96,
-    top: 72,
-    backgroundColor: 'rgba(139,92,246,0.12)',
-    transform: [{ rotate: '18deg' }],
+    right: -20,
+    top: 82,
+    width: 166,
+    height: 142,
   },
-  decorTwo: {
+  scoreRouteLine: {
     position: 'absolute',
-    width: 126,
-    height: 86,
+    width: 112,
+    height: 6,
+    right: 24,
+    bottom: 26,
+    borderRadius: 6,
+    backgroundColor: C.cyan + '22',
+    transform: [{ rotate: '-14deg' }],
+  },
+  scoreDepthCard: {
+    width: 124,
+    height: 76,
     borderRadius: 26,
-    left: -44,
-    top: 230,
-    backgroundColor: 'rgba(34,212,253,0.08)',
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    transform: [{ rotate: '-12deg' }],
+    borderColor: C.borderHi,
+    transform: [{ rotate: '-7deg' }],
+  },
+  scoreDepthPin: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.cyan + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreDepthLine: {
+    height: 7,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255,255,255,0.30)',
+  },
+  scoreDepthBag: {
+    position: 'absolute',
+    right: 8,
+    top: 2,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: C.yellow + '18',
+    borderWidth: 1,
+    borderColor: C.yellow + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreDepthSearch: {
+    position: 'absolute',
+    left: 6,
+    bottom: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   hero: {
     flexDirection: 'row',

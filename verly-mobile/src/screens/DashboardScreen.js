@@ -117,6 +117,52 @@ function BudgetBar({ pct = 0, color = C.brand }) {
 }
 
 // ─── Charts financeiros reutilizáveis ─────────────────────────────────────────
+function DashboardDepthScene({ pct = 0, color = C.brand }) {
+  const safePct = Math.max(0, Math.min(100, Math.round(pct || 0)));
+
+  return (
+    <View style={s.dashDepthScene} pointerEvents="none">
+      <MotiView
+        from={{ translateY: 2, rotate: '7deg', opacity: 0.55 }}
+        animate={{ translateY: -3, rotate: '7deg', opacity: 0.85 }}
+        transition={{ type: 'timing', duration: 2600, loop: true, repeatReverse: true }}
+        style={s.dashDepthBack}
+      />
+      <MotiView
+        from={{ translateY: 0, rotate: '-4deg' }}
+        animate={{ translateY: -4, rotate: '-4deg' }}
+        transition={{ type: 'timing', duration: 2200, loop: true, repeatReverse: true }}
+      >
+        <LinearGradient
+          colors={['rgba(34,212,253,0.18)', 'rgba(139,92,246,0.24)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={s.dashDepthMain}
+        >
+          <View style={[s.dashDepthGauge, { borderColor: color + '99' }]}>
+            <Text style={[s.dashDepthPct, { color }]}>{safePct}%</Text>
+          </View>
+          <View style={s.dashDepthRows}>
+            <View style={[s.dashDepthLine, { width: '86%' }]} />
+            <View style={[s.dashDepthLine, { width: '56%', opacity: 0.5 }]} />
+          </View>
+        </LinearGradient>
+      </MotiView>
+      <MotiView
+        from={{ translateX: 0, translateY: 0 }}
+        animate={{ translateX: 4, translateY: 3 }}
+        transition={{ type: 'timing', duration: 1900, loop: true, repeatReverse: true }}
+        style={s.dashDepthReceipt}
+      >
+        <Receipt size={13} color={C.yellow || C.brand} />
+      </MotiView>
+      <View style={s.dashDepthWallet}>
+        <WalletCards size={14} color={C.green} />
+      </View>
+    </View>
+  );
+}
+
 function ChartsSection({ porCategoria, porMes, navigation, chartCurrency = 'EUR', chartSources = [] }) {
   const hasData = (Array.isArray(porCategoria) && porCategoria.length > 0) || (Array.isArray(porMes) && porMes.length > 0);
 
@@ -162,9 +208,9 @@ function HeroCard({ data }) {
       entering={FadeInDown.delay(60).duration(450).springify()}
       style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}
     >
-      <View style={[s.card, { padding: 20 }]}>
-        <View>
-          <View>
+      <View style={[s.card, s.heroCard]}>
+        <View style={s.heroTopRow}>
+          <View style={s.heroCopy}>
             <Text style={s.label}>Gasto este mês</Text>
             <AnimatedCounter
               value={spent}
@@ -175,6 +221,7 @@ function HeroCard({ data }) {
             />
             {budget > 0 && <Text style={s.subText}>de {formatMoney(budget, currency)} orçamentados</Text>}
           </View>
+          <DashboardDepthScene pct={pct} color={barColor} />
         </View>
 
         {budget > 0 && (
@@ -1153,6 +1200,90 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
     borderRadius: RADIUS.lg,
     borderWidth: 1, borderColor: C.border,
+  },
+  heroCard: {
+    padding: 20,
+    overflow: 'hidden',
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  heroCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  dashDepthScene: {
+    width: 112,
+    height: 98,
+    justifyContent: 'center',
+  },
+  dashDepthBack: {
+    position: 'absolute',
+    right: 2,
+    top: 18,
+    width: 86,
+    height: 58,
+    borderRadius: 20,
+    backgroundColor: C.surface2,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  dashDepthMain: {
+    width: 96,
+    height: 66,
+    borderRadius: 22,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: C.borderHi || C.border,
+    justifyContent: 'space-between',
+    transform: [{ rotate: '-4deg' }],
+  },
+  dashDepthGauge: {
+    width: 38,
+    height: 26,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dashDepthPct: {
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  dashDepthRows: { gap: 5 },
+  dashDepthLine: {
+    height: 6,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+  },
+  dashDepthReceipt: {
+    position: 'absolute',
+    right: 0,
+    top: 2,
+    width: 32,
+    height: 32,
+    borderRadius: 12,
+    backgroundColor: C.yellow + '18',
+    borderWidth: 1,
+    borderColor: C.yellow + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dashDepthWallet: {
+    position: 'absolute',
+    left: 4,
+    bottom: 5,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: C.green + '16',
+    borderWidth: 1,
+    borderColor: C.green + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   label:    { fontSize: FONT.xs, fontWeight: '600', color: C.textMid, letterSpacing: 0.3 },
   bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },

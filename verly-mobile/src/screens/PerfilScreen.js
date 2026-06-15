@@ -8,6 +8,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
+import { MotiView } from 'moti';
 import { LogOut, Save, Shield, Bell, Camera, Mail, Phone, ChevronRight, Check, Sparkles } from 'lucide-react-native';
 import { perfilAPI, authAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +25,53 @@ const PERSONALIDADES = [
   { key: 'sarcastic', label: 'Sarcastic', desc: 'Ironia leve para tornar insights partilhaveis.', color: C.yellow },
   { key: 'savage', label: 'Savage', desc: 'Roast financeiro. Viral, mas ainda util.', color: C.red },
 ];
+
+function ProfileDepthScene() {
+  return (
+    <View style={pf.profileDepthScene} pointerEvents="none">
+      <MotiView
+        from={{ translateY: 2, rotate: '-5deg', opacity: 0.55 }}
+        animate={{ translateY: -3, rotate: '-5deg', opacity: 0.9 }}
+        transition={{ type: 'timing', duration: 2400, loop: true, repeatReverse: true }}
+        style={pf.profileBackCard}
+      />
+      <MotiView
+        from={{ translateY: 0, rotate: '6deg' }}
+        animate={{ translateY: -5, rotate: '6deg' }}
+        transition={{ type: 'timing', duration: 2800, loop: true, repeatReverse: true }}
+      >
+        <LinearGradient
+          colors={['rgba(139,92,246,0.30)', 'rgba(34,212,253,0.14)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={pf.profileMainCard}
+        >
+          <View style={pf.profileChip}>
+            <Shield size={15} color={C.brandMid || C.brand} />
+          </View>
+          <View style={{ gap: 6, flex: 1 }}>
+            <View style={[pf.profileDepthLine, { width: '78%' }]} />
+            <View style={[pf.profileDepthLine, { width: '48%', opacity: 0.45 }]} />
+          </View>
+        </LinearGradient>
+      </MotiView>
+      <MotiView
+        from={{ translateX: 0, translateY: 0 }}
+        animate={{ translateX: -4, translateY: 3 }}
+        transition={{ type: 'timing', duration: 2100, loop: true, repeatReverse: true }}
+        style={pf.profileToken}
+      >
+        <Sparkles size={14} color={C.yellow || C.brand} />
+      </MotiView>
+      <MotiView
+        from={{ opacity: 0.45, scaleX: 0.82 }}
+        animate={{ opacity: 0.9, scaleX: 1 }}
+        transition={{ type: 'timing', duration: 1700, loop: true, repeatReverse: true }}
+        style={pf.profileScanLine}
+      />
+    </View>
+  );
+}
 
 // ─── Modal para associar número de telemóvel ──────────────────────────────────
 function PhoneModal({ visible, onClose, onSave }) {
@@ -241,8 +289,7 @@ export default function PerfilScreen({ navigation }) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <View style={pf.decorOne} />
-      <View style={pf.decorTwo} />
+      <ProfileDepthScene />
 
       <PhoneModal
         visible={phoneModal}
@@ -448,27 +495,72 @@ export default function PerfilScreen({ navigation }) {
 }
 
 const pf = StyleSheet.create({
-  decorOne: {
+  profileDepthScene: {
     position: 'absolute',
-    width: 178,
-    height: 178,
-    borderRadius: 52,
-    right: -76,
-    top: 76,
-    backgroundColor: 'rgba(139,92,246,0.12)',
-    transform: [{ rotate: '18deg' }],
+    width: 172,
+    height: 150,
+    right: -26,
+    top: 64,
   },
-  decorTwo: {
+  profileBackCard: {
     position: 'absolute',
-    width: 112,
-    height: 74,
-    borderRadius: 22,
-    left: -34,
-    top: 218,
-    backgroundColor: 'rgba(34,212,253,0.08)',
+    width: 116,
+    height: 78,
+    right: 22,
+    top: 22,
+    borderRadius: 24,
+    backgroundColor: C.surface2,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    transform: [{ rotate: '-12deg' }],
+    borderColor: C.border,
+  },
+  profileMainCard: {
+    width: 128,
+    height: 84,
+    borderRadius: 24,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    transform: [{ rotate: '6deg' }],
+  },
+  profileChip: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileDepthLine: {
+    height: 7,
+    borderRadius: 6,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+  },
+  profileToken: {
+    position: 'absolute',
+    right: 12,
+    top: 4,
+    width: 36,
+    height: 36,
+    borderRadius: 14,
+    backgroundColor: C.brandDim,
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileScanLine: {
+    position: 'absolute',
+    right: 42,
+    bottom: 18,
+    width: 82,
+    height: 5,
+    borderRadius: 5,
+    backgroundColor: C.cyan || '#22D4FD',
   },
   heroCard: {
     flexDirection: 'row',

@@ -301,11 +301,17 @@ export const notificacoesAPI = {
 // ── Chat (IA) ──────────────────────────────────────────────────────────────────
 
 export const chatAPI = {
-  enviar: (mensagem) =>
-    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem }) }),
+  enviar: (mensagem, thread_id) =>
+    apiFetch('/chat/mensagem', { method: 'POST', body: JSON.stringify({ mensagem, thread_id }) }),
 
-  historico: (limite = 20) =>
-    apiFetch(`/chat/historico?limite=${limite}`),
+  historico: (limite = 20, thread_id) =>
+    apiFetch(`/chat/historico?limite=${limite}${thread_id ? `&thread_id=${encodeURIComponent(thread_id)}` : ''}`),
+
+  threads: (limite = 40) =>
+    apiFetch(`/chat/threads?limite=${limite}`),
+
+  apagarThread: (thread_id) =>
+    apiFetch(`/chat/threads/${encodeURIComponent(thread_id)}`, { method: 'DELETE' }),
 
   limpar: () =>
     apiFetch('/chat/limpar', { method: 'POST' }),

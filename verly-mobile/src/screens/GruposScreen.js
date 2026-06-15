@@ -58,6 +58,32 @@ function MembrosRow({ membros = [] }) {
   );
 }
 
+function GroupsDepthScene() {
+  return (
+    <View style={styles.groupsDepthScene} pointerEvents="none">
+      <View style={styles.groupsDepthBack} />
+      <LinearGradient
+        colors={['rgba(34,212,253,0.16)', 'rgba(139,92,246,0.24)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.groupsDepthCard}
+      >
+        <View style={styles.groupsDepthIcon}>
+          <Users size={15} color={C.brandMid || C.brand} />
+        </View>
+        <View style={styles.groupsDepthAvatars}>
+          <View style={[styles.groupsDepthAvatar, { backgroundColor: C.brand + '66' }]} />
+          <View style={[styles.groupsDepthAvatar, { backgroundColor: C.cyan + '66', marginLeft: -9 }]} />
+          <View style={[styles.groupsDepthAvatar, { backgroundColor: C.green + '66', marginLeft: -9 }]} />
+        </View>
+      </LinearGradient>
+      <View style={styles.groupsDepthCoin}>
+        <WalletCards size={13} color={C.green} />
+      </View>
+    </View>
+  );
+}
+
 export default function GruposScreen({ navigation }) {
   const [grupos, setGrupos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -137,8 +163,7 @@ export default function GruposScreen({ navigation }) {
   return (
     <View style={styles.root}>
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <View style={styles.decorOne} />
-      <View style={styles.decorTwo} />
+      <GroupsDepthScene />
 
       <View style={styles.header}>
         <Pressable onPress={() => navigation.goBack()} style={styles.iconBtn}>
@@ -279,27 +304,69 @@ export default function GruposScreen({ navigation }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
-  decorOne: {
+  groupsDepthScene: {
     position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 54,
-    right: -78,
-    top: 86,
-    backgroundColor: 'rgba(139,92,246,0.12)',
-    transform: [{ rotate: '18deg' }],
+    right: -18,
+    top: 94,
+    width: 160,
+    height: 136,
   },
-  decorTwo: {
+  groupsDepthBack: {
     position: 'absolute',
-    width: 110,
-    height: 74,
-    borderRadius: 22,
-    left: -36,
-    top: 220,
-    backgroundColor: 'rgba(34,212,253,0.08)',
+    right: 34,
+    top: 28,
+    width: 94,
+    height: 68,
+    borderRadius: 24,
+    backgroundColor: C.surface2,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-    transform: [{ rotate: '-12deg' }],
+    borderColor: C.border,
+    transform: [{ rotate: '-8deg' }],
+  },
+  groupsDepthCard: {
+    width: 126,
+    height: 78,
+    borderRadius: 26,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: C.borderHi,
+    transform: [{ rotate: '6deg' }],
+    justifyContent: 'space-between',
+  },
+  groupsDepthIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupsDepthAvatars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-end',
+  },
+  groupsDepthAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.28)',
+  },
+  groupsDepthCoin: {
+    position: 'absolute',
+    right: 8,
+    top: 4,
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: C.green + '16',
+    borderWidth: 1,
+    borderColor: C.green + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   header: { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingHorizontal: SPACE.lg, paddingBottom: SPACE.md, gap: 10 },
   iconBtn: { width: 38, height: 38, borderRadius: 14, backgroundColor: C.glass, borderWidth: 1, borderColor: C.border, justifyContent: 'center', alignItems: 'center' },

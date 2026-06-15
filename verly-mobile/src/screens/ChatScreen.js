@@ -3,10 +3,12 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, Pressable, FlatList,
   KeyboardAvoidingView, Platform, ActivityIndicator,
-  StyleSheet, Animated, Easing, Alert,
+  StyleSheet, Animated, Easing, Alert, Modal, ScrollView,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Send, Zap, ChevronRight, Check, Trash2 } from 'lucide-react-native';
+import { Check, ChevronRight, History, MessageSquarePlus, Send, Trash2, X, Zap } from 'lucide-react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { MotiView } from 'moti';
 import {
   billsAPI,
   chatAPI,
@@ -133,6 +135,86 @@ function Bubble({ item, userInitials, onAction, executingActionId }) {
   );
 }
 
+function formatThreadDate(value) {
+  if (!value) return '';
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('pt-PT', { day: '2-digit', month: 'short' });
+  } catch (_) {
+    return '';
+  }
+}
+
+function ChatDepthStage() {
+  return (
+    <View style={s.depthStage} pointerEvents="none">
+      <MotiView
+        from={{ opacity: 0.55, translateY: 4, rotate: '-2deg' }}
+        animate={{ opacity: 0.85, translateY: -2, rotate: '-2deg' }}
+        transition={{ type: 'timing', duration: 2600, loop: true, repeatReverse: true }}
+        style={s.depthBackPlate}
+      />
+      <MotiView
+        from={{ translateY: 0, scale: 1 }}
+        animate={{ translateY: -3, scale: 1.01 }}
+        transition={{ type: 'timing', duration: 2200, loop: true, repeatReverse: true }}
+      >
+        <LinearGradient
+          colors={['rgba(139,92,246,0.28)', 'rgba(34,212,253,0.12)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={s.depthMainPlate}
+        >
+          <View style={s.depthIcon}>
+            <Zap size={14} color={C.brandMid || C.brand} />
+          </View>
+          <View style={{ flex: 1, gap: 5 }}>
+            <View style={[s.depthLine, { width: '74%' }]} />
+            <View style={[s.depthLine, { width: '48%', opacity: 0.45 }]} />
+          </View>
+          <View style={s.depthMiniStack}>
+            <View style={s.depthMiniTile} />
+            <View style={[s.depthMiniTile, { backgroundColor: C.green + '55' }]} />
+          </View>
+        </LinearGradient>
+      </MotiView>
+      <MotiView
+        from={{ opacity: 0.45, translateX: -4 }}
+        animate={{ opacity: 0.9, translateX: 3 }}
+        transition={{ type: 'timing', duration: 1800, loop: true, repeatReverse: true }}
+        style={s.depthPulse}
+      />
+    </View>
+  );
+}
+
+function ThreadRow({ thread, active, onPress }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        s.threadRow,
+        active && s.threadRowActive,
+        pressed && { opacity: 0.78 },
+      ]}
+    >
+      <View style={[s.threadGlyph, active && s.threadGlyphActive]}>
+        <Zap size={13} color={active ? '#fff' : C.brand} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={s.threadTitle} numberOfLines={1}>
+          {thread.title || 'Conversa'}
+        </Text>
+        <Text style={s.threadPreview} numberOfLines={1}>
+          {thread.preview || 'Sem mensagens'}
+        </Text>
+      </View>
+      <Text style={s.threadDate}>{formatThreadDate(thread.updated_at)}</Text>
+    </Pressable>
+  );
+}
+
 export default function ChatScreen({ navigation }) {
   const { user } = useAuth();
   const [messages,  setMessages]  = useState([]);
@@ -141,6 +223,10 @@ export default function ChatScreen({ navigation }) {
   const [focused,   setFocused]   = useState(false);
   const [sugestoes, setSugestoes] = useState(SUGESTOES_FALLBACK);
   const [executingActionId, setExecutingActionId] = useState(null);
+  const [threads, setThreads] = useState([]);
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [activeThreadTitle, setActiveThreadTitle] = useState('Nova conversa');
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
     dashboardAPI.get().then(data => {
@@ -169,12 +255,24 @@ export default function ChatScreen({ navigation }) {
   const listRef = useRef(null);
 
   useFocusEffect(useCallback(() => {
-    loadHistory();
+    bootstrapChat();
   }, []));
 
-  const loadHistory = async () => {
+  const loadThreads = async () => {
     try {
-      const d = await chatAPI.historico();
+      const data = await chatAPI.threads(40);
+      const rows = data.threads || [];
+      setThreads(rows);
+      return rows;
+    } catch (_) {
+      setThreads([]);
+      return [];
+    }
+  };
+
+  const loadHistory = async (threadId = activeThreadId) => {
+    try {
+      const d = await chatAPI.historico(50, threadId);
       const rows = d.historico || d.conversas || [];
       const msgs = rows.flatMap(c => [
         { id: `u-${c.id}`, role: 'user',      content: c.pergunta },
@@ -183,6 +281,70 @@ export default function ChatScreen({ navigation }) {
       setMessages(msgs);
       setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 100);
     } catch (_) {}
+  };
+
+  const bootstrapChat = async () => {
+    const rows = await loadThreads();
+    if (activeThreadId) {
+      await loadHistory(activeThreadId);
+      return;
+    }
+    if (rows.length) {
+      const first = rows[0];
+      setActiveThreadId(first.id);
+      setActiveThreadTitle(first.title || 'Conversa');
+      await loadHistory(first.id);
+      return;
+    }
+    setActiveThreadId(null);
+    setActiveThreadTitle('Nova conversa');
+    setMessages([]);
+  };
+
+  const startNewChat = () => {
+    setActiveThreadId(null);
+    setActiveThreadTitle('Nova conversa');
+    setMessages([]);
+    setHistoryOpen(false);
+    setTimeout(() => listRef.current?.scrollToOffset?.({ offset: 0, animated: true }), 60);
+  };
+
+  const selectThread = async (thread) => {
+    if (!thread?.id) return;
+    setActiveThreadId(thread.id);
+    setActiveThreadTitle(thread.title || 'Conversa');
+    setHistoryOpen(false);
+    await loadHistory(thread.id);
+  };
+
+  const deleteCurrentThread = () => {
+    if (!activeThreadId && messages.length === 0) return;
+
+    const run = async () => {
+      try {
+        if (activeThreadId) {
+          await chatAPI.apagarThread(activeThreadId);
+        }
+        const rows = await loadThreads();
+        const next = rows.find(t => t.id !== activeThreadId);
+        if (next) {
+          setActiveThreadId(next.id);
+          setActiveThreadTitle(next.title || 'Conversa');
+          await loadHistory(next.id);
+        } else {
+          setActiveThreadId(null);
+          setActiveThreadTitle('Nova conversa');
+          setMessages([]);
+        }
+      } catch (_) {
+        Alert.alert('Erro', 'Nao consegui apagar esta conversa.');
+      }
+    };
+
+    Alert.alert('Apagar conversa', 'Queres apagar esta conversa do historico?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Apagar', style: 'destructive', onPress: run },
+    ]);
   };
 
   const appendAssistant = (content) => {
@@ -312,8 +474,12 @@ export default function ChatScreen({ navigation }) {
         }
 
         if (action.type === 'clear_chat') {
-          await chatAPI.limpar();
+          if (activeThreadId) await chatAPI.apagarThread(activeThreadId);
+          else await chatAPI.limpar();
           setMessages([]);
+          setActiveThreadId(null);
+          setActiveThreadTitle('Nova conversa');
+          loadThreads();
           return;
         }
       } catch (e) {
@@ -345,7 +511,11 @@ export default function ChatScreen({ navigation }) {
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
 
     try {
-      const d = await chatAPI.enviar(msg);
+      const d = await chatAPI.enviar(msg, activeThreadId || 'new');
+      const nextThreadId = d.thread_id || activeThreadId;
+      const nextTitle = d.thread_title || activeThreadTitle || msg.slice(0, 40);
+      if (nextThreadId) setActiveThreadId(nextThreadId);
+      if (nextTitle) setActiveThreadTitle(nextTitle);
       const aiMsg = {
         id: `a-${Date.now()}`,
         role: 'assistant',
@@ -353,6 +523,7 @@ export default function ChatScreen({ navigation }) {
         actions: d.actions || [],
       };
       setMessages(prev => [...prev, aiMsg]);
+      loadThreads();
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     } catch (e) {
       setMessages(prev => [...prev, { id: `err-${Date.now()}`, role: 'assistant', content: 'Erro ao responder. Tenta novamente.' }]);
@@ -365,6 +536,33 @@ export default function ChatScreen({ navigation }) {
 
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={88}>
+      <View style={s.chatHeader}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={s.chatKicker}>ASK VERLY</Text>
+          <Text style={s.chatTitle} numberOfLines={1}>{activeThreadTitle || 'Nova conversa'}</Text>
+        </View>
+        <View style={s.chatActions}>
+          <Pressable onPress={startNewChat} style={({ pressed }) => [s.headerBtn, pressed && { opacity: 0.75 }]}>
+            <MessageSquarePlus size={17} color={C.text} />
+          </Pressable>
+          <Pressable onPress={() => setHistoryOpen(true)} style={({ pressed }) => [s.headerBtn, pressed && { opacity: 0.75 }]}>
+            <History size={17} color={C.text} />
+          </Pressable>
+          <Pressable
+            onPress={deleteCurrentThread}
+            disabled={!activeThreadId && messages.length === 0}
+            style={({ pressed }) => [
+              s.headerBtn,
+              (!activeThreadId && messages.length === 0) && { opacity: 0.35 },
+              pressed && { opacity: 0.75 },
+            ]}
+          >
+            <Trash2 size={16} color={C.red} />
+          </Pressable>
+        </View>
+      </View>
+
+      <ChatDepthStage />
 
       {/* Mensagens */}
       <FlatList
@@ -438,12 +636,122 @@ export default function ChatScreen({ navigation }) {
           <Send size={16} color="#fff" />
         </Pressable>
       </View>
+
+      <Modal visible={historyOpen} transparent animationType="slide" onRequestClose={() => setHistoryOpen(false)}>
+        <View style={s.historyOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setHistoryOpen(false)} />
+          <View style={s.historySheet}>
+            <View style={s.sheetHandle} />
+            <View style={s.historyHead}>
+              <View>
+                <Text style={s.historyTitle}>Conversas antigas</Text>
+                <Text style={s.historySub}>{threads.length} guardada{threads.length === 1 ? '' : 's'}</Text>
+              </View>
+              <View style={s.historyActions}>
+                <Pressable onPress={startNewChat} style={s.newChatBtn}>
+                  <MessageSquarePlus size={14} color="#fff" />
+                  <Text style={s.newChatText}>Novo</Text>
+                </Pressable>
+                <Pressable onPress={() => setHistoryOpen(false)} style={s.closeBtn}>
+                  <X size={16} color={C.text} />
+                </Pressable>
+              </View>
+            </View>
+            <ScrollView style={{ maxHeight: 420 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingTop: 12 }}>
+              {threads.length ? threads.map(thread => (
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
+                  active={thread.id === activeThreadId}
+                  onPress={() => selectThread(thread)}
+                />
+              )) : (
+                <Text style={s.emptyHistoryText}>Ainda nao ha conversas guardadas.</Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
+  chatHeader: {
+    paddingHorizontal: SPACE.md,
+    paddingTop: 10,
+    paddingBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    backgroundColor: C.bg,
+  },
+  chatKicker: { color: C.brandMid || C.brand, fontSize: FONT.xs, fontWeight: '900', letterSpacing: 1 },
+  chatTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900', marginTop: 2 },
+  chatActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 13,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  depthStage: {
+    height: 78,
+    marginHorizontal: SPACE.md,
+    marginTop: 12,
+    marginBottom: 4,
+    justifyContent: 'center',
+  },
+  depthBackPlate: {
+    position: 'absolute',
+    left: 18,
+    right: 36,
+    height: 50,
+    borderRadius: 18,
+    backgroundColor: C.surface2,
+    borderWidth: 1,
+    borderColor: C.border,
+    transform: [{ rotate: '-2deg' }],
+  },
+  depthMainPlate: {
+    minHeight: 58,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.borderHi || C.border,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+  },
+  depthIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 13,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  depthLine: { height: 7, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.34)' },
+  depthMiniStack: { width: 32, gap: 5 },
+  depthMiniTile: { height: 12, borderRadius: 5, backgroundColor: C.brand + '66' },
+  depthPulse: {
+    position: 'absolute',
+    right: 14,
+    bottom: 9,
+    width: 48,
+    height: 5,
+    borderRadius: 5,
+    backgroundColor: C.cyan || '#22D4FD',
+  },
 
   bubbleRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
   bubbleRowUser: { justifyContent: 'flex-end' },
@@ -532,4 +840,79 @@ const s = StyleSheet.create({
     backgroundColor: C.brand, justifyContent: 'center', alignItems: 'center',
   },
   sendBtnDisabled: { backgroundColor: C.surface2 },
+  historyOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  historySheet: {
+    backgroundColor: C.surface2,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: SPACE.lg,
+    paddingBottom: 34,
+  },
+  sheetHandle: {
+    width: 38,
+    height: 4,
+    borderRadius: 4,
+    backgroundColor: C.borderHi || C.border,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  historyHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  historyTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
+  historySub: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
+  historyActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  newChatBtn: {
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: C.brand,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  newChatText: { color: '#fff', fontSize: FONT.xs, fontWeight: '900' },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  threadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    padding: 12,
+    borderRadius: RADIUS.md,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  threadRowActive: { borderColor: C.brand + '77', backgroundColor: C.brandDim },
+  threadGlyph: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: C.brandDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  threadGlyphActive: { backgroundColor: C.brand },
+  threadTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
+  threadPreview: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
+  threadDate: { color: C.textMid, fontSize: FONT.xs, fontWeight: '800' },
+  emptyHistoryText: {
+    color: C.textMid,
+    fontSize: FONT.sm,
+    textAlign: 'center',
+    paddingVertical: 28,
+  },
 });

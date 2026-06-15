@@ -238,6 +238,8 @@ def _migrate_db():
         # ── mensagens_grupo ───────────────────────────────────────────────────
         ('mensagens_grupo', 'editada',   'BOOLEAN DEFAULT false'),
         ('contas_bancarias', 'ativa',     'BOOLEAN DEFAULT true'),
+        ('conversas', 'thread_id',        'VARCHAR(36)'),
+        ('conversas', 'thread_title',     'VARCHAR(160)'),
     ]
 
     with db.engine.connect() as conn:
