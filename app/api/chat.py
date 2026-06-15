@@ -11,6 +11,7 @@ import logging
 import requests
 import re
 import unicodedata
+from datetime import date, timedelta
 from flask import request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.api import api_bp
@@ -182,6 +183,133 @@ def _nome_patrimonio_da_mensagem(texto: str):
     return normalizado[:60].title() if normalizado else 'Item patrimonio'
 
 
+def _auto_meta_payload(user_id: int):
+    try:
+        from app.financial_records import summarize_expenses
+        summary = summarize_expenses(user_id, currency='EUR')
+    except Exception:
+        return None
+
+    rows = (summary.get('mes_atual') or {}).get('por_categoria') or summary.get('por_categoria') or []
+    metas_existentes = {
+        _normalizar_texto(meta.categoria)
+        for meta in Meta.query.filter_by(user_id=user_id).all()
+    }
+    for row in rows:
+        categoria = row.get('categoria') or row.get('nome')
+        if categoria not in CATEGORIAS or _normalizar_texto(categoria) in metas_existentes:
+            continue
+        try:
+            gasto = float(row.get('valor') or row.get('total') or 0)
+        except (TypeError, ValueError):
+            gasto = 0
+        if gasto <= 0:
+            continue
+        limite = max(20, round((gasto * 0.9) / 10) * 10)
+        return {
+            'nome': categoria,
+            'categoria': categoria,
+            'limite': round(limite, 2),
+        }
+    return None
+
+
+def _email_da_mensagem(texto: str):
+    match = re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', texto or '')
+    return match.group(0).lower() if match else None
+
+
+def _produto_wishlist_da_mensagem(texto: str):
+    normalizado = _normalizar_texto(texto)
+    cleaned = normalizado
+    cleaned = re.sub(r'\b(?:abaixo|ate|alvo|por|de)\s+\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?\b', ' ', cleaned)
+    cleaned = re.sub(r'\b\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)\b', ' ', cleaned)
+    cleaned = re.sub(r'\b(adiciona|adicionar|seguir|segue|monitoriza|wishlist|live deals?|produto|compra|preco|preco alvo|abaixo|baixar|quando|ficar|por|de|a|o|um|uma|na|no|ao|ate|eur|euros)\b', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    if len(cleaned) < 3:
+        return None
+    return cleaned[:80].title()
+
+
+def _next_bill_date(days=7):
+    return (date.today() + timedelta(days=days)).isoformat()
+
+
+def _subscription_bills_payload(user_id: int):
+    try:
+        from app.subscriptions import detect_subscriptions
+        data = detect_subscriptions(user_id)
+    except Exception:
+        return []
+    bills = []
+    for sub in (data.get('subscriptions') or [])[:5]:
+        price = float(sub.get('preco_mensal') or 0)
+        if price <= 0:
+            continue
+        bills.append({
+            'titulo': sub.get('nome') or 'Subscricao',
+            'categoria': 'Subscricoes',
+            'valor': round(price, 2),
+            'currency': sub.get('currency') or 'EUR',
+            'data_vencimento': _next_bill_date(7),
+            'recorrencia': 'monthly',
+            'notas': 'Criado pelo copiloto a partir de subscricoes detetadas.',
+            'lembrar_dias_antes': 3,
+        })
+    return bills
+
+
+def _refund_draft_payload(user_id: int):
+    try:
+        from app.refund_radar import detect_refund_opportunities
+        data = detect_refund_opportunities(user_id)
+    except Exception:
+        return None
+    opportunity = next((item for item in data.get('opportunities') or [] if item.get('action')), None)
+    if not opportunity:
+        return None
+    action = opportunity.get('action') or {}
+    return {
+        'key': opportunity.get('key'),
+        'title': opportunity.get('title'),
+        'message': action.get('email_body') or action.get('support_message') or opportunity.get('message'),
+        'subject': action.get('email_subject') or opportunity.get('title'),
+        'route': 'RefundRadar',
+        'params': {'refundKey': opportunity.get('key')},
+    }
+
+
+def _family_expense_action_payload(user_id: int, texto: str):
+    try:
+        from app.api.planning import _family_for_user, _family_to_dict
+        family = _family_for_user(user_id)
+        if not family:
+            return None
+        data = _family_to_dict(family, current_user_id=user_id)
+    except Exception:
+        return None
+    expenses = data.get('recent_expenses') or []
+    if not expenses:
+        return None
+    normalizado = _normalizar_texto(texto)
+    selected = None
+    for expense in expenses:
+        merchant = _normalizar_texto(expense.get('merchant') or '')
+        if merchant and merchant in normalizado:
+            selected = expense
+            break
+    selected = selected or expenses[0]
+    include_family = not any(k in normalizado for k in ['pessoal', 'privada', 'privado', 'nao familiar', 'não familiar'])
+    return {
+        'source_type': selected.get('source_type'),
+        'source_id': selected.get('source_id'),
+        'include_family': include_family,
+        'description': selected.get('merchant'),
+        'amount': selected.get('amount'),
+        'currency': selected.get('currency'),
+    }
+
+
 def _chat_actions(mensagem: str, user_id: int):
     texto = _normalizar_texto(mensagem)
     faturas_count = Fatura.query.filter_by(user_id=user_id).count()
@@ -219,6 +347,17 @@ def _chat_actions(mensagem: str, user_id: int):
         })
 
     if any(k in texto for k in ['reembolso', 'refund', 'reclamar', 'reclamacao', 'cobranca duplicada', 'duplicado', 'devolver dinheiro']):
+        wants_draft = any(k in texto for k in ['email', 'mensagem', 'rascunho', 'gerar', 'reclamacao', 'reclamar'])
+        draft = _refund_draft_payload(user_id) if wants_draft else None
+        if draft:
+            add({
+                'id': 'draft_refund_email',
+                'type': 'draft_refund_email',
+                'label': 'Gerar reclamacao',
+                'description': draft.get('subject') or 'Rascunho do Refund Radar',
+                'payload': draft,
+                'requires_confirmation': False,
+            })
         add({
             'id': 'open_refund_radar',
             'type': 'navigate',
@@ -227,6 +366,26 @@ def _chat_actions(mensagem: str, user_id: int):
         })
 
     if any(k in texto for k in ['live deal', 'live deals', 'wishlist', 'seguir produto', 'baixar preco', 'cupao', 'cupoes', 'stock perto', 'melhor preco']):
+        wants_watch = any(k in texto for k in ['adiciona', 'adicionar', 'seguir', 'segue', 'monitoriza', 'avisa', 'wishlist'])
+        product_name = _produto_wishlist_da_mensagem(mensagem)
+        target_price = _valor_da_mensagem(mensagem)
+        if wants_watch and product_name:
+            add({
+                'id': 'add_live_deal_watch',
+                'type': 'add_live_deal_watch',
+                'label': 'Adicionar a wishlist',
+                'description': f'Seguir {product_name}' + (f' abaixo de {target_price:.2f} EUR' if target_price else ''),
+                'payload': {
+                    'product_name': product_name,
+                    'category': _categoria_da_mensagem(mensagem) or 'Outros',
+                    'target_price': target_price,
+                    'currency': 'EUR',
+                    'refresh': True,
+                    'notify_stock': True,
+                    'notify_coupon': True,
+                },
+                'requires_confirmation': True,
+            })
         add({
             'id': 'open_live_deals',
             'type': 'navigate',
@@ -250,7 +409,15 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'Grupos',
         })
 
-    if any(k in texto for k in ['gmail', 'email', 'importar', 'importacao', 'fonte', 'fontes']):
+    if any(k in texto for k in ['gmail', 'importar', 'importacao', 'fonte', 'fontes']):
+        if any(k in texto for k in ['sincroniza', 'sincronizar', 'sync', 'atualiza', 'atualizar']):
+            add({
+                'id': 'sync_gmail',
+                'type': 'sync_gmail',
+                'label': 'Sincronizar Gmail',
+                'description': 'Importar novas faturas do Gmail ligado',
+                'requires_confirmation': True,
+            })
         add({
             'id': 'open_import',
             'type': 'navigate',
@@ -258,7 +425,15 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'ImportarDados',
         })
 
-    if any(k in texto for k in ['banco', 'open banking', 'transacoes', 'transacoes bancarias', 'sincronizar']):
+    if any(k in texto for k in ['banco', 'open banking', 'transacoes', 'transacoes bancarias']):
+        if any(k in texto for k in ['sincroniza', 'sincronizar', 'sync', 'atualiza', 'atualizar']):
+            add({
+                'id': 'sync_bank',
+                'type': 'sync_bank',
+                'label': 'Sincronizar banco',
+                'description': 'Buscar movimentos das contas bancarias ligadas',
+                'requires_confirmation': True,
+            })
         add({
             'id': 'open_banking',
             'type': 'navigate',
@@ -267,11 +442,131 @@ def _chat_actions(mensagem: str, user_id: int):
         })
 
     if any(k in texto for k in ['subscricao', 'subscricoes', 'assinatura', 'recorrente', 'netflix', 'spotify']):
+        if any(k in texto for k in ['bill', 'bills', 'conta', 'calendario', 'pagamento', 'obrigacao', 'cria', 'criar']):
+            bills = _subscription_bills_payload(user_id)
+            if bills:
+                add({
+                    'id': 'create_bills_from_subscriptions',
+                    'type': 'create_bills_from_subscriptions',
+                    'label': 'Criar bills',
+                    'description': f'Criar {len(bills)} pagamento(s) recorrente(s)',
+                    'payload': {'bills': bills},
+                    'requires_confirmation': True,
+                })
         add({
             'id': 'open_subscriptions',
             'type': 'navigate',
             'label': 'Auditar subscricoes',
             'route': 'MinhasSubscricoes',
+        })
+
+    if any(k in texto for k in ['familia', 'familiar', 'plano familiar']):
+        email = _email_da_mensagem(mensagem)
+        role = 'partner'
+        if any(k in texto for k in ['admin', 'administrador']):
+            role = 'admin'
+        elif any(k in texto for k in ['crianca', 'filho', 'filha']):
+            role = 'child'
+        elif any(k in texto for k in ['so leitura', 'leitura', 'viewer', 'ver apenas']):
+            role = 'viewer'
+        elif any(k in texto for k in ['parceiro', 'parceira', 'partner']):
+            role = 'partner'
+
+        family_exists = True
+        try:
+            from app.api.planning import _family_for_user
+            family_exists = bool(_family_for_user(user_id))
+        except Exception:
+            family_exists = True
+
+        if email and any(k in texto for k in ['convida', 'convidar', 'convite', 'adiciona', 'adicionar']):
+            if family_exists:
+                add({
+                    'id': 'invite_family_member',
+                    'type': 'invite_family_member',
+                    'label': 'Convidar membro',
+                    'description': f'Enviar convite familiar para {email}',
+                    'payload': {'email': email, 'role': role},
+                    'requires_confirmation': True,
+                })
+            else:
+                add({
+                    'id': 'create_family_plan_and_invite',
+                    'type': 'create_family_plan_and_invite',
+                    'label': 'Criar plano e convidar',
+                    'description': f'Ativar plano familiar e convidar {email}',
+                    'payload': {
+                        'family': {'nome': 'Plano familiar', 'orcamento_mensal': 2000, 'currency': 'EUR'},
+                        'email': email,
+                        'role': role,
+                    },
+                    'requires_confirmation': True,
+                })
+
+        categoria_budget = _categoria_da_mensagem(mensagem)
+        if any(k in texto for k in ['budget', 'orcamento', 'limite']) and (categoria_budget or 'categoria' in texto):
+            categoria = categoria_budget or 'Casa & Decoracao'
+            valor = _valor_da_mensagem(mensagem)
+            if valor:
+                if family_exists:
+                    add({
+                        'id': f'create_family_budget_{_normalizar_texto(categoria).replace(" ", "_")}',
+                        'type': 'create_family_category_budget',
+                        'label': 'Criar budget familiar',
+                        'description': f'{categoria}: {valor:.2f} EUR por mes',
+                        'payload': {'category': categoria, 'amount': valor, 'currency': 'EUR'},
+                        'requires_confirmation': True,
+                    })
+                else:
+                    add({
+                        'id': f'create_family_plan_budget_{_normalizar_texto(categoria).replace(" ", "_")}',
+                        'type': 'create_family_plan_and_budget',
+                        'label': 'Criar plano e budget',
+                        'description': f'Plano familiar com budget de {categoria}',
+                        'payload': {
+                            'family': {'nome': 'Plano familiar', 'orcamento_mensal': max(valor, 2000), 'currency': 'EUR'},
+                            'budget': {'category': categoria, 'amount': valor, 'currency': 'EUR'},
+                        },
+                        'requires_confirmation': True,
+                    })
+
+        if any(k in texto for k in ['despesa', 'movimento', 'fatura']) and any(k in texto for k in ['familiar', 'pessoal', 'familia']):
+            payload = _family_expense_action_payload(user_id, mensagem)
+            if payload:
+                add({
+                    'id': 'mark_family_expense',
+                    'type': 'mark_family_expense',
+                    'label': 'Marcar despesa',
+                    'description': f"{payload.get('description') or 'Despesa'} como {'familiar' if payload.get('include_family') else 'pessoal'}",
+                    'payload': payload,
+                    'requires_confirmation': True,
+                })
+
+        family_plan_action_exists = any(item['type'] in {'create_family_plan_and_invite', 'create_family_plan_and_budget'} for item in actions)
+        if (
+            not family_plan_action_exists
+            and any(k in texto for k in ['cria', 'criar'])
+            and any(k in texto for k in ['plano familiar', 'familia'])
+        ):
+            valor = _valor_da_mensagem(mensagem)
+            add({
+                'id': 'create_family_plan',
+                'type': 'create_family_plan',
+                'label': 'Criar plano familiar',
+                'description': 'Ativar despesas e orcamentos partilhados',
+                'payload': {
+                    'nome': 'Plano familiar',
+                    'orcamento_mensal': valor or 2000,
+                    'currency': 'EUR',
+                },
+                'requires_confirmation': True,
+            })
+
+        add({
+            'id': 'open_family_plan',
+            'type': 'navigate',
+            'label': 'Abrir plano familiar',
+            'route': 'FamilyPlan',
         })
 
     if any(k in texto for k in ['net worth', 'patrimonio', 'patrimonio liquido', 'ativo', 'ativos', 'divida', 'dividas']):
@@ -312,6 +607,11 @@ def _chat_actions(mensagem: str, user_id: int):
         categoria = _categoria_da_mensagem(mensagem)
         valor = _valor_da_mensagem(mensagem)
         wants_create = any(k in texto for k in ['cria', 'criar', 'define', 'definir', 'mete', 'coloca', 'faz'])
+        if wants_create and (not categoria or not valor):
+            auto_payload = _auto_meta_payload(user_id)
+            if auto_payload:
+                categoria = categoria or auto_payload['categoria']
+                valor = valor or auto_payload['limite']
         if wants_create and categoria and valor:
             add({
                 'id': f'create_meta_{_normalizar_texto(categoria).replace(" ", "_")}',
@@ -357,7 +657,7 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'Metas',
         })
 
-    return actions[:3]
+    return actions[:5]
 
 
 # ── Groq chat direto (sem índice — funciona mesmo sem ficheiros carregados) ────

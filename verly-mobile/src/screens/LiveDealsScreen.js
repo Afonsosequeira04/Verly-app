@@ -227,8 +227,32 @@ function ResultBlock({ result, onSave }) {
   );
 }
 
+function optionsForWatch(item) {
+  const result = item?.result || {};
+  const rawOptions = [
+    ...(result.promotions || []),
+    ...(result.options || []),
+    ...(result.online_options || []),
+    ...(result.nearby_options || []),
+  ];
+  const seen = new Set();
+  return rawOptions.filter((option) => {
+    if (!option?.merchant) return false;
+    const key = [
+      option.type || '',
+      option.merchant,
+      option.link || '',
+      option.price == null ? '' : option.price,
+    ].join('|').toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 5);
+}
+
 function WatchItem({ item, onCheck, onDelete }) {
   const alerts = item.alerts || [];
+  const purchaseOptions = optionsForWatch(item);
   return (
     <View style={styles.watchCard}>
       <View style={styles.watchTop}>
@@ -253,6 +277,15 @@ function WatchItem({ item, onCheck, onDelete }) {
         </View>
       )) : (
         <Text style={styles.noAlert}>Sem alerta ativo.</Text>
+      )}
+
+      {!!purchaseOptions.length && (
+        <View style={styles.watchOptions}>
+          <SectionTitle icon={<ShoppingBag size={16} color={C.brandMid} />} title="Opcoes de compra" />
+          {purchaseOptions.map((option, index) => (
+            <OptionRow key={`${item.id}-${option.type || 'option'}-${option.merchant}-${index}`} option={option} />
+          ))}
+        </View>
       )}
 
       <View style={styles.watchActions}>
@@ -623,6 +656,7 @@ const styles = StyleSheet.create({
   alertPill: { alignSelf: 'flex-start', backgroundColor: C.brandDim, borderRadius: RADIUS.pill, paddingHorizontal: 10, paddingVertical: 5, marginTop: 8 },
   alertText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
   noAlert: { color: C.textMid, fontSize: FONT.xs, marginTop: 8 },
+  watchOptions: { borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md, backgroundColor: C.surface2, padding: 12, marginTop: 12 },
   watchActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
   smallBtn: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2, paddingHorizontal: 10 },
   deleteBtn: { borderColor: `${C.red}55` },

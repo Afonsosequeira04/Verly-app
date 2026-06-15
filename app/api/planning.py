@@ -720,6 +720,12 @@ def familia():
     display_currency = clean_currency(request.args.get('currency') or getattr(user, 'moeda_preferida', 'EUR'))
 
     if request.method == 'POST':
+        existing = _family_for_user(user_id)
+        if existing:
+            return jsonify({
+                'family': _family_to_dict(existing, display_currency, user_id),
+                'already_exists': True,
+            })
         data = request.get_json(silent=True) or {}
         family = FamilyPlan(
             nome=(data.get('nome') or f'Familia de {user.nome}').strip()[:120],

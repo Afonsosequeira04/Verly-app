@@ -7,7 +7,17 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Send, Zap, ChevronRight, Check, Trash2 } from 'lucide-react-native';
-import { chatAPI, dashboardAPI, metasAPI, netWorthAPI } from '../services/api';
+import {
+  billsAPI,
+  chatAPI,
+  dashboardAPI,
+  familiaAPI,
+  gmailAPI,
+  liveDealsAPI,
+  metasAPI,
+  netWorthAPI,
+  openBankingAPI,
+} from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 
@@ -24,7 +34,20 @@ const SUGESTOES_FALLBACK = [
 
 function ActionCard({ action, onAction, executing }) {
   const isDanger = action.type === 'clear_chat';
-  const isApi = action.type === 'create_meta';
+  const isApi = [
+    'add_live_deal_watch',
+    'create_bills_from_subscriptions',
+    'create_family_category_budget',
+    'create_family_plan',
+    'create_family_plan_and_invite',
+    'create_family_plan_and_budget',
+    'create_meta',
+    'create_networth_item',
+    'invite_family_member',
+    'mark_family_expense',
+    'sync_bank',
+    'sync_gmail',
+  ].includes(action.type);
   return (
     <Pressable
       onPress={() => onAction(action)}
@@ -192,6 +215,98 @@ export default function ChatScreen({ navigation }) {
           const payload = action.payload || {};
           await netWorthAPI.criarItem(payload);
           appendAssistant(`Feito. Adicionei ${payload.nome || 'o item'} ao net worth.`);
+          return;
+        }
+
+        if (action.type === 'create_bills_from_subscriptions') {
+          const bills = action.payload?.bills || [];
+          for (const bill of bills) {
+            await billsAPI.criar(bill);
+          }
+          appendAssistant(`Feito. Criei ${bills.length} bill${bills.length === 1 ? '' : 's'} a partir das subscricoes detetadas.`);
+          return;
+        }
+
+        if (action.type === 'add_live_deal_watch') {
+          const payload = action.payload || {};
+          await liveDealsAPI.addWatch(payload);
+          appendAssistant(`Feito. ${payload.product_name || 'O produto'} ficou na wishlist do Live Deals.`);
+          navigation?.navigate('LiveDeals');
+          return;
+        }
+
+        if (action.type === 'draft_refund_email') {
+          const payload = action.payload || {};
+          appendAssistant(`${payload.subject || 'Rascunho de reclamacao'}\n\n${payload.message || 'Nao encontrei uma oportunidade com rascunho pronto.'}`);
+          if (payload.route) navigation?.navigate(payload.route, payload.params || {});
+          return;
+        }
+
+        if (action.type === 'create_family_category_budget') {
+          const payload = action.payload || {};
+          await familiaAPI.salvarBudgetCategoria(payload);
+          appendAssistant(`Feito. Criei o budget familiar de ${payload.category || 'categoria'} com limite de ${Number(payload.amount || payload.monthly_limit || 0).toFixed(2)}EUR.`);
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'invite_family_member') {
+          const payload = action.payload || {};
+          const res = await familiaAPI.convidar(payload.email, payload.role || 'partner');
+          const inviteLink = res?.invite?.invite_link;
+          appendAssistant(inviteLink
+            ? `Convite criado para ${payload.email}. Link: ${inviteLink}`
+            : `Convite enviado para ${payload.email}.`);
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'create_family_plan') {
+          const payload = action.payload || {};
+          const res = await familiaAPI.criar(payload);
+          appendAssistant(res?.already_exists ? 'O plano familiar ja estava ativo.' : 'Feito. O plano familiar ficou ativo.');
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'create_family_plan_and_invite') {
+          const payload = action.payload || {};
+          await familiaAPI.criar(payload.family || {});
+          const res = await familiaAPI.convidar(payload.email, payload.role || 'partner');
+          const inviteLink = res?.invite?.invite_link;
+          appendAssistant(inviteLink
+            ? `Plano familiar ativo. Convite criado para ${payload.email}: ${inviteLink}`
+            : `Plano familiar ativo. Convite enviado para ${payload.email}.`);
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'create_family_plan_and_budget') {
+          const payload = action.payload || {};
+          await familiaAPI.criar(payload.family || {});
+          await familiaAPI.salvarBudgetCategoria(payload.budget || {});
+          appendAssistant(`Plano familiar ativo. Budget de ${payload.budget?.category || 'categoria'} criado.`);
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'mark_family_expense') {
+          const payload = action.payload || {};
+          await familiaAPI.marcarDespesa(payload);
+          appendAssistant(`Feito. Marquei ${payload.description || 'a despesa'} como ${payload.include_family ? 'familiar' : 'pessoal'}.`);
+          navigation?.navigate('FamilyPlan');
+          return;
+        }
+
+        if (action.type === 'sync_gmail') {
+          const res = await gmailAPI.sync();
+          appendAssistant(`Feito. Gmail sincronizado: ${res?.faturas_criadas || res?.created || 0} faturas novas.`);
+          return;
+        }
+
+        if (action.type === 'sync_bank') {
+          const res = await openBankingAPI.sync();
+          appendAssistant(`Feito. Banco sincronizado: ${res?.imported || res?.transactions_imported || 0} movimentos novos.`);
           return;
         }
 
