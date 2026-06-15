@@ -6,6 +6,7 @@ from app.api import api_bp
 from app.financial_records import clean_currency
 from app.live_deals import (
     analyze_live_deal,
+    clean_watch_product_name,
     monthly_replay,
     refresh_watchlist_item,
     watchlist_item_to_dict,
@@ -38,7 +39,7 @@ def live_deals_search():
     user_id = _user_id()
     user = User.query.get(user_id)
     data = request.json or {}
-    product = (data.get('product_name') or data.get('produto') or data.get('item') or '').strip()
+    product = clean_watch_product_name(data.get('product_name') or data.get('produto') or data.get('item') or '')
     if not product:
         return jsonify({'success': False, 'error': 'Produto obrigatorio.'}), 400
 
@@ -81,7 +82,7 @@ def live_deals_create_watch():
     user_id = _user_id()
     user = User.query.get(user_id)
     data = request.json or {}
-    product = (data.get('product_name') or data.get('produto') or data.get('item') or '').strip()
+    product = clean_watch_product_name(data.get('product_name') or data.get('produto') or data.get('item') or '')
     if not product:
         return jsonify({'success': False, 'error': 'Produto obrigatorio.'}), 400
 

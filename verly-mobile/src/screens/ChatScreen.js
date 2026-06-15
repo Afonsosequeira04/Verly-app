@@ -20,6 +20,7 @@ import {
 } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 const initials = (name = '') => name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
@@ -373,13 +374,15 @@ export default function ChatScreen({ navigation }) {
         contentContainerStyle={{ padding: SPACE.md, paddingBottom: 16 }}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={() => (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyIcon}>
-              <Zap size={24} color={C.brand} />
-            </View>
-            <Text style={s.emptyTitle}>Verly IA</Text>
-            <Text style={s.emptySub}>Faz qualquer pergunta sobre as tuas finanças.</Text>
-          </View>
+          <RefinedEmptyState
+            framed={false}
+            variant="command"
+            accent={C.brand}
+            icon={<Zap size={17} color={C.brandMid || C.brand} />}
+            title="Verly IA"
+            subtitle="Pede analise, cria metas, segue produtos ou prepara acoes financeiras com confirmacao."
+            style={s.emptyWrap}
+          />
         )}
         ListFooterComponent={sending ? (
           <View style={s.typingRow}>
@@ -499,14 +502,6 @@ const s = StyleSheet.create({
   typingRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
 
   emptyWrap:  { alignItems: 'center', paddingTop: 60, gap: 12 },
-  emptyIcon: {
-    width: 52, height: 52, borderRadius: 16,
-    backgroundColor: C.brandDim, borderWidth: 1, borderColor: C.brand,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  emptyTitle: { fontSize: FONT.xl, fontWeight: '800', color: C.text },
-  emptySub:   { fontSize: FONT.sm, color: C.textMid, textAlign: 'center', maxWidth: 240 },
-
   sugestoesWrap: {
     padding: SPACE.md, paddingTop: 0, gap: 8,
     flexDirection: 'row', flexWrap: 'wrap',

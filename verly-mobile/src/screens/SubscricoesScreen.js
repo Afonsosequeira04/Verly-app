@@ -13,6 +13,7 @@ import { COLORS, RADIUS } from '../constants/theme';
 import { useRevenueCat } from '../context/RevenueCatContext';
 import { subscricoesAPI } from '../services/api';
 import { formatCompactMoney, formatMoney } from '../utils/money';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -37,13 +38,17 @@ const sourceLabel = (source) => {
 
 function EmptyAudit({ onDetect, detecting }) {
   return (
-    <Animated.View entering={FadeInDown.delay(160).springify()} style={styles.emptyCard}>
-      <Sparkles size={34} color={C.brand} />
-      <Text style={styles.emptyTitle}>Ainda nao encontrei subscricoes</Text>
-      <Text style={styles.emptySub}>Liga o banco ou analisa as faturas para apanhar pagamentos recorrentes.</Text>
-      <Pressable onPress={onDetect} disabled={detecting} style={[styles.primaryBtn, detecting && { opacity: 0.6 }]}>
-        {detecting ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryTxt}>Detetar agora</Text>}
-      </Pressable>
+    <Animated.View entering={FadeInDown.delay(160).springify()}>
+      <RefinedEmptyState
+        variant="stack"
+        accent={C.brand}
+        icon={<Sparkles size={22} color={C.brandMid || C.brand} />}
+        title="Ainda nao encontrei subscricoes"
+        subtitle="Liga o banco ou analisa as faturas para apanhar pagamentos recorrentes."
+        actionLabel="Detetar agora"
+        loading={detecting}
+        onAction={onDetect}
+      />
     </Animated.View>
   );
 }
@@ -373,14 +378,6 @@ const styles = StyleSheet.create({
   subBottom: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
   subBottomValue: { color: C.text, fontSize: 12, fontWeight: '800' },
   alertLine: { color: C.textMid, fontSize: 11, lineHeight: 16, marginTop: 8 },
-  emptyCard: {
-    alignItems: 'center', backgroundColor: C.surface, borderRadius: RADIUS.xl,
-    borderWidth: 1, borderColor: C.border, padding: 24, gap: 10,
-  },
-  emptyTitle: { color: C.text, fontSize: 16, fontWeight: '800', textAlign: 'center' },
-  emptySub: { color: C.textMid, fontSize: 13, textAlign: 'center', lineHeight: 18 },
-  primaryBtn: { backgroundColor: C.brand, borderRadius: 12, paddingHorizontal: 18, paddingVertical: 11, marginTop: 6, minWidth: 140, alignItems: 'center' },
-  primaryTxt: { color: '#fff', fontWeight: '900', fontSize: 13 },
   tipCard: {
     marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 10,
     backgroundColor: C.green + '12', borderColor: C.green + '33',

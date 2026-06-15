@@ -19,6 +19,7 @@ import { ArrowLeft, CalendarDays, Check, Plus, Trash2 } from 'lucide-react-nativ
 import { billsAPI, calendarAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -150,7 +151,18 @@ export default function BillsScreen({ navigation }) {
             </View>
           </View>
           {Object.keys(grouped).length === 0 ? (
-            <Text style={styles.empty}>Sem obrigacoes por agora.</Text>
+            <RefinedEmptyState
+              framed={false}
+              variant="calendar"
+              accent={C.brand}
+              icon={<CalendarDays size={22} color={C.brandMid || C.brand} />}
+              title="Sem obrigacoes por agora"
+              subtitle="Adiciona rendas, seguros, subscricoes ou qualquer data que nao podes falhar."
+              actionLabel="Adicionar bill"
+              actionIcon={<Plus size={14} color="#fff" />}
+              onAction={() => setModal(true)}
+              style={styles.emptyState}
+            />
           ) : Object.entries(grouped).map(([month, items]) => (
             <View key={month} style={styles.monthBlock}>
               <Text style={styles.monthTitle}>{month}</Text>
@@ -217,7 +229,7 @@ const styles = StyleSheet.create({
   billMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
   billValue: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   paid: { textDecorationLine: 'line-through', color: C.textMid },
-  empty: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', padding: 24 },
+  emptyState: { paddingVertical: 18 },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: C.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 12, borderWidth: 1, borderColor: C.border },
   sheetTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },

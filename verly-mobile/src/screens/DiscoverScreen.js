@@ -18,6 +18,7 @@ import { ArrowLeft, ExternalLink, LocateFixed, Newspaper } from 'lucide-react-na
 
 import { discoverAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -119,10 +120,16 @@ export default function DiscoverScreen({ navigation }) {
           </Animated.View>
         ))}
         {!articles.length && (
-          <View style={styles.empty}>
-            <Newspaper size={24} color={C.textMid} />
-            <Text style={styles.emptyText}>Ainda nao apareceram noticias. Tenta atualizar ou usar a localizacao.</Text>
-          </View>
+          <RefinedEmptyState
+            variant="feed"
+            accent={C.cyan}
+            icon={<Newspaper size={17} color={C.cyan} />}
+            title="Sem noticias ainda"
+            subtitle="Atualiza o feed ou usa a localizacao para filtrar noticias financeiras do teu pais."
+            actionLabel="Atualizar"
+            onAction={() => load({}, true)}
+            style={styles.emptyState}
+          />
         )}
       </ScrollView>
     </View>
@@ -146,6 +153,5 @@ const styles = StyleSheet.create({
   articleSource: { color: C.brand, fontSize: FONT.xs, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
   articleTitle: { color: C.text, fontSize: FONT.md, fontWeight: '900', lineHeight: 20 },
   articleDesc: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19, marginTop: 6 },
-  empty: { alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 36 },
-  emptyText: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', lineHeight: 19 },
+  emptyState: { marginTop: 2 },
 });

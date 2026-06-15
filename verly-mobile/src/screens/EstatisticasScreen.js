@@ -16,6 +16,7 @@ import { COLORS, RADIUS, FONT } from '../constants/theme';
 import { formatCompactMoney, formatMoney } from '../utils/money';
 import { FinancialChartsPanel, FinancialChartsSkeleton } from '../components/FinancialCharts';
 import IntelligenceDeck from '../components/IntelligenceDeck';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 const BAR_COLORS = [
@@ -215,16 +216,14 @@ export default function EstatisticasScreen({ navigation }) {
 
       {/* Sem dados */}
       {!recordCount && (
-        <MotiView
-          from={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ type: 'spring', damping: 18 }}
+        <RefinedEmptyState
+          variant="stack"
+          accent={C.cyan}
+          icon={<WalletCards size={22} color={C.cyan} />}
+          title="Sem dados ainda"
+          subtitle="Adiciona faturas ou liga o banco para ver estatisticas com categorias, tendencias e fontes."
           style={styles.emptyState}
-        >
-          <Text style={styles.emptyIcon}>📊</Text>
-          <Text style={styles.emptyTitle}>Sem dados ainda</Text>
-          <Text style={styles.emptySub}>Adiciona faturas ou liga o banco para ver estatísticas.</Text>
-        </MotiView>
+        />
       )}
     </ScrollView>
   );
@@ -291,8 +290,5 @@ const styles = StyleSheet.create({
   lojaTotal:     { fontSize: 14, fontWeight: '800', color: C.text },
 
   // Empty state
-  emptyState: { alignItems: 'center', paddingTop: 60, gap: 8 },
-  emptyIcon:  { fontSize: 48 },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: C.text },
-  emptySub:   { fontSize: 14, color: C.textSub, textAlign: 'center' },
+  emptyState: { marginTop: 18 },
 });

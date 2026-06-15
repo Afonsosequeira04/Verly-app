@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -58,6 +59,32 @@ def _month_bounds(month=None):
 
 def _money(value, currency='EUR'):
     return f'{float(value or 0):.2f} {clean_currency(currency)}'
+
+
+def clean_watch_product_name(value):
+    name = str(value or '').strip()
+    if not name:
+        return ''
+    name = re.sub(
+        r'^\s*(?:adiciona|adicionar|mete|coloca|poe|segue|seguir|monitoriza|acompanha|avisa(?:-me)?)\s+(?:(?:o|a|um|uma)\s+)?',
+        '',
+        name,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(
+        r'\s+(?:a|na|no|ao|para)\s+(?:wishlist|lista|live deals?)\s*$',
+        '',
+        name,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(
+        r'\s+(?:abaixo|ate|por menos de|preco alvo|quando baixar de)\s+\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?\s*$',
+        '',
+        name,
+        flags=re.IGNORECASE,
+    )
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name[:220]
 
 
 def _convert_price(value, target_currency):
@@ -524,9 +551,12 @@ def build_watchlist_alerts(item, analysis, previous_price=None):
 
 def refresh_watchlist_item(item):
     previous_price = item.last_price
+    cleaned_name = clean_watch_product_name(item.product_name)
+    if cleaned_name and cleaned_name != item.product_name:
+        item.product_name = cleaned_name
     analysis = analyze_live_deal(
         item.user_id,
-        item.product_name,
+        cleaned_name or item.product_name,
         category=item.category or 'Outros',
         lat=item.lat,
         lng=item.lng,
@@ -561,7 +591,7 @@ def watchlist_item_to_dict(item, include_result=False):
             result = None
     return {
         'id': item.id,
-        'product_name': item.product_name,
+        'product_name': clean_watch_product_name(item.product_name) or item.product_name,
         'category': item.category or 'Outros',
         'target_price': item.target_price,
         'currency': item.currency or 'EUR',

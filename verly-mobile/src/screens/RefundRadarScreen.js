@@ -19,6 +19,7 @@ import { ArrowLeft, CheckCircle2, Clock3, Mail, Radar, Send, X } from 'lucide-re
 import { perfilAPI, refundRadarAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -115,11 +116,15 @@ export default function RefundRadarScreen({ navigation }) {
         </Animated.View>
 
         {opportunities.length === 0 ? (
-          <View style={styles.empty}>
-            <CheckCircle2 size={30} color={C.green} />
-            <Text style={styles.emptyTitle}>Nada a reclamar agora</Text>
-            <Text style={styles.emptySub}>Continuo a procurar duplicados, prazos, subscricoes e acertos.</Text>
-          </View>
+          <RefinedEmptyState
+            variant="radar"
+            accent={C.green}
+            icon={<CheckCircle2 size={18} color={C.green} />}
+            title="Nada a reclamar agora"
+            subtitle="Continuo a procurar duplicados, prazos, subscricoes esquecidas e acertos possiveis."
+            actionLabel="Atualizar radar"
+            onAction={() => load(true)}
+          />
         ) : opportunities.map((item, index) => {
           const color = urgencyColor(item.urgency);
           return (
@@ -206,9 +211,6 @@ const styles = StyleSheet.create({
   cardFoot: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, fontSize: FONT.xs, fontWeight: '900' },
   deadline: { color: C.textMid, fontSize: FONT.xs },
-  empty: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 24, alignItems: 'center', gap: 9 },
-  emptyTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
-  emptySub: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center' },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.65)', justifyContent: 'flex-end' },
   sheet: { maxHeight: '86%', backgroundColor: C.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, borderWidth: 1, borderColor: C.border, padding: 18 },
   sheetHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },

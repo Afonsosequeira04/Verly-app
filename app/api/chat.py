@@ -171,6 +171,23 @@ def _valor_da_mensagem(texto: str):
         return None
 
 
+def _preco_alvo_wishlist_da_mensagem(texto: str):
+    normalizado = _normalizar_texto(texto)
+    patterns = [
+        r'\b(?:abaixo|ate|por menos de|preco alvo|alvo|quando baixar de)\s+(?:de\s+)?(\d+(?:[.,]\d{1,2})?)\b',
+        r'\b(\d+(?:[.,]\d{1,2})?)\s*(?:eur|euros)\b',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, normalizado)
+        if match:
+            try:
+                valor = float(match.group(1).replace(',', '.'))
+                return round(valor, 2) if valor > 0 else None
+            except ValueError:
+                return None
+    return None
+
+
 def _nome_patrimonio_da_mensagem(texto: str):
     normalizado = _normalizar_texto(texto)
     normalizado = re.sub(r'\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?', ' ', normalizado)
@@ -221,10 +238,24 @@ def _email_da_mensagem(texto: str):
 
 def _produto_wishlist_da_mensagem(texto: str):
     normalizado = _normalizar_texto(texto)
-    cleaned = normalizado
-    cleaned = re.sub(r'\b(?:abaixo|ate|alvo|por|de)\s+\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?\b', ' ', cleaned)
+    patterns = [
+        r'\b(?:adiciona|adicionar|mete|coloca|poe|seguir|segue|monitoriza|acompanha|avisa(?:-me)?)\s+(?:(?:o|a|um|uma)\s+)?(.+?)(?:\s+(?:a|na|no|ao|para)\s+(?:wishlist|lista|live deals?)|\s+(?:abaixo|ate|por menos|preco alvo|quando baixar)\b|$)',
+        r'\b(?:wishlist|lista|live deals?)\s+(?:de|do|da|para)?\s*(.+?)(?:\s+(?:abaixo|ate|por menos|preco alvo|quando baixar)\b|$)',
+    ]
+    cleaned = ''
+    for pattern in patterns:
+        match = re.search(pattern, normalizado)
+        if match:
+            cleaned = match.group(1)
+            break
+    if not cleaned:
+        cleaned = normalizado
+    cleaned = re.sub(r'\b(?:abaixo|ate|alvo|por|de|por menos de|preco alvo)\s+\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)?\b', ' ', cleaned)
     cleaned = re.sub(r'\b\d+(?:[.,]\d{1,2})?\s*(?:eur|euros)\b', ' ', cleaned)
-    cleaned = re.sub(r'\b(adiciona|adicionar|seguir|segue|monitoriza|wishlist|live deals?|produto|compra|preco|preco alvo|abaixo|baixar|quando|ficar|por|de|a|o|um|uma|na|no|ao|ate|eur|euros)\b', ' ', cleaned)
+    cleaned = re.sub(r'\b(?:wishlist|lista|live deals?|produto|compra|preco|preco alvo|abaixo|baixar|quando|ficar)\b', ' ', cleaned)
+    cleaned = re.sub(r'^(?:adiciona|adicionar|mete|coloca|poe|seguir|segue|monitoriza|acompanha|avisa(?:-me)?|o|a|um|uma)\s+', ' ', cleaned)
+    cleaned = re.sub(r'\s+(?:a|na|no|ao|para)\s*$', ' ', cleaned)
+    cleaned = re.sub(r'[?!:;]+', ' ', cleaned)
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     if len(cleaned) < 3:
         return None
@@ -365,10 +396,20 @@ def _chat_actions(mensagem: str, user_id: int):
             'route': 'RefundRadar',
         })
 
-    if any(k in texto for k in ['live deal', 'live deals', 'wishlist', 'seguir produto', 'baixar preco', 'cupao', 'cupoes', 'stock perto', 'melhor preco']):
+    product_name = _produto_wishlist_da_mensagem(mensagem)
+    product_add_command = (
+        product_name
+        and any(texto.startswith(k) for k in ['adiciona ', 'adicionar ', 'mete ', 'coloca ', 'poe ', 'segue ', 'seguir ', 'monitoriza '])
+        and not any(k in texto for k in [
+            'fatura', 'recibo', 'meta', 'orcamento', 'banco', 'gmail', 'familia',
+            'familiar', 'net worth', 'patrimonio', 'despesa', 'bill', 'subscricao',
+            'subscricoes', 'assinatura',
+        ])
+    )
+    if product_add_command or any(k in texto for k in ['live deal', 'live deals', 'wishlist', 'seguir produto', 'baixar preco', 'cupao', 'cupoes', 'stock perto', 'melhor preco']):
         wants_watch = any(k in texto for k in ['adiciona', 'adicionar', 'seguir', 'segue', 'monitoriza', 'avisa', 'wishlist'])
-        product_name = _produto_wishlist_da_mensagem(mensagem)
-        target_price = _valor_da_mensagem(mensagem)
+        wants_watch = wants_watch or product_add_command
+        target_price = _preco_alvo_wishlist_da_mensagem(mensagem)
         if wants_watch and product_name:
             add({
                 'id': 'add_live_deal_watch',

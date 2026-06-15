@@ -30,6 +30,7 @@ import {
 import { familiaAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 const ROLES = [
@@ -266,11 +267,17 @@ export default function FamilyPlanScreen({ navigation }) {
         )}
 
         {!family ? (
-          <Animated.View entering={FadeInDown.delay(40)} style={styles.empty}>
-            <Users size={32} color={C.brand} />
-            <Text style={styles.emptyTitle}>Cria o teu plano</Text>
-            <Text style={styles.emptyText}>Depois podes convidar pessoas, escolher contas partilhadas e separar despesas familiares das pessoais.</Text>
-            <Pressable onPress={openCreate} style={styles.mainBtn}><Text style={styles.mainBtnText}>Criar plano</Text></Pressable>
+          <Animated.View entering={FadeInDown.delay(40)}>
+            <RefinedEmptyState
+              variant="group"
+              accent={C.brand}
+              icon={<Users size={22} color={C.brandMid || C.brand} />}
+              title="Cria o teu plano"
+              subtitle="Depois podes convidar pessoas, escolher contas partilhadas e separar despesas familiares das pessoais."
+              actionLabel="Criar plano"
+              actionIcon={<Plus size={14} color="#fff" />}
+              onAction={openCreate}
+            />
           </Animated.View>
         ) : (
           <>
@@ -502,10 +509,6 @@ const styles = StyleSheet.create({
   okBtn: { width: 34, height: 34, borderRadius: RADIUS.sm, backgroundColor: C.green, alignItems: 'center', justifyContent: 'center' },
   iconTiny: { width: 32, height: 32, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: C.surface2 },
   empty: { backgroundColor: C.surface, borderRadius: RADIUS.lg, borderWidth: 1, borderColor: C.border, padding: 22, alignItems: 'center', gap: 10 },
-  emptyTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },
-  emptyText: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', lineHeight: 20 },
-  mainBtn: { backgroundColor: C.brand, borderRadius: 10, paddingHorizontal: 18, minHeight: 42, justifyContent: 'center' },
-  mainBtnText: { color: '#fff', fontWeight: '900' },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: C.surface, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 12, borderWidth: 1, borderColor: C.border, maxHeight: '86%' },
   sheetTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900' },

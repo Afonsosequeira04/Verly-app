@@ -36,6 +36,7 @@ import { liveDealsAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
 import { getMapComponents } from '../utils/maps';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -573,10 +574,17 @@ export default function LiveDealsScreen({ navigation }) {
             {watchlist.length ? watchlist.map((item) => (
               <WatchItem key={item.id} item={item} onCheck={checkWatch} onDelete={deleteWatch} />
             )) : (
-              <View style={styles.emptyMini}>
-                <Bell size={24} color={C.textMid} />
-                <Text style={styles.emptyMiniText}>Segue um produto para receber alertas de preco, stock e cupoes.</Text>
-              </View>
+              <RefinedEmptyState
+                framed={false}
+                variant="stack"
+                accent={C.yellow}
+                icon={<Bell size={21} color={C.yellow} />}
+                title="Sem produtos seguidos"
+                subtitle="Segue um produto para receber alertas de preco, stock e cupoes."
+                actionLabel="Procurar produto"
+                onAction={() => setTab('search')}
+                style={styles.emptyMini}
+              />
             )}
           </View>
         )}
