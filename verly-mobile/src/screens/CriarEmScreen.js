@@ -10,8 +10,10 @@ import {
   RefreshControl, Share,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { FileText } from 'lucide-react-native';
 import { apiFetch } from '../services/api';
 import { COLORS } from '../constants/theme';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -248,11 +250,17 @@ export default function CriarEmScreen({ navigation }) {
 
       {/* Lista */}
       {playlists.length === 0 ? (
-        <View style={s.empty}>
-          <Text style={s.emptyIcon}>📋</Text>
-          <Text style={s.emptyTitle}>Sem listas ainda</Text>
-          <Text style={s.emptySub}>Cria a tua primeira lista de faturas ou junta-te a uma lista de um amigo.</Text>
-        </View>
+        <RefinedEmptyState
+          framed={false}
+          variant="stack"
+          accent={COLORS.brand}
+          icon={<FileText size={21} color={COLORS.brand} />}
+          title="Sem listas ainda"
+          subtitle="Cria a tua primeira lista de faturas ou junta-te a uma lista de um amigo."
+          actionLabel="Nova lista"
+          onAction={() => setShowCreate(true)}
+          style={s.empty}
+        />
       ) : (
         <FlatList
           data={playlists}

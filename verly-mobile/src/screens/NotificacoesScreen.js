@@ -6,8 +6,10 @@ import {
   View, Text, FlatList, StyleSheet,
   TouchableOpacity, ActivityIndicator,
 } from 'react-native';
+import { Bell } from 'lucide-react-native';
 import { notificacoesAPI } from '../services/api';
 import { COLORS } from '../constants/theme';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const URGENCIA_COLORS = { alta: COLORS.red, media: COLORS.yellow, info: COLORS.brand };
 
@@ -66,11 +68,15 @@ export default function NotificacoesScreen({ navigation }) {
           );
         }}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyIcon}>✅</Text>
-            <Text style={styles.emptyTitle}>Tudo em ordem!</Text>
-            <Text style={styles.emptySub}>Não tens notificações por agora.</Text>
-          </View>
+          <RefinedEmptyState
+            framed={false}
+            variant="feed"
+            accent={COLORS.green || COLORS.brand}
+            icon={<Bell size={20} color={COLORS.green || COLORS.brand} />}
+            title="Tudo em ordem"
+            subtitle="Nao tens notificacoes por agora."
+            style={styles.empty}
+          />
         }
       />
     </View>

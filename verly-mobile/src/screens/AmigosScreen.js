@@ -6,9 +6,11 @@ import {
   Modal,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { Inbox, Receipt, Users } from 'lucide-react-native';
 import { amigosAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
 import { Reveal } from '../components/UI';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -141,7 +143,7 @@ export default function AmigosScreen({ navigation }) {
       <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
         <Pressable onPress={() => navigation.navigate('Grupos')}
           style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#7C6FE020', borderRadius: 12, borderWidth: 1, borderColor: '#7C6FE040', padding: 10 }}>
-          <Text style={{ fontSize: 18 }}>🧾</Text>
+          <Receipt size={18} color="#7C6FE0" />
           <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C6FE0' }}>Grupos de despesas</Text>
         </Pressable>
       </View>
@@ -176,11 +178,17 @@ export default function AmigosScreen({ navigation }) {
             </Pressable>
 
             {amigos.length === 0 ? (
-              <View style={s.empty}>
-                <Text style={s.emptyIcon}>👥</Text>
-                <Text style={s.emptyTitle}>Sem amigos ainda</Text>
-                <Text style={s.emptySub}>Adiciona amigos para criares grupos e dividires despesas.</Text>
-              </View>
+              <RefinedEmptyState
+                framed={false}
+                variant="group"
+                accent={C.brand}
+                icon={<Users size={20} color={C.brand} />}
+                title="Sem amigos ainda"
+                subtitle="Adiciona amigos para criares grupos e dividires despesas."
+                actionLabel="Adicionar amigo"
+                onAction={() => setShowAdd(true)}
+                style={s.empty}
+              />
             ) : (
               amigos.map(a => (
                 <View key={a.amizade_id} style={s.row}>
@@ -202,11 +210,17 @@ export default function AmigosScreen({ navigation }) {
         {tab === 'pedidos' && (
           <Reveal delay={60}>
             {pedidos.length === 0 ? (
-              <View style={s.empty}>
-                <Text style={s.emptyIcon}>📬</Text>
-                <Text style={s.emptyTitle}>Sem pedidos pendentes</Text>
-                <Text style={s.emptySub}>Quando alguém te enviar um pedido de amizade, aparece aqui.</Text>
-              </View>
+              <RefinedEmptyState
+                framed={false}
+                variant="feed"
+                accent={C.cyan || C.brand}
+                icon={<Inbox size={20} color={C.cyan || C.brand} />}
+                title="Sem pedidos pendentes"
+                subtitle="Quando alguem te enviar um pedido de amizade, aparece aqui."
+                actionLabel="Adicionar amigo"
+                onAction={() => setShowAdd(true)}
+                style={s.empty}
+              />
             ) : (
               pedidos.map(p => (
                 <View key={p.pedido_id} style={s.row}>

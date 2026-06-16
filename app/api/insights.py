@@ -667,7 +667,7 @@ def _build_priority_insights(ctx: dict) -> list:
             'Escolhido porque e a categoria com maior peso no mes atual.',
             [
                 {'label': 'Ver movimentos', 'type': 'open_transactions', 'filters': {'category': top.get('categoria')}},
-                {'label': 'Usar Score', 'type': 'open_score'},
+                {'label': 'Abrir Live Deals', 'type': 'open_live_deals'},
             ],
         )
 

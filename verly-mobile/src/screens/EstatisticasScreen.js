@@ -222,6 +222,8 @@ export default function EstatisticasScreen({ navigation }) {
           icon={<WalletCards size={22} color={C.cyan} />}
           title="Sem dados ainda"
           subtitle="Adiciona faturas ou liga o banco para ver estatisticas com categorias, tendencias e fontes."
+          actionLabel="Ligar dados"
+          onAction={() => navigation.navigate('ImportarDados')}
           style={styles.emptyState}
         />
       )}

@@ -11,7 +11,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import {
   TrendingDown, TrendingUp, Percent, Receipt,
-  ChevronLeft, ChevronRight, Award, BarChart2,
+  ChevronLeft, ChevronRight, Award, BarChart2, Upload,
 } from 'lucide-react-native';
 import { relatorioAPI } from '../services/api';
 
@@ -70,7 +70,7 @@ function StatCard({ Icon, label, value, sub, accent }) {
 }
 
 // ── Ecrã ──────────────────────────────────────────────────────────────────────
-export default function RelatorioScreen() {
+export default function RelatorioScreen({ navigation }) {
   const now = new Date();
   const [mes,  setMes]  = useState(now.getMonth() + 1);
   const [ano,  setAno]  = useState(now.getFullYear());
@@ -139,6 +139,10 @@ export default function RelatorioScreen() {
           <BarChart2 size={44} color={C.border} />
           <Text style={styles.emptyTitle}>Sem dados este mês</Text>
           <Text style={styles.emptySub}>Carrega faturas para ver o relatório.</Text>
+          <TouchableOpacity style={styles.emptyBtn} onPress={() => navigation?.navigate?.('Faturas')}>
+            <Upload size={14} color="#fff" />
+            <Text style={styles.emptyBtnText}>Carregar fatura</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <>
@@ -257,6 +261,18 @@ const styles = StyleSheet.create({
   emptyBox:   { alignItems: 'center', paddingTop: 60, paddingHorizontal: 40 },
   emptyTitle: { fontSize: 17, fontWeight: '800', color: C.textSub, marginTop: 16, marginBottom: 8 },
   emptySub:   { fontSize: 13, color: C.textSub, textAlign: 'center', lineHeight: 20 },
+  emptyBtn: {
+    minHeight: 42,
+    marginTop: 16,
+    borderRadius: 12,
+    backgroundColor: C.brand,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  emptyBtnText: { color: '#fff', fontSize: 13, fontWeight: '900' },
 
   // Roast
   roastCard: {

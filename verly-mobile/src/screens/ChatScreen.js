@@ -146,45 +146,41 @@ function formatThreadDate(value) {
   }
 }
 
-function ChatDepthStage() {
+function ChatCommandScene() {
   return (
-    <View style={s.depthStage} pointerEvents="none">
+    <View style={s.chatSceneCard} pointerEvents="none">
       <MotiView
-        from={{ opacity: 0.55, translateY: 4, rotate: '-2deg' }}
-        animate={{ opacity: 0.85, translateY: -2, rotate: '-2deg' }}
-        transition={{ type: 'timing', duration: 2600, loop: true, repeatReverse: true }}
-        style={s.depthBackPlate}
-      />
-      <MotiView
-        from={{ translateY: 0, scale: 1 }}
-        animate={{ translateY: -3, scale: 1.01 }}
-        transition={{ type: 'timing', duration: 2200, loop: true, repeatReverse: true }}
+        from={{ opacity: 0, translateY: 8 }}
+        animate={{ opacity: 1, translateY: 0 }}
+        transition={{ type: 'timing', duration: 420 }}
+        style={s.chatSceneBubbleLeft}
       >
-        <LinearGradient
-          colors={['rgba(139,92,246,0.28)', 'rgba(34,212,253,0.12)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={s.depthMainPlate}
-        >
-          <View style={s.depthIcon}>
-            <Zap size={14} color={C.brandMid || C.brand} />
-          </View>
-          <View style={{ flex: 1, gap: 5 }}>
-            <View style={[s.depthLine, { width: '74%' }]} />
-            <View style={[s.depthLine, { width: '48%', opacity: 0.45 }]} />
-          </View>
-          <View style={s.depthMiniStack}>
-            <View style={s.depthMiniTile} />
-            <View style={[s.depthMiniTile, { backgroundColor: C.green + '55' }]} />
-          </View>
-        </LinearGradient>
+        <Zap size={13} color={C.brandMid || C.brand} />
       </MotiView>
       <MotiView
-        from={{ opacity: 0.45, translateX: -4 }}
-        animate={{ opacity: 0.9, translateX: 3 }}
-        transition={{ type: 'timing', duration: 1800, loop: true, repeatReverse: true }}
-        style={s.depthPulse}
-      />
+        from={{ opacity: 0, translateX: 12 }}
+        animate={{ opacity: 1, translateX: 0 }}
+        transition={{ type: 'timing', duration: 520, delay: 90 }}
+        style={s.chatSceneBubbleRight}
+      >
+        <View style={s.chatSceneDot} />
+        <View style={[s.chatSceneDot, { opacity: 0.68 }]} />
+        <View style={[s.chatSceneDot, { opacity: 0.42 }]} />
+      </MotiView>
+      <LinearGradient
+        colors={['rgba(139,92,246,0.26)', 'rgba(34,212,253,0.10)']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={s.chatCommandDock}
+      >
+        <View style={s.chatCommandSpark}>
+          <MessageSquarePlus size={13} color={C.brandMid || C.brand} />
+        </View>
+        <View style={s.chatCommandBar}>
+          <View style={[s.chatCommandFill, { width: '38%' }]} />
+        </View>
+        <View style={[s.chatCommandPill, { backgroundColor: C.green + '28' }]} />
+      </LinearGradient>
     </View>
   );
 }
@@ -562,7 +558,7 @@ export default function ChatScreen({ navigation }) {
         </View>
       </View>
 
-      <ChatDepthStage />
+      <ChatCommandScene />
 
       {/* Mensagens */}
       <FlatList
@@ -702,55 +698,94 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  depthStage: {
-    height: 78,
+  chatSceneCard: {
+    height: 92,
     marginHorizontal: SPACE.md,
     marginTop: 12,
-    marginBottom: 4,
-    justifyContent: 'center',
-  },
-  depthBackPlate: {
-    position: 'absolute',
-    left: 18,
-    right: 36,
-    height: 50,
-    borderRadius: 18,
-    backgroundColor: C.surface2,
+    marginBottom: 6,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: C.border,
-    transform: [{ rotate: '-2deg' }],
+    backgroundColor: C.surface,
+    overflow: 'hidden',
+    justifyContent: 'center',
   },
-  depthMainPlate: {
-    minHeight: 58,
-    borderRadius: 18,
+  chatSceneBubbleLeft: {
+    position: 'absolute',
+    left: 18,
+    top: 16,
+    width: 48,
+    height: 38,
+    borderRadius: 16,
+    borderBottomLeftRadius: 6,
+    backgroundColor: C.brandDim,
     borderWidth: 1,
-    borderColor: C.borderHi || C.border,
-    padding: 12,
+    borderColor: C.brand + '44',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatSceneBubbleRight: {
+    position: 'absolute',
+    right: 18,
+    top: 14,
+    width: 74,
+    height: 34,
+    borderRadius: 16,
+    borderBottomRightRadius: 6,
+    backgroundColor: C.cyan + '14',
+    borderWidth: 1,
+    borderColor: C.cyan + '44',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
+    justifyContent: 'center',
+    gap: 5,
   },
-  depthIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 13,
+  chatSceneDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: C.cyan || '#22D4FD',
+  },
+  chatCommandDock: {
+    position: 'absolute',
+    left: 54,
+    right: 42,
+    bottom: 14,
+    height: 38,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: C.borderHi || C.border,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chatCommandSpark: {
+    width: 24,
+    height: 24,
+    borderRadius: 9,
     backgroundColor: C.bg,
     borderWidth: 1,
     borderColor: C.brand + '55',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  depthLine: { height: 7, borderRadius: 6, backgroundColor: 'rgba(255,255,255,0.34)' },
-  depthMiniStack: { width: 32, gap: 5 },
-  depthMiniTile: { height: 12, borderRadius: 5, backgroundColor: C.brand + '66' },
-  depthPulse: {
-    position: 'absolute',
-    right: 14,
-    bottom: 9,
-    width: 48,
-    height: 5,
-    borderRadius: 5,
-    backgroundColor: C.cyan || '#22D4FD',
+  chatCommandBar: {
+    flex: 1,
+    height: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    overflow: 'hidden',
+  },
+  chatCommandFill: {
+    height: '100%',
+    borderRadius: 8,
+    backgroundColor: C.brandMid || C.brand,
+  },
+  chatCommandPill: {
+    width: 24,
+    height: 12,
+    borderRadius: 8,
   },
 
   bubbleRow:     { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },

@@ -30,14 +30,15 @@ const DEFAULT_PREFS = {
 
 // ─── Linha de definição simples ───────────────────────────────────────────────
 function SettingRow({ icon, label, sub, onPress, right, danger, disabled }) {
+  const inactive = !onPress;
   return (
     <Pressable
       onPress={onPress}
-      disabled={disabled}
+      disabled={disabled || inactive}
       style={({ pressed }) => [
         s.row,
-        pressed && !disabled && { backgroundColor: C.surface3 },
-        disabled && { opacity: 0.5 },
+        pressed && !disabled && !inactive && { backgroundColor: C.surface3 },
+        disabled && !inactive && { opacity: 0.5 },
       ]}
     >
       <View style={[s.iconWrap, danger && { backgroundColor: C.red + '18' }]}>
@@ -47,7 +48,7 @@ function SettingRow({ icon, label, sub, onPress, right, danger, disabled }) {
         <Text style={[s.rowLabel, danger && { color: C.red }]}>{label}</Text>
         {sub ? <Text style={s.rowSub}>{sub}</Text> : null}
       </View>
-      {right ?? <ChevronRight size={14} color={C.textMid} />}
+      {right ?? (inactive ? null : <ChevronRight size={14} color={C.textMid} />)}
     </Pressable>
   );
 }
@@ -385,7 +386,6 @@ export default function ConfiguracoesScreen({ navigation }) {
             icon={<Info />}
             label="Versão da app"
             sub={`Verly v${APP_VERSION}`}
-            onPress={() => {}}
             right={<Text style={s.versionText}>v{APP_VERSION}</Text>}
           />
         </View>

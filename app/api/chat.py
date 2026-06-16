@@ -456,10 +456,10 @@ def _chat_actions(mensagem: str, user_id: int):
 
     if any(k in texto for k in ['score', 'analisar compra', 'boa compra', 'vale a pena', 'comprar']):
         add({
-            'id': 'open_score',
+            'id': 'open_live_deals_score',
             'type': 'navigate',
-            'label': 'Analisar compra',
-            'route': 'Score',
+            'label': 'Analisar no Live Deals',
+            'route': 'LiveDeals',
         })
 
     if any(k in texto for k in ['dividir', 'despesa partilhada', 'tricount', 'grupo', 'amigos devem', 'acerto']):

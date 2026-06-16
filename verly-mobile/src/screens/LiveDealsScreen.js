@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   Clock3,
   ExternalLink,
+  Gauge,
   LocateFixed,
   MapPin,
   RefreshCcw,
@@ -36,6 +37,7 @@ import { liveDealsAPI, perfilAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { formatMoney } from '../utils/money';
 import { getMapComponents } from '../utils/maps';
+import { ScoreGauge } from '../components/UI';
 import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
@@ -45,6 +47,13 @@ const URGENCIES = [
   { key: 'today', label: 'Hoje' },
   { key: 'soon', label: 'Semana' },
   { key: 'flexible', label: 'Esperar' },
+];
+const USAGE_OPTIONS = [
+  { key: 'daily', label: 'Diario' },
+  { key: 'weekly', label: 'Regular' },
+  { key: 'monthly', label: 'Ocasional' },
+  { key: 'rarely', label: 'Raro' },
+  { key: 'never', label: 'Impulso' },
 ];
 
 function parseAmount(value) {
@@ -122,27 +131,92 @@ function PromotionsBlock({ promotions = [] }) {
   );
 }
 
-function LiveDealsMap({ options = [] }) {
+function scoreColor(score = 0) {
+  if (score >= 75) return C.green;
+  if (score >= 50) return C.yellow;
+  if (score >= 25) return C.orange || C.yellow;
+  return C.red;
+}
+
+function scoreLabel(score = 0) {
+  if (score >= 75) return 'Boa compra';
+  if (score >= 50) return 'Compra aceitavel';
+  if (score >= 25) return 'Pensa duas vezes';
+  return 'Compra fraca';
+}
+
+function PurchaseScoreBlock({ score }) {
+  if (!score) return null;
+  const hasValue = score.score !== null && score.score !== undefined && Number.isFinite(Number(score.score));
+  const value = hasValue ? Number(score.score) : 0;
+  const color = hasValue ? scoreColor(value) : C.textMid;
+  return (
+    <View style={styles.scoreBlock}>
+      <View style={styles.scoreTop}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <SectionTitle icon={<Gauge size={16} color={color} />} title="Score de compra" />
+          <Text style={styles.scoreCopy}>
+            {score.summary || 'A Verly junta preco, uso e contexto financeiro antes de recomendar.'}
+          </Text>
+        </View>
+        {hasValue && (
+          <View style={styles.scoreGaugeMini}>
+            <ScoreGauge score={value || 0} size={96} strokeWidth={9} />
+          </View>
+        )}
+      </View>
+      <Text style={[styles.scoreLabel, { color }]}>{score.label || (hasValue ? scoreLabel(value) : 'Score indisponivel')}</Text>
+      {!!score.factors?.length && (
+        <View style={styles.scoreFactors}>
+          {score.factors.slice(0, 3).map((factor, index) => {
+            const factorValue = Number(factor.score ?? factor.valor ?? 0);
+            return (
+              <View key={`${factor.nome || factor.label || 'factor'}-${index}`} style={styles.scoreFactorRow}>
+                <Text style={styles.scoreFactorName} numberOfLines={1}>{factor.nome || factor.label}</Text>
+                <Text style={[styles.scoreFactorValue, { color: scoreColor(factorValue) }]}>{Math.round(factorValue)}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function LiveDealsMap({ options = [], userCoords = null, message = '' }) {
   const nearby = options.filter(item => item.type === 'nearby' && item.lat && item.lng).slice(0, 8);
   const [MapView, setMapView] = useState(null);
   const [Marker, setMarker] = useState(null);
+  const [supported, setSupported] = useState(false);
 
   React.useEffect(() => {
     const maps = getMapComponents();
+    setSupported(!!maps.supported);
     if (maps.supported) {
       setMapView(() => maps.MapView);
       setMarker(() => maps.Marker);
     }
   }, []);
 
-  if (!nearby.length) return null;
+  if (!nearby.length) {
+    if (!message) return null;
+    return (
+      <View style={styles.subPanel}>
+        <SectionTitle icon={<MapPin size={16} color={C.cyan} />} title="Lojas perto de ti" />
+        <Text style={styles.mapNotice}>{message}</Text>
+      </View>
+    );
+  }
 
-  const center = nearby[0];
+  const center = userCoords?.lat && userCoords?.lng
+    ? { lat: userCoords.lat, lng: userCoords.lng }
+    : nearby[0];
   const hasMap = !!MapView && !!Marker;
 
   return (
     <View style={styles.subPanel}>
       <SectionTitle icon={<MapPin size={16} color={C.cyan} />} title="Lojas perto de ti" />
+      {!supported && <Text style={styles.mapNotice}>Mapa nativo indisponivel nesta build. As lojas aparecem em lista.</Text>}
       {hasMap && (
         <View style={styles.dealsMap}>
           {React.createElement(MapView, {
@@ -154,6 +228,12 @@ function LiveDealsMap({ options = [] }) {
               longitudeDelta: 0.05,
             },
           },
+            userCoords?.lat && userCoords?.lng && React.createElement(Marker, {
+              key: 'user',
+              coordinate: { latitude: userCoords.lat, longitude: userCoords.lng },
+              title: 'Tu',
+              pinColor: C.brand,
+            }),
             ...nearby.map((store, index) => React.createElement(Marker, {
               key: `${store.merchant}-${index}`,
               coordinate: { latitude: store.lat, longitude: store.lng },
@@ -174,12 +254,15 @@ function LiveDealsMap({ options = [] }) {
   );
 }
 
-function ResultBlock({ result, onSave }) {
+function ResultBlock({ result, onSave, userCoords }) {
   if (!result) return null;
   const best = result?.decision?.best;
   const bestToday = result?.decision?.best_today;
+  const nearbyMessage = result?.sources?.nearby_message || '';
   return (
     <Animated.View entering={FadeInDown.delay(60)} style={styles.panel}>
+      <PurchaseScoreBlock score={result.purchase_score} />
+
       <View style={styles.decisionTop}>
         <View style={styles.decisionIcon}><Sparkles size={18} color={C.green} /></View>
         <View style={{ flex: 1 }}>
@@ -218,7 +301,11 @@ function ResultBlock({ result, onSave }) {
       ))}
 
       <PromotionsBlock promotions={result.promotions || []} />
-      <LiveDealsMap options={result.nearby_options || result.options || []} />
+      <LiveDealsMap
+        options={result.nearby_options || result.options || []}
+        userCoords={userCoords}
+        message={nearbyMessage}
+      />
 
       <Pressable onPress={onSave} style={styles.saveBtn}>
         <Bell size={15} color="#fff" />
@@ -277,7 +364,10 @@ function WatchItem({ item, onCheck, onDelete }) {
           <Text style={styles.alertText}>{alert.title}</Text>
         </View>
       )) : (
-        <Text style={styles.noAlert}>Sem alerta ativo.</Text>
+        <Pressable onPress={() => onCheck(item)} style={styles.noAlertAction}>
+          <Bell size={13} color={C.yellow} />
+          <Text style={styles.noAlertActionText}>Sem alerta ativo. Verificar agora</Text>
+        </Pressable>
       )}
 
       {!!purchaseOptions.length && (
@@ -303,7 +393,7 @@ function WatchItem({ item, onCheck, onDelete }) {
   );
 }
 
-function ReplayBlock({ replay, currency }) {
+function ReplayBlock({ replay, currency, onAddData }) {
   const replayCurrency = replay?.currency || currency || 'EUR';
   return (
     <View style={styles.panel}>
@@ -327,17 +417,24 @@ function ReplayBlock({ replay, currency }) {
         <View style={styles.emptyMini}>
           <CheckCircle2 size={22} color={C.green} />
           <Text style={styles.emptyMiniText}>Ainda nao ha eventos suficientes este mes.</Text>
+          {!!onAddData && (
+            <Pressable onPress={onAddData} style={styles.emptyMiniBtn}>
+              <Text style={styles.emptyMiniBtnText}>Ligar dados</Text>
+            </Pressable>
+          )}
         </View>
       )}
     </View>
   );
 }
 
-export default function LiveDealsScreen({ navigation }) {
+export default function LiveDealsScreen({ navigation, route }) {
   const [tab, setTab] = useState('search');
   const [product, setProduct] = useState('Whey Protein 1kg');
   const [category, setCategory] = useState('Desporto');
   const [urgency, setUrgency] = useState('flexible');
+  const [seenPrice, setSeenPrice] = useState('');
+  const [usage, setUsage] = useState('weekly');
   const [budget, setBudget] = useState('');
   const [targetPrice, setTargetPrice] = useState('');
   const [coords, setCoords] = useState(null);
@@ -350,6 +447,23 @@ export default function LiveDealsScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [notifyStock, setNotifyStock] = useState(true);
   const [notifyCoupon, setNotifyCoupon] = useState(true);
+
+  useEffect(() => {
+    const prefill = route?.params?.prefill;
+    if (!prefill) return;
+    const nextProduct = prefill.product_name || prefill.product || prefill.item || prefill.nome;
+    const nextCategory = prefill.category || prefill.categoria;
+    const nextPrice = prefill.paid_price ?? prefill.price ?? prefill.preco;
+    const nextUsage = prefill.usage || prefill.uso;
+    if (nextProduct) setProduct(String(nextProduct));
+    if (nextCategory) {
+      const match = CATEGORIES.find(cat => cat.toLowerCase() === String(nextCategory).toLowerCase());
+      setCategory(match || String(nextCategory));
+    }
+    if (nextPrice != null) setSeenPrice(String(nextPrice).replace('.', ','));
+    if (nextUsage) setUsage(String(nextUsage));
+    setTab('search');
+  }, [route?.params?.prefill]);
 
   const loadBasics = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -373,13 +487,31 @@ export default function LiveDealsScreen({ navigation }) {
   const enableLocation = async () => {
     setLocating(true);
     try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
-        Alert.alert('Localizacao', 'Permite localizacao para misturar preco e lojas proximas.');
+      const servicesEnabled = await Location.hasServicesEnabledAsync().catch(() => true);
+      if (!servicesEnabled) {
+        Alert.alert('Localizacao', 'Liga o GPS/localizacao do dispositivo para ver lojas perto.');
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert(
+          'Localizacao',
+          'Permite localizacao para misturar score, preco e lojas proximas.',
+          permission.canAskAgain === false && Linking.openSettings
+            ? [{ text: 'Definicoes', onPress: () => Linking.openSettings() }, { text: 'OK' }]
+            : [{ text: 'OK' }]
+        );
+        return;
+      }
+      const last = await Location.getLastKnownPositionAsync().catch(() => null);
+      const pos = last?.coords
+        ? last
+        : await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const nextCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setCoords(nextCoords);
+      if (product.trim()) {
+        await searchDeal({ coordsOverride: nextCoords });
+      }
     } catch (_) {
       Alert.alert('Localizacao', 'Nao foi possivel obter a localizacao agora.');
     } finally {
@@ -387,7 +519,7 @@ export default function LiveDealsScreen({ navigation }) {
     }
   };
 
-  const searchDeal = async () => {
+  const searchDeal = async ({ coordsOverride = null } = {}) => {
     if (!product.trim()) {
       Alert.alert('Live Deals', 'Escreve o produto que queres comprar.');
       return;
@@ -398,10 +530,12 @@ export default function LiveDealsScreen({ navigation }) {
         product_name: product.trim(),
         category,
         urgency,
+        paid_price: parseAmount(seenPrice),
+        usage,
         budget_limit: parseAmount(budget),
         radius_km: 6,
-        lat: coords?.lat,
-        lng: coords?.lng,
+        lat: (coordsOverride || coords)?.lat,
+        lng: (coordsOverride || coords)?.lng,
         currency,
       });
       setResult(res);
@@ -532,13 +666,32 @@ export default function LiveDealsScreen({ navigation }) {
                   style={[styles.input, styles.halfInput]}
                 />
                 <TextInput
-                  value={targetPrice}
-                  onChangeText={setTargetPrice}
-                  placeholder="Alerta abaixo de"
+                  value={seenPrice}
+                  onChangeText={setSeenPrice}
+                  placeholder="Preco visto"
                   keyboardType="decimal-pad"
                   placeholderTextColor={C.textSub}
                   style={[styles.input, styles.halfInput]}
                 />
+              </View>
+              <TextInput
+                value={targetPrice}
+                onChangeText={setTargetPrice}
+                placeholder="Avisar quando baixar de"
+                keyboardType="decimal-pad"
+                placeholderTextColor={C.textSub}
+                style={styles.input}
+              />
+              <View style={styles.usageGrid}>
+                {USAGE_OPTIONS.map((item) => (
+                  <Pressable
+                    key={item.key}
+                    onPress={() => setUsage(item.key)}
+                    style={[styles.usageChip, usage === item.key && styles.usageChipActive]}
+                  >
+                    <Text style={[styles.usageText, usage === item.key && styles.usageTextActive]}>{item.label}</Text>
+                  </Pressable>
+                ))}
               </View>
               <View style={styles.toggleRow}>
                 <View>
@@ -559,12 +712,12 @@ export default function LiveDealsScreen({ navigation }) {
                   <LocateFixed size={15} color={coords ? C.green : C.text} />
                   <Text style={styles.locationText}>{locating ? 'A ativar' : coords ? 'Local ativo' : 'Usar localizacao'}</Text>
                 </Pressable>
-                <Pressable onPress={searchDeal} disabled={loading} style={styles.primaryBtn}>
+                <Pressable onPress={() => searchDeal()} disabled={loading} style={styles.primaryBtn}>
                   {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Comparar agora</Text>}
                 </Pressable>
               </View>
             </View>
-            <ResultBlock result={result} onSave={saveWatch} />
+            <ResultBlock result={result} onSave={saveWatch} userCoords={coords} />
           </>
         )}
 
@@ -626,6 +779,11 @@ const styles = StyleSheet.create({
   segmentActive: { backgroundColor: C.surface3 },
   segmentText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900' },
   segmentTextActive: { color: C.text },
+  usageGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  usageChip: { minHeight: 32, alignItems: 'center', justifyContent: 'center', borderRadius: RADIUS.pill, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2, paddingHorizontal: 11 },
+  usageChipActive: { backgroundColor: C.brandDim, borderColor: C.brand },
+  usageText: { color: C.textMid, fontSize: FONT.xs, fontWeight: '900' },
+  usageTextActive: { color: C.text },
   toggleRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 10 },
   toggleTitle: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   toggleSub: { color: C.textMid, fontSize: FONT.xs, marginTop: 2 },
@@ -634,6 +792,15 @@ const styles = StyleSheet.create({
   locationText: { color: C.text, fontSize: FONT.xs, fontWeight: '900' },
   primaryBtn: { minHeight: 44, flex: 1.1, borderRadius: RADIUS.sm, backgroundColor: C.brand, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   primaryText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
+  scoreBlock: { backgroundColor: C.surface2, borderRadius: RADIUS.md, borderWidth: 1, borderColor: C.border, padding: 12, marginBottom: 14 },
+  scoreTop: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  scoreCopy: { color: C.textMid, fontSize: FONT.sm, lineHeight: 18, marginTop: -4 },
+  scoreGaugeMini: { width: 98, alignItems: 'center', justifyContent: 'center' },
+  scoreLabel: { fontSize: FONT.md, fontWeight: '900', marginTop: 10 },
+  scoreFactors: { marginTop: 10, borderTopWidth: 1, borderTopColor: C.border },
+  scoreFactorRow: { minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, borderBottomWidth: 1, borderBottomColor: C.border },
+  scoreFactorName: { flex: 1, color: C.textMid, fontSize: FONT.xs, fontWeight: '800' },
+  scoreFactorValue: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   decisionTop: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginBottom: 14 },
   decisionIcon: { width: 36, height: 36, borderRadius: RADIUS.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: C.greenDim },
   decisionTitle: { color: C.text, fontSize: FONT.lg, fontWeight: '900', lineHeight: 22 },
@@ -653,6 +820,7 @@ const styles = StyleSheet.create({
   optionMeta: { color: C.textMid, fontSize: FONT.xs, marginTop: 3 },
   optionPrice: { color: C.text, fontSize: FONT.sm, fontWeight: '900' },
   dealsMap: { height: 178, borderRadius: RADIUS.md, overflow: 'hidden', borderWidth: 1, borderColor: C.border, marginBottom: 8 },
+  mapNotice: { color: C.textMid, fontSize: FONT.sm, lineHeight: 18, marginBottom: 8 },
   saveBtn: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: C.green, borderRadius: RADIUS.sm, marginTop: 14 },
   saveText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
   watchCard: { borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 13 },
@@ -664,6 +832,8 @@ const styles = StyleSheet.create({
   alertPill: { alignSelf: 'flex-start', backgroundColor: C.brandDim, borderRadius: RADIUS.pill, paddingHorizontal: 10, paddingVertical: 5, marginTop: 8 },
   alertText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
   noAlert: { color: C.textMid, fontSize: FONT.xs, marginTop: 8 },
+  noAlertAction: { alignSelf: 'flex-start', minHeight: 30, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: RADIUS.pill, borderWidth: 1, borderColor: C.yellow + '35', backgroundColor: C.yellowDim || (C.yellow + '14'), paddingHorizontal: 10, marginTop: 8 },
+  noAlertActionText: { color: C.text, fontSize: FONT.xs, fontWeight: '800' },
   watchOptions: { borderWidth: 1, borderColor: C.border, borderRadius: RADIUS.md, backgroundColor: C.surface2, padding: 12, marginTop: 12 },
   watchActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
   smallBtn: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 7, borderRadius: RADIUS.sm, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2, paddingHorizontal: 10 },
@@ -678,4 +848,6 @@ const styles = StyleSheet.create({
   timelineMsg: { color: C.textMid, fontSize: FONT.sm, lineHeight: 18, marginTop: 3 },
   emptyMini: { alignItems: 'center', justifyContent: 'center', paddingVertical: 28, gap: 8 },
   emptyMiniText: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center', lineHeight: 19 },
+  emptyMiniBtn: { minHeight: 34, borderRadius: RADIUS.sm, backgroundColor: C.brand, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  emptyMiniBtnText: { color: '#fff', fontSize: FONT.xs, fontWeight: '900' },
 });

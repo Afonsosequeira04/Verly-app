@@ -59,12 +59,13 @@ export default function FaturaDetalheScreen({ route, navigation }) {
   };
 
   const handleScore = () => {
-    navigation.navigate('Score', {
+    navigation.navigate('LiveDeals', {
       faturaId: fatura.id,
       prefill: {
-        item: fatura.loja || fatura.nome_ficheiro,
-        categoria: fatura.categoria,
-        preco: fatura.total,
+        product_name: fatura.loja || fatura.nome_ficheiro,
+        category: fatura.categoria,
+        paid_price: fatura.total,
+        usage: 'monthly',
       },
     });
   };
@@ -100,7 +101,7 @@ export default function FaturaDetalheScreen({ route, navigation }) {
         </View>
         <TouchableOpacity style={styles.scoreBtn} onPress={handleScore} activeOpacity={0.85}>
           <Gauge size={16} color="#fff" strokeWidth={2.4} />
-          <Text style={styles.scoreBtnText}>Analisar compra</Text>
+          <Text style={styles.scoreBtnText}>Analisar no Live Deals</Text>
         </TouchableOpacity>
       </View>
 

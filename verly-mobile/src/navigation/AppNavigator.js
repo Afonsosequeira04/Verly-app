@@ -306,7 +306,6 @@ function MenuScreen({ navigation }) {
         { label: 'Replay do mes', screen: 'MonthlyReplay', icon: 'clock'    },
         { label: 'Refund Radar', screen: 'RefundRadar',  icon: 'star'      },
         { label: 'Net worth',    screen: 'NetWorth',     icon: 'pie'       },
-        { label: 'Score de compra', screen: 'Score',     icon: 'star'      },
         { label: 'Dividir despesas', screen: 'Grupos',    icon: 'users'     },
         { label: 'Plano familiar', screen: 'FamilyPlan',  icon: 'users'     },
         { label: 'Descobrir',    screen: 'Discover',     icon: 'filereport' },
@@ -603,7 +602,7 @@ function MainStackNav() {
       <MainStack.Screen name="MinhasSubscricoes" component={MinhasSubscricoesScreen} options={{ ...hdr, headerTitle: 'Subscrições' }} />
       <MainStack.Screen name="VerlyPro"      component={SubscricoesScreen}   options={{ ...hdr, headerTitle: 'Verly Pro' }} />
       <MainStack.Screen name="Estatisticas"  component={EstatisticasScreen}  options={{ ...hdr, headerTitle: 'Estatísticas' }} />
-      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Score de compra' }} />
+      <MainStack.Screen name="Score"         component={ScoreScreen}         options={{ ...hdr, headerTitle: 'Live Deals' }} />
       <MainStack.Screen name="Relatorio"     component={RelatorioScreen}     options={{ ...hdr, headerTitle: 'Relatório' }} />
       <MainStack.Screen name="Historico"     component={HistoricoScreen}     options={{ ...hdr, headerTitle: 'Histórico' }} />
       <MainStack.Screen name="CriarEm"       component={CriarEmScreen}       options={{ ...hdr, headerTitle: 'Playlists de compras' }} />

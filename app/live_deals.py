@@ -426,8 +426,35 @@ def _decision_text(best, today_best, urgency, currency):
     return {'headline': headline, 'summary': summary}
 
 
+def _purchase_score(user_id, product_name, category, paid_price=None, usage='weekly'):
+    paid_price = _float_or_none(paid_price)
+    if paid_price is None or paid_price <= 0:
+        return None
+    try:
+        from app.scoring import calcular_score
+        user = User.query.get(user_id)
+        personalidade = getattr(user, 'personalidade', 'calm') or 'calm'
+        result = calcular_score(category or 'Outros', paid_price, usage or 'weekly', personalidade, item=product_name)
+        return {
+            'score': result.get('score_final') or result.get('score'),
+            'label': result.get('label') or result.get('titulo') or '',
+            'summary': result.get('conselho') or result.get('comentario') or '',
+            'factors': result.get('fatores') or [],
+            'market': result.get('avaliacao_mercado') or {},
+            'raw': result,
+        }
+    except Exception as exc:
+        return {
+            'score': None,
+            'label': 'Score indisponivel',
+            'summary': f'Nao foi possivel calcular o score agora: {exc}',
+            'factors': [],
+            'market': {},
+        }
+
+
 def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=None, urgency='flexible',
-                      budget_limit=None, radius_km=5, currency='EUR'):
+                      budget_limit=None, radius_km=5, currency='EUR', paid_price=None, usage='weekly'):
     product_name = (product_name or '').strip()
     if not product_name:
         raise ValueError('Produto obrigatorio.')
@@ -435,6 +462,7 @@ def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=No
     currency = clean_currency(currency)
 
     budget_context = _budget_context(user_id, budget_limit)
+    purchase_score = _purchase_score(user_id, product_name, category, paid_price, usage)
     online = _online_options(product_name, category, currency)
     nearby = _nearby_options(product_name, category, lat, lng, radius_km, currency, online.get('raw_items'))
     coupons = _coupon_options(product_name, currency)
@@ -479,6 +507,7 @@ def analyze_live_deal(user_id, product_name, category='Outros', lat=None, lng=No
         'online_options': online_sorted[:8],
         'nearby_options': nearby_sorted[:8],
         'promotions': promotions[:8],
+        'purchase_score': purchase_score,
         'budget_context': budget_context,
         'sources': {
             'online_prices_configured': online['configured'],

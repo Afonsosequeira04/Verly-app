@@ -48,7 +48,7 @@ const initials = (name = '') =>
   name.split(' ').slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '?';
 
 const PREFS_KEY = '@verly_dashboard_prefs';
-const CARDS_DEFAULT = ['hero', 'contexto', 'intelligence', 'faturas'];
+const CARDS_DEFAULT = ['hero', 'impacto', 'faturas'];
 const DEFAULT_PREFS = {
   mostrarPrevisao: true,
   mostrarGraficos: true,
@@ -117,48 +117,55 @@ function BudgetBar({ pct = 0, color = C.brand }) {
 }
 
 // ─── Charts financeiros reutilizáveis ─────────────────────────────────────────
-function DashboardDepthScene({ pct = 0, color = C.brand }) {
-  const safePct = Math.max(0, Math.min(100, Math.round(pct || 0)));
+function DashboardAmbientScene({ pct = 0, color = C.brand }) {
+  const safePct = Math.max(6, Math.min(100, Math.round(pct || 0)));
+  const trend = [0.22, 0.48, 0.36, 0.74, 0.56].map((ratio) => Math.max(20, Math.round(ratio * 88 + safePct * 0.32)));
 
   return (
-    <View style={s.dashDepthScene} pointerEvents="none">
+    <View style={s.ambientWrap} pointerEvents="none">
       <MotiView
-        from={{ translateY: 2, rotate: '7deg', opacity: 0.55 }}
-        animate={{ translateY: -3, rotate: '7deg', opacity: 0.85 }}
-        transition={{ type: 'timing', duration: 2600, loop: true, repeatReverse: true }}
-        style={s.dashDepthBack}
+        from={{ opacity: 0.18, scale: 0.96, rotate: '-4deg' }}
+        animate={{ opacity: 0.34, scale: 1.04, rotate: '4deg' }}
+        transition={{ loop: true, type: 'timing', duration: 6200 }}
+        style={[s.ambientOrbit, { borderColor: color + '28' }]}
       />
       <MotiView
-        from={{ translateY: 0, rotate: '-4deg' }}
-        animate={{ translateY: -4, rotate: '-4deg' }}
-        transition={{ type: 'timing', duration: 2200, loop: true, repeatReverse: true }}
+        from={{ translateY: 8, opacity: 0.42 }}
+        animate={{ translateY: -6, opacity: 0.78 }}
+        transition={{ loop: true, type: 'timing', duration: 4800 }}
+        style={s.ambientGlassTicket}
       >
-        <LinearGradient
-          colors={['rgba(34,212,253,0.18)', 'rgba(139,92,246,0.24)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={s.dashDepthMain}
-        >
-          <View style={[s.dashDepthGauge, { borderColor: color + '99' }]}>
-            <Text style={[s.dashDepthPct, { color }]}>{safePct}%</Text>
-          </View>
-          <View style={s.dashDepthRows}>
-            <View style={[s.dashDepthLine, { width: '86%' }]} />
-            <View style={[s.dashDepthLine, { width: '56%', opacity: 0.5 }]} />
-          </View>
-        </LinearGradient>
+        <View style={[s.ambientTicketChip, { backgroundColor: color + '24' }]} />
+        <View style={{ flex: 1, gap: 6 }}>
+          <View style={[s.ambientTicketLine, { width: '78%' }]} />
+          <View style={[s.ambientTicketLine, { width: '48%', opacity: 0.55 }]} />
+        </View>
       </MotiView>
-      <MotiView
-        from={{ translateX: 0, translateY: 0 }}
-        animate={{ translateX: 4, translateY: 3 }}
-        transition={{ type: 'timing', duration: 1900, loop: true, repeatReverse: true }}
-        style={s.dashDepthReceipt}
-      >
-        <Receipt size={13} color={C.yellow || C.brand} />
-      </MotiView>
-      <View style={s.dashDepthWallet}>
-        <WalletCards size={14} color={C.green} />
+      <View style={s.ambientPath}>
+        {[0, 1, 2].map((index) => (
+          <View key={index} style={[s.ambientPathLine, { top: 26 + index * 32, opacity: 0.2 - index * 0.04 }]} />
+        ))}
       </View>
+      <View style={s.ambientBars}>
+        {trend.map((height, index) => (
+          <MotiView
+            key={`${height}-${index}`}
+            from={{ height: Math.max(18, height - 14), opacity: 0.34 }}
+            animate={{ height, opacity: index === 3 ? 0.9 : 0.58 }}
+            transition={{ loop: true, type: 'timing', duration: 2600 + index * 240 }}
+            style={[
+              s.ambientBar,
+              { backgroundColor: index === 3 ? color + '80' : (C.cyan || C.brand) + '42' },
+            ]}
+          />
+        ))}
+      </View>
+      <MotiView
+        from={{ scale: 0.82, opacity: 0.42 }}
+        animate={{ scale: 1.14, opacity: 0.9 }}
+        transition={{ loop: true, type: 'timing', duration: 3600 }}
+        style={[s.ambientPulseDot, { backgroundColor: color }]}
+      />
     </View>
   );
 }
@@ -208,7 +215,7 @@ function HeroCard({ data }) {
       entering={FadeInDown.delay(60).duration(450).springify()}
       style={{ marginHorizontal: SPACE.lg, marginTop: 12, marginBottom: 14 }}
     >
-      <View style={[s.card, s.heroCard]}>
+      <View style={s.heroSummary}>
         <View style={s.heroTopRow}>
           <View style={s.heroCopy}>
             <Text style={s.label}>Gasto este mês</Text>
@@ -221,7 +228,6 @@ function HeroCard({ data }) {
             />
             {budget > 0 && <Text style={s.subText}>de {formatMoney(budget, currency)} orçamentados</Text>}
           </View>
-          <DashboardDepthScene pct={pct} color={barColor} />
         </View>
 
         {budget > 0 && (
@@ -294,7 +300,7 @@ function MetricsRow({ data }) {
 }
 
 // ─── InsightsSection ──────────────────────────────────────────────────────────
-function BankingContext({ data }) {
+function BankingContext({ data, navigation }) {
   const banking = data?.banking;
   const currencies = banking?.available_currencies || data?.real_summary?.available_currencies || [];
   const excluded = banking?.excluded || data?.real_summary?.excluded;
@@ -302,7 +308,7 @@ function BankingContext({ data }) {
 
   return (
     <Reveal delay={120} style={{ marginHorizontal: SPACE.lg, marginBottom: 14 }}>
-      <Pressable style={[s.card, { padding: 14 }]} onPress={() => haptic.light()}>
+      <Pressable style={[s.card, { padding: 14 }]} onPress={() => { haptic.light(); navigation?.navigate?.('ImportarDados'); }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
           <View style={[s.iconBox, { backgroundColor: C.brand + '18' }]}>
             <WalletCards size={16} color={C.brand} />
@@ -838,6 +844,73 @@ function QuickLinks({ navigation, numGarantias = 0 }) {
 
 
 
+function ImpactActions({ navigation, onUpload, hasData }) {
+  const actions = [
+    {
+      key: 'chat',
+      title: 'Ask Verly',
+      sub: 'Pede uma acao ou decisao rapida',
+      icon: <Zap size={17} color={C.brandMid || C.brand} />,
+      tint: C.brand,
+      onPress: () => navigation.navigate('Chat'),
+    },
+    {
+      key: 'deals',
+      title: 'Live Deals',
+      sub: 'Compara antes de comprar',
+      icon: <Flame size={17} color={C.yellow} />,
+      tint: C.yellow,
+      onPress: () => navigation.navigate('LiveDeals'),
+    },
+    {
+      key: 'refund',
+      title: 'Refund Radar',
+      sub: 'Procura dinheiro recuperavel',
+      icon: <Shield size={17} color={C.green} />,
+      tint: C.green,
+      onPress: () => navigation.navigate('RefundRadar'),
+    },
+    {
+      key: 'data',
+      title: hasData ? 'Adicionar fatura' : 'Ligar dados',
+      sub: hasData ? 'Regista uma compra agora' : 'Banco, Gmail ou fatura',
+      icon: hasData ? <Receipt size={17} color={C.cyan || C.brand} /> : <Download size={17} color={C.cyan || C.brand} />,
+      tint: C.cyan || C.brand,
+      onPress: () => (hasData ? onUpload?.() : navigation.navigate('ImportarDados')),
+    },
+  ];
+
+  return (
+    <Reveal delay={120} style={s.impactSection}>
+      <View style={s.impactHeader}>
+        <Text style={s.impactTitle}>Acoes que importam</Text>
+        <Pressable onPress={() => navigation.navigate('Menu')} hitSlop={8}>
+          <Text style={s.impactMore}>Ver tudo</Text>
+        </Pressable>
+      </View>
+      <View style={s.impactGrid}>
+        {actions.map((action, index) => (
+          <Pressable
+            key={action.key}
+            onPress={() => { haptic.light(); action.onPress(); }}
+            style={({ pressed }) => [
+              s.impactAction,
+              index < 2 && { marginBottom: 10 },
+              pressed && { opacity: 0.76, transform: [{ scale: 0.99 }] },
+            ]}
+          >
+            <View style={[s.impactIcon, { borderColor: action.tint + '55', backgroundColor: action.tint + '14' }]}>
+              {action.icon}
+            </View>
+            <Text style={s.impactActionTitle} numberOfLines={1}>{action.title}</Text>
+            <Text style={s.impactActionSub} numberOfLines={2}>{action.sub}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </Reveal>
+  );
+}
+
 export default function DashboardScreen({ navigation, route }) {
   const { user }  = useAuth();
   const insets    = useSafeAreaInsets();
@@ -948,6 +1021,11 @@ export default function DashboardScreen({ navigation, route }) {
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const { porCategoria, porMes, chartCurrency, chartSources } = normalizeDashboardData(data);
+  const dashboardSpent = Number(data?.total_gasto || 0);
+  const dashboardBudget = Number(data?.orcamento || 0);
+  const dashboardPct = dashboardBudget > 0 ? (dashboardSpent / dashboardBudget) * 100 : 0;
+  const dashboardAccent = dashboardPct > 90 ? C.red : dashboardPct > 70 ? C.yellow : C.green;
+  const hasUsefulData = dashboardSpent > 0 || Number(data?.num_faturas || 0) > 0 || !!data?.banking?.connected;
 
 
   // Renderiza cada card pelo seu id
@@ -955,6 +1033,15 @@ export default function DashboardScreen({ navigation, route }) {
     switch (id) {
       case 'hero':
         return <HeroCard key="hero" data={data} />;
+      case 'impacto':
+        return (
+          <ImpactActions
+            key="impacto"
+            navigation={navigation}
+            hasData={hasUsefulData}
+            onUpload={() => { haptic.medium(); setUpload(true); }}
+          />
+        );
       case 'contexto':
         return (
           <ContextSelector
@@ -979,7 +1066,7 @@ export default function DashboardScreen({ navigation, route }) {
         return (
           <React.Fragment key="metricas">
             <MetricsRow data={data} />
-            <BankingContext data={data} />
+            <BankingContext data={data} navigation={navigation} />
           </React.Fragment>
         );
       case 'previsao':
@@ -1114,6 +1201,7 @@ export default function DashboardScreen({ navigation, route }) {
       </View>
 
       <UploadSheet visible={showUpload} onClose={() => setUpload(false)} onUploaded={load} onUploadResult={setUploadResult} />
+      <DashboardAmbientScene pct={dashboardPct} color={dashboardAccent} />
 
       <ScrollView
         style={{ flex: 1 }}
@@ -1205,6 +1293,10 @@ const s = StyleSheet.create({
     padding: 20,
     overflow: 'hidden',
   },
+  heroSummary: {
+    paddingHorizontal: 2,
+    paddingVertical: 8,
+  },
   heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1214,76 +1306,140 @@ const s = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
-  dashDepthScene: {
-    width: 112,
-    height: 98,
-    justifyContent: 'center',
-  },
-  dashDepthBack: {
+  ambientWrap: {
     position: 'absolute',
-    right: 2,
-    top: 18,
-    width: 86,
-    height: 58,
-    borderRadius: 20,
-    backgroundColor: C.surface2,
-    borderWidth: 1,
-    borderColor: C.border,
+    top: 76,
+    left: 0,
+    right: 0,
+    height: 250,
+    opacity: 0.92,
+    zIndex: 0,
   },
-  dashDepthMain: {
-    width: 96,
-    height: 66,
-    borderRadius: 22,
-    padding: 10,
+  ambientOrbit: {
+    position: 'absolute',
+    right: -28,
+    top: 12,
+    width: 184,
+    height: 184,
+    borderRadius: 92,
     borderWidth: 1,
-    borderColor: C.borderHi || C.border,
-    justifyContent: 'space-between',
-    transform: [{ rotate: '-4deg' }],
+    transform: [{ rotate: '-12deg' }],
   },
-  dashDepthGauge: {
-    width: 38,
-    height: 26,
-    borderRadius: 12,
-    backgroundColor: C.bg,
+  ambientGlassTicket: {
+    position: 'absolute',
+    right: 28,
+    top: 62,
+    width: 150,
+    minHeight: 72,
+    borderRadius: 18,
     borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.11)',
+    backgroundColor: 'rgba(18,24,48,0.62)',
+    padding: 13,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 10,
   },
-  dashDepthPct: {
-    fontSize: 11,
-    fontWeight: '900',
+  ambientTicketChip: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
   },
-  dashDepthRows: { gap: 5 },
-  dashDepthLine: {
+  ambientTicketLine: {
     height: 6,
     borderRadius: 6,
     backgroundColor: 'rgba(255,255,255,0.32)',
   },
-  dashDepthReceipt: {
+  ambientPath: {
     position: 'absolute',
-    right: 0,
-    top: 2,
-    width: 32,
-    height: 32,
-    borderRadius: 12,
-    backgroundColor: C.yellow + '18',
-    borderWidth: 1,
-    borderColor: C.yellow + '55',
-    alignItems: 'center',
-    justifyContent: 'center',
+    left: -36,
+    right: 60,
+    top: 52,
+    height: 116,
+    transform: [{ rotate: '-10deg' }],
   },
-  dashDepthWallet: {
+  ambientPathLine: {
     position: 'absolute',
-    left: 4,
-    bottom: 5,
+    left: 0,
+    right: 0,
+    height: 1,
+    backgroundColor: 'rgba(34,212,253,0.55)',
+  },
+  ambientBars: {
+    position: 'absolute',
+    right: 34,
+    top: 138,
+    height: 96,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 7,
+  },
+  ambientBar: {
+    width: 9,
+    borderRadius: 6,
+  },
+  ambientPulseDot: {
+    position: 'absolute',
+    right: 172,
+    top: 96,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  impactSection: {
+    marginHorizontal: SPACE.lg,
+    marginTop: 2,
+    marginBottom: 18,
+  },
+  impactHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  impactTitle: {
+    color: C.text,
+    fontSize: FONT.lg,
+    fontWeight: '900',
+  },
+  impactMore: {
+    color: C.brandMid || C.brand,
+    fontSize: FONT.xs,
+    fontWeight: '900',
+  },
+  impactGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  impactAction: {
+    width: (W - SPACE.lg * 2 - 10) / 2,
+    minHeight: 118,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: 'rgba(18,24,38,0.72)',
+    padding: 14,
+  },
+  impactIcon: {
     width: 34,
     height: 34,
     borderRadius: 13,
-    backgroundColor: C.green + '16',
     borderWidth: 1,
-    borderColor: C.green + '55',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: 12,
+  },
+  impactActionTitle: {
+    color: C.text,
+    fontSize: FONT.md,
+    fontWeight: '900',
+  },
+  impactActionSub: {
+    color: C.textMid,
+    fontSize: FONT.xs,
+    lineHeight: 16,
+    marginTop: 4,
   },
   label:    { fontSize: FONT.xs, fontWeight: '600', color: C.textMid, letterSpacing: 0.3 },
   bodyText: { fontSize: FONT.md, fontWeight: '600', color: C.text },

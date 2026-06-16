@@ -55,6 +55,8 @@ def live_deals_search():
             budget_limit=_float_value(data.get('budget_limit')),
             radius_km=_float_value(data.get('radius_km'), 5),
             currency=currency,
+            paid_price=_float_value(data.get('paid_price') or data.get('preco') or data.get('price')),
+            usage=data.get('usage') or data.get('uso') or 'weekly',
         )
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400

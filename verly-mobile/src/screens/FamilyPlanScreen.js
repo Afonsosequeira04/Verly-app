@@ -63,6 +63,18 @@ function ModalShell({ visible, onClose, title, children }) {
   );
 }
 
+function InlineEmptyAction({ text, action, onPress }) {
+  return (
+    <View style={styles.inlineEmpty}>
+      <Text style={styles.emptyLine}>{text}</Text>
+      <Pressable onPress={onPress} style={styles.inlineBtn}>
+        <Plus size={13} color="#fff" />
+        <Text style={styles.inlineBtnText}>{action}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 export default function FamilyPlanScreen({ navigation }) {
   const [family, setFamily] = useState(null);
   const [incoming, setIncoming] = useState([]);
@@ -343,7 +355,13 @@ export default function FamilyPlanScreen({ navigation }) {
               {(family.accounts || []).filter(acc => acc.selected).slice(0, 4).map(account => (
                 <Text key={account.id} style={styles.accountLine}>{account.nome_banco} - {account.owner_name}</Text>
               ))}
-              {!family.accounts?.some(acc => acc.selected) && <Text style={styles.emptyLine}>Nenhuma conta escolhida ainda.</Text>}
+              {!family.accounts?.some(acc => acc.selected) && (
+                <InlineEmptyAction
+                  text="Escolhe que contas entram no plano para separar o que e pessoal do que e familiar."
+                  action="Escolher contas"
+                  onPress={() => setModal('accounts')}
+                />
+              )}
             </View>
 
             <View style={styles.card}>
@@ -365,7 +383,13 @@ export default function FamilyPlanScreen({ navigation }) {
                   )}
                 </View>
               ))}
-              {!family.category_budgets?.length && <Text style={styles.emptyLine}>Ainda sem budgets por categoria.</Text>}
+              {!family.category_budgets?.length && (
+                <InlineEmptyAction
+                  text="Cria limites por categoria para a familia receber alertas antes de passar o budget."
+                  action="Criar budget"
+                  onPress={() => setModal('category')}
+                />
+              )}
             </View>
 
             <View style={styles.card}>
@@ -384,21 +408,29 @@ export default function FamilyPlanScreen({ navigation }) {
                   )}
                 </View>
               ))}
-              {!family.recent_expenses?.length && <Text style={styles.emptyLine}>Sem despesas familiares este mes.</Text>}
+              {!family.recent_expenses?.length && (
+                <InlineEmptyAction
+                  text="Liga dados ou carrega faturas para a Verly conseguir marcar despesas familiares."
+                  action="Ligar dados"
+                  onPress={() => navigation.navigate('ImportarDados')}
+                />
+              )}
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Timeline familiar</Text>
-              {(family.timeline || []).map((event, index) => (
-                <View key={`${event.type}-${event.date}-${index}`} style={styles.timelineRow}>
-                  <View style={styles.timelineDot} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.rowTitle}>{event.title}</Text>
-                    <Text style={styles.rowSub}>{event.message}</Text>
+            {!!family.timeline?.length && (
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Timeline familiar</Text>
+                {family.timeline.map((event, index) => (
+                  <View key={`${event.type}-${event.date}-${index}`} style={styles.timelineRow}>
+                    <View style={styles.timelineDot} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>{event.title}</Text>
+                      <Text style={styles.rowSub}>{event.message}</Text>
+                    </View>
                   </View>
-                </View>
-              ))}
-            </View>
+                ))}
+              </View>
+            )}
           </>
         )}
       </ScrollView>
@@ -500,6 +532,9 @@ const styles = StyleSheet.create({
   rowSub: { color: C.textMid, fontSize: FONT.xs, lineHeight: 17, marginTop: 2 },
   accountLine: { color: C.textMid, fontSize: FONT.sm, paddingVertical: 5 },
   emptyLine: { color: C.textMid, fontSize: FONT.sm, lineHeight: 19 },
+  inlineEmpty: { borderTopWidth: 1, borderTopColor: C.border, paddingTop: 12, gap: 10 },
+  inlineBtn: { alignSelf: 'flex-start', minHeight: 34, borderRadius: RADIUS.sm, backgroundColor: C.brand, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11 },
+  inlineBtnText: { color: '#fff', fontSize: FONT.xs, fontWeight: '900' },
   budgetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 11 },
   expenseRow: { flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 11 },
   timelineRow: { flexDirection: 'row', gap: 11, borderTopWidth: 1, borderTopColor: C.border, paddingVertical: 11 },

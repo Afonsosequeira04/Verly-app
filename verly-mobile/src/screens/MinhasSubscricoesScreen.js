@@ -10,8 +10,10 @@ import {
 } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useFocusEffect } from '@react-navigation/native';
+import { Search, WalletCards } from 'lucide-react-native';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
 import { subscricoesAPI } from '../services/api';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 
@@ -239,7 +241,7 @@ export default function MinhasSubscricoesScreen({ navigation }) {
       >
         {detetando
           ? <ActivityIndicator color="#fff" size="small" />
-          : <Text style={{ fontSize: 18 }}>🔍</Text>
+          : <Search size={18} color="#fff" />
         }
         <Text style={{ fontSize: FONT.md, fontWeight: '800', color: '#fff' }}>
           {detetando ? 'A detetar...' : 'Detetar subscrições automáticas'}
@@ -248,31 +250,17 @@ export default function MinhasSubscricoesScreen({ navigation }) {
 
       {/* Lista */}
       {subs.length === 0 ? (
-        <Animated.View entering={FadeInDown.delay(200).springify()}
-          style={{ alignItems: 'center', paddingTop: 40, gap: 12 }}>
-          <Text style={{ fontSize: 48 }}>📭</Text>
-          <Text style={{ fontSize: FONT.lg, fontWeight: '700', color: C.text }}>
-            Sem subscrições
-          </Text>
-          <Text style={{ fontSize: FONT.sm, color: C.textSub, textAlign: 'center', maxWidth: 260 }}>
-            Deteta nas faturas existentes ou liga Gmail/Banco para alimentar a auditoria com dados reais.
-          </Text>
-          <Pressable
-            onPress={() => navigation.navigate('ImportarDados')}
-            style={({ pressed }) => ({
-              marginTop: 8,
-              borderRadius: RADIUS.lg,
-              borderWidth: 1,
-              borderColor: C.borderHi,
-              backgroundColor: C.glass,
-              paddingHorizontal: 18,
-              paddingVertical: 12,
-              opacity: pressed ? 0.8 : 1,
-            })}
-          >
-            <Text style={{ color: C.text, fontWeight: '900', fontSize: FONT.sm }}>Ligar fontes</Text>
-          </Pressable>
-        </Animated.View>
+        <RefinedEmptyState
+          framed={false}
+          variant="radar"
+          accent={C.brand}
+          icon={<WalletCards size={21} color={C.brand} />}
+          title="Sem subscricoes"
+          subtitle="Deteta nas faturas existentes ou liga Gmail/Banco para alimentar a auditoria com dados reais."
+          actionLabel="Ligar fontes"
+          onAction={() => navigation.navigate('ImportarDados')}
+          style={{ paddingTop: 34 }}
+        />
       ) : (
         <>
           <Text style={{ fontSize: FONT.xs, color: C.textSub, fontWeight: '700',

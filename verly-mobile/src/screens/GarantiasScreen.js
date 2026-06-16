@@ -10,7 +10,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import {
   Shield, ShieldCheck, ShieldOff, ShieldAlert,
-  ChevronRight, Package, Calendar, AlertTriangle,
+  ChevronRight, Package, Calendar, AlertTriangle, Upload,
 } from 'lucide-react-native';
 import { apiFetch } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
@@ -223,6 +223,12 @@ export default function GarantiasScreen({ navigation }) {
               ? 'Boa notícia — não tens garantias a expirar nos próximos 30 dias.'
               : 'Quando fizeres upload de faturas com data de garantia, aparecem aqui automaticamente.'}
           </Text>
+          {filtro !== 'urgentes' && (
+            <Pressable style={styles.emptyBtn} onPress={() => navigation.navigate('Faturas')}>
+              <Upload size={14} color="#fff" />
+              <Text style={styles.emptyBtnText}>Carregar fatura</Text>
+            </Pressable>
+          )}
         </Animated.View>
       ) : (
         listaFiltrada.map((item, idx) => (
@@ -368,6 +374,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
+  emptyBtn: {
+    minHeight: 42,
+    marginTop: 16,
+    borderRadius: RADIUS.sm,
+    backgroundColor: C.brand,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  emptyBtnText: { color: '#fff', fontSize: FONT.sm, fontWeight: '900' },
 
   dicaBox: {
     flexDirection: 'row',

@@ -21,27 +21,23 @@ const CATS = [
   'Educação', 'Subscrições', 'Outros',
 ];
 
-function MetasDepthScene() {
+function MetasTargetScene() {
   return (
     <View style={s.goalDepthScene} pointerEvents="none">
-      <LinearGradient
-        colors={['rgba(139,92,246,0.26)', 'rgba(34,212,253,0.10)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={s.goalDepthCard}
-      >
-        <View style={s.goalTargetOuter}>
-          <View style={s.goalTargetInner}>
-            <Target size={15} color={C.brandMid || C.brand} />
+      <View style={s.goalRings}>
+        <View style={s.goalRingOuter}>
+          <View style={s.goalRingMid}>
+            <View style={s.goalRingCore}>
+              <Target size={14} color={C.brandMid || C.brand} />
+            </View>
           </View>
         </View>
-        <View style={{ gap: 5, flex: 1 }}>
-          <View style={[s.goalDepthLine, { width: '76%' }]} />
-          <View style={[s.goalDepthLine, { width: '45%', opacity: 0.45 }]} />
-        </View>
-      </LinearGradient>
-      <View style={s.goalDepthFloor} />
-      <View style={s.goalDepthTick} />
+      </View>
+      <View style={s.goalMeter}>
+        <View style={[s.goalMeterStep, { height: 16, backgroundColor: C.green + '88' }]} />
+        <View style={[s.goalMeterStep, { height: 28, backgroundColor: C.yellow + '88' }]} />
+        <View style={[s.goalMeterStep, { height: 42, backgroundColor: C.brand + '88' }]} />
+      </View>
     </View>
   );
 }
@@ -143,7 +139,6 @@ export default function MetasScreen() {
   return (
     <View style={s.root}>
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <MetasDepthScene />
       <ScrollView
         contentContainerStyle={{ padding: SPACE.lg, paddingBottom: 120 }}
         showsVerticalScrollIndicator={false}
@@ -162,6 +157,7 @@ export default function MetasScreen() {
                 : 'Cria metas por categoria para a Verly conseguir avisar antes de passares do limite.'}
             </Text>
           </View>
+          <MetasTargetScene />
         </Reveal>
 
         <SectionHeader title="As tuas metas" action="Nova meta" onAction={() => setShowModal(true)} style={{ marginBottom: 14 }} />
@@ -235,66 +231,58 @@ export default function MetasScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   goalDepthScene: {
-    position: 'absolute',
-    right: -12,
-    top: 82,
-    width: 154,
-    height: 128,
-  },
-  goalDepthCard: {
-    width: 128,
-    height: 76,
-    borderRadius: 26,
-    padding: 12,
+    width: 92,
+    height: 74,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    borderWidth: 1,
-    borderColor: C.borderHi,
-    transform: [{ rotate: '8deg' }],
+    justifyContent: 'center',
+    gap: 9,
   },
-  goalTargetOuter: {
-    width: 38,
-    height: 38,
-    borderRadius: 18,
+  goalRings: {
+    width: 54,
+    height: 54,
+    borderRadius: 22,
+    backgroundColor: C.brandDim,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: C.brand + '44',
+  },
+  goalRingOuter: {
+    width: 42,
+    height: 42,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: C.brand + '66',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: C.bg,
   },
-  goalTargetInner: {
-    width: 26,
-    height: 26,
-    borderRadius: 12,
-    backgroundColor: C.brandDim,
+  goalRingMid: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: C.cyan + '66',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  goalDepthLine: {
-    height: 7,
-    borderRadius: 7,
-    backgroundColor: 'rgba(255,255,255,0.30)',
+  goalRingCore: {
+    width: 22,
+    height: 22,
+    borderRadius: 10,
+    backgroundColor: C.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  goalDepthFloor: {
-    position: 'absolute',
-    width: 100,
-    height: 12,
-    borderRadius: 12,
-    right: 28,
-    bottom: 18,
-    backgroundColor: C.cyan + '22',
+  goalMeter: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 4,
   },
-  goalDepthTick: {
-    position: 'absolute',
-    width: 34,
-    height: 34,
-    borderRadius: 13,
-    right: 6,
-    top: 2,
-    backgroundColor: C.surface2,
-    borderWidth: 1,
-    borderColor: C.border,
+  goalMeterStep: {
+    width: 7,
+    borderRadius: 6,
   },
   hero: {
     flexDirection: 'row',

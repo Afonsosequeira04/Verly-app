@@ -58,7 +58,7 @@ function MembrosRow({ membros = [] }) {
   );
 }
 
-function GroupsDepthScene() {
+function GroupsSplitScene() {
   return (
     <View style={styles.groupsDepthScene} pointerEvents="none">
       <View style={styles.groupsDepthBack} />
@@ -163,8 +163,6 @@ export default function GruposScreen({ navigation }) {
   return (
     <View style={styles.root}>
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <GroupsDepthScene />
-
       <View style={styles.header}>
         <Pressable onPress={() => navigation.goBack()} style={styles.iconBtn}>
           <ArrowLeft size={19} color={C.text} />
@@ -197,6 +195,7 @@ export default function GruposScreen({ navigation }) {
             <Text style={styles.heroTitle}>{grupos.length ? `${grupos.length} grupo${grupos.length === 1 ? '' : 's'} ativo${grupos.length === 1 ? '' : 's'}` : 'Cria um grupo simples'}</Text>
             <Text style={styles.heroSub}>Regista despesas, escolhe quem pagou e ve os acertos sem ruído.</Text>
           </View>
+          <GroupsSplitScene />
         </Animated.View>
 
         {grupos.length === 0 ? (
@@ -305,38 +304,35 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, backgroundColor: C.bg, justifyContent: 'center', alignItems: 'center' },
   groupsDepthScene: {
-    position: 'absolute',
-    right: -18,
-    top: 94,
-    width: 160,
-    height: 136,
+    width: 98,
+    height: 76,
   },
   groupsDepthBack: {
     position: 'absolute',
-    right: 34,
-    top: 28,
-    width: 94,
-    height: 68,
-    borderRadius: 24,
+    right: 8,
+    top: 9,
+    width: 68,
+    height: 50,
+    borderRadius: 18,
     backgroundColor: C.surface2,
     borderWidth: 1,
     borderColor: C.border,
     transform: [{ rotate: '-8deg' }],
   },
   groupsDepthCard: {
-    width: 126,
-    height: 78,
-    borderRadius: 26,
-    padding: 12,
+    width: 82,
+    height: 58,
+    borderRadius: 20,
+    padding: 9,
     borderWidth: 1,
     borderColor: C.borderHi,
     transform: [{ rotate: '6deg' }],
     justifyContent: 'space-between',
   },
   groupsDepthIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 10,
     backgroundColor: C.bg,
     borderWidth: 1,
     borderColor: C.brand + '55',
@@ -349,19 +345,19 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
   groupsDepthAvatar: {
-    width: 24,
-    height: 24,
-    borderRadius: 10,
+    width: 18,
+    height: 18,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.28)',
   },
   groupsDepthCoin: {
     position: 'absolute',
-    right: 8,
-    top: 4,
-    width: 34,
-    height: 34,
-    borderRadius: 13,
+    right: 0,
+    top: 0,
+    width: 28,
+    height: 28,
+    borderRadius: 11,
     backgroundColor: C.green + '16',
     borderWidth: 1,
     borderColor: C.green + '55',

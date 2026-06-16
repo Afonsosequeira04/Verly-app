@@ -8,8 +8,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MotiView } from 'moti';
-import { LogOut, Save, Shield, Bell, Camera, Mail, Phone, ChevronRight, Check, Sparkles } from 'lucide-react-native';
+import { LogOut, Save, Shield, Camera, Mail, Phone, ChevronRight, Check } from 'lucide-react-native';
 import { perfilAPI, authAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { COLORS, RADIUS, FONT, SPACE, SHADOWS } from '../constants/theme';
@@ -26,50 +25,27 @@ const PERSONALIDADES = [
   { key: 'savage', label: 'Savage', desc: 'Roast financeiro. Viral, mas ainda util.', color: C.red },
 ];
 
-function ProfileDepthScene() {
+function ProfileSecurityScene() {
   return (
-    <View style={pf.profileDepthScene} pointerEvents="none">
-      <MotiView
-        from={{ translateY: 2, rotate: '-5deg', opacity: 0.55 }}
-        animate={{ translateY: -3, rotate: '-5deg', opacity: 0.9 }}
-        transition={{ type: 'timing', duration: 2400, loop: true, repeatReverse: true }}
-        style={pf.profileBackCard}
-      />
-      <MotiView
-        from={{ translateY: 0, rotate: '6deg' }}
-        animate={{ translateY: -5, rotate: '6deg' }}
-        transition={{ type: 'timing', duration: 2800, loop: true, repeatReverse: true }}
-      >
-        <LinearGradient
-          colors={['rgba(139,92,246,0.30)', 'rgba(34,212,253,0.14)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={pf.profileMainCard}
-        >
-          <View style={pf.profileChip}>
-            <Shield size={15} color={C.brandMid || C.brand} />
-          </View>
-          <View style={{ gap: 6, flex: 1 }}>
-            <View style={[pf.profileDepthLine, { width: '78%' }]} />
-            <View style={[pf.profileDepthLine, { width: '48%', opacity: 0.45 }]} />
-          </View>
-        </LinearGradient>
-      </MotiView>
-      <MotiView
-        from={{ translateX: 0, translateY: 0 }}
-        animate={{ translateX: -4, translateY: 3 }}
-        transition={{ type: 'timing', duration: 2100, loop: true, repeatReverse: true }}
-        style={pf.profileToken}
-      >
-        <Sparkles size={14} color={C.yellow || C.brand} />
-      </MotiView>
-      <MotiView
-        from={{ opacity: 0.45, scaleX: 0.82 }}
-        animate={{ opacity: 0.9, scaleX: 1 }}
-        transition={{ type: 'timing', duration: 1700, loop: true, repeatReverse: true }}
-        style={pf.profileScanLine}
-      />
-    </View>
+    <LinearGradient
+      colors={['rgba(139,92,246,0.24)', 'rgba(34,212,253,0.12)']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={pf.securityScene}
+    >
+      <View style={pf.securityShield}>
+        <Shield size={16} color={C.brandMid || C.brand} />
+      </View>
+      <View style={pf.securityStatus}>
+        <View style={pf.securityStatusLine} />
+        <View style={[pf.securityStatusLine, { width: 30, opacity: 0.45 }]} />
+      </View>
+      <View style={pf.securityBadges}>
+        <View style={pf.securityBadge}><Mail size={10} color={C.brand} /></View>
+        <View style={[pf.securityBadge, { borderColor: C.green + '55' }]}><Phone size={10} color={C.green} /></View>
+        <View style={[pf.securityBadge, { borderColor: C.yellow + '55' }]}><Check size={10} color={C.yellow} /></View>
+      </View>
+    </LinearGradient>
   );
 }
 
@@ -289,7 +265,6 @@ export default function PerfilScreen({ navigation }) {
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
       <LinearGradient colors={C.gradients.app} style={StyleSheet.absoluteFill} />
-      <ProfileDepthScene />
 
       <PhoneModal
         visible={phoneModal}
@@ -329,9 +304,7 @@ export default function PerfilScreen({ navigation }) {
             <Text style={pf.heroTitle} numberOfLines={1}>{nome || user?.nome || 'Utilizador'}</Text>
             <Text style={pf.heroSub} numberOfLines={2}>{perfil?.email || user?.email || 'Personaliza a forma como a Verly fala contigo.'}</Text>
           </View>
-          <View style={pf.heroSpark}>
-            <Sparkles size={18} color={C.brandMid || C.brand} />
-          </View>
+          <ProfileSecurityScene />
         </Reveal>
 
         {/* Dados básicos */}
@@ -495,39 +468,18 @@ export default function PerfilScreen({ navigation }) {
 }
 
 const pf = StyleSheet.create({
-  profileDepthScene: {
-    position: 'absolute',
-    width: 172,
-    height: 150,
-    right: -26,
-    top: 64,
-  },
-  profileBackCard: {
-    position: 'absolute',
-    width: 116,
-    height: 78,
-    right: 22,
-    top: 22,
-    borderRadius: 24,
-    backgroundColor: C.surface2,
-    borderWidth: 1,
-    borderColor: C.border,
-  },
-  profileMainCard: {
-    width: 128,
-    height: 84,
-    borderRadius: 24,
-    padding: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
+  securityScene: {
+    width: 92,
+    height: 72,
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: C.borderHi,
-    transform: [{ rotate: '6deg' }],
+    padding: 9,
+    justifyContent: 'space-between',
   },
-  profileChip: {
-    width: 34,
-    height: 34,
+  securityShield: {
+    width: 30,
+    height: 30,
     borderRadius: 12,
     backgroundColor: C.bg,
     borderWidth: 1,
@@ -535,32 +487,33 @@ const pf = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  profileDepthLine: {
-    height: 7,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255,255,255,0.32)',
-  },
-  profileToken: {
+  securityStatus: {
     position: 'absolute',
-    right: 12,
-    top: 4,
-    width: 36,
-    height: 36,
-    borderRadius: 14,
-    backgroundColor: C.brandDim,
-    borderWidth: 1,
-    borderColor: C.brand + '44',
-    alignItems: 'center',
-    justifyContent: 'center',
+    left: 46,
+    top: 13,
+    gap: 5,
   },
-  profileScanLine: {
-    position: 'absolute',
-    right: 42,
-    bottom: 18,
-    width: 82,
+  securityStatusLine: {
+    width: 22,
     height: 5,
     borderRadius: 5,
-    backgroundColor: C.cyan || '#22D4FD',
+    backgroundColor: 'rgba(255,255,255,0.32)',
+  },
+  securityBadges: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-end',
+  },
+  securityBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 8,
+    backgroundColor: C.bg,
+    borderWidth: 1,
+    borderColor: C.brand + '55',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heroCard: {
     flexDirection: 'row',
@@ -578,16 +531,6 @@ const pf = StyleSheet.create({
   heroKicker: { fontSize: FONT.xs, fontWeight: '900', color: C.brandMid || C.brand, letterSpacing: 1.1 },
   heroTitle: { fontSize: FONT.xl, fontWeight: '900', color: C.text, marginTop: 4 },
   heroSub: { fontSize: FONT.xs, color: C.textMid, lineHeight: 17, marginTop: 3 },
-  heroSpark: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
-    backgroundColor: C.brandDim,
-    borderWidth: 1,
-    borderColor: C.brand + '44',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   card: {
     backgroundColor: C.glass,
     borderRadius: RADIUS.lg,

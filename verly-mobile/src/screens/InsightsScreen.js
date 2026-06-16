@@ -664,7 +664,7 @@ export default function InsightsScreen({ navigation }) {
     if (action.type === 'open_transactions') navigation.navigate('Historico', action.filters || undefined);
     else if (action.type === 'create_budget') navigation.navigate('Metas', action.category ? { categoria: action.category } : undefined);
     else if (action.type === 'open_subscriptions') navigation.navigate('MinhasSubscricoes');
-    else if (action.type === 'open_score') navigation.navigate('Score');
+    else if (action.type === 'open_live_deals' || action.type === 'open_score') navigation.navigate('LiveDeals');
     else if (action.type === 'open_stats') navigation.navigate('Estatisticas');
   }, [navigation]);
 

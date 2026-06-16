@@ -11,7 +11,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { ArrowLeft, CalendarClock, CheckCircle2, Clock3 } from 'lucide-react-native';
+import { ArrowLeft, CalendarClock, CheckCircle2, Clock3, Upload } from 'lucide-react-native';
 
 import { perfilAPI, replayAPI } from '../services/api';
 import { COLORS, FONT, RADIUS, SPACE } from '../constants/theme';
@@ -102,6 +102,10 @@ export default function MonthlyReplayScreen({ navigation }) {
             <View style={styles.empty}>
               <CheckCircle2 size={28} color={C.green} />
               <Text style={styles.emptyText}>Ainda nao ha eventos suficientes este mes.</Text>
+              <Pressable style={styles.emptyBtn} onPress={() => navigation.navigate('ImportarDados')}>
+                <Upload size={14} color="#fff" />
+                <Text style={styles.emptyBtnText}>Ligar dados</Text>
+              </Pressable>
             </View>
           )}
         </View>
@@ -134,4 +138,6 @@ const styles = StyleSheet.create({
   timelineMsg: { color: C.textMid, fontSize: FONT.sm, lineHeight: 18, marginTop: 3 },
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 32, gap: 8 },
   emptyText: { color: C.textMid, fontSize: FONT.sm, textAlign: 'center' },
+  emptyBtn: { minHeight: 38, borderRadius: RADIUS.sm, backgroundColor: C.brand, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, marginTop: 4 },
+  emptyBtnText: { color: '#fff', fontSize: FONT.xs, fontWeight: '900' },
 });

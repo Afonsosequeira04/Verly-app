@@ -9,11 +9,12 @@ import { MotiView } from 'moti';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   Zap, TrendingUp, TrendingDown, AlertTriangle,
-  CheckCircle, Target, Calendar, BarChart2,
+  CheckCircle, Calendar, BarChart2,
   ChevronRight, RefreshCw, Brain, Flame, ArrowUpRight,
 } from 'lucide-react-native';
 import { dashboardAPI, insightsAPI } from '../services/api';
 import { COLORS, RADIUS, FONT, SPACE } from '../constants/theme';
+import RefinedEmptyState from '../components/RefinedEmptyState';
 
 const C = COLORS;
 const fmt = (n) => (+(n || 0)).toFixed(2).replace('.', ',');
@@ -30,11 +31,13 @@ function FeedCard({ item, index, onPress }) {
   const tipo = FEED_TIPOS[item.tipo] || FEED_TIPOS.dica;
   const Icon = tipo.icon;
   const isUrgente = item.tipo === 'alerta';
+  const Shell = onPress ? Pressable : View;
+  const shellProps = onPress ? { onPress } : {};
 
   return (
     <Animated.View entering={FadeInDown.delay(index * 60).duration(400).springify()}>
-      <Pressable
-        onPress={onPress}
+      <Shell
+        {...shellProps}
         style={[styles.feedCard, {
           borderLeftColor: tipo.cor,
           backgroundColor: isUrgente ? tipo.bg : C.surface,
@@ -53,7 +56,7 @@ function FeedCard({ item, index, onPress }) {
           )}
         </View>
         {onPress && <ChevronRight size={14} color={C.textMid} />}
-      </Pressable>
+      </Shell>
     </Animated.View>
   );
 }
@@ -248,17 +251,23 @@ export default function IntelligenceFeedScreen({ navigation }) {
               <Text style={styles.sectionCount}>{insights.length}</Text>
             </View>
             {insights.map((item, i) => (
-              <FeedCard key={i} item={item} index={i} onPress={null} />
+              <FeedCard key={i} item={item} index={i} />
             ))}
           </View>
         )}
 
         {!feed.length && (
-          <Animated.View entering={FadeIn.duration(400)} style={styles.emptyWrap}>
-            <Text style={{ fontSize: 48 }}>🧘</Text>
-            <Text style={styles.emptyTitle}>Tudo sob controlo</Text>
-            <Text style={styles.emptySub}>Sem alertas por agora. Adiciona mais faturas para análise.</Text>
-          </Animated.View>
+          <RefinedEmptyState
+            framed={false}
+            variant="feed"
+            accent={C.brand}
+            icon={<Brain size={20} color={C.brand} />}
+            title="Sem sinais relevantes"
+            subtitle="Adiciona faturas ou liga dados para a Verly criar alertas e leituras mais uteis."
+            actionLabel="Adicionar dados"
+            onAction={() => navigation.navigate('ImportarDados')}
+            style={styles.emptyWrap}
+          />
         )}
       </ScrollView>
     </View>

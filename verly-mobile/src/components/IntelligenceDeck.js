@@ -40,7 +40,7 @@ function routeToLabel(route, action) {
   if (route === 'Bills') return 'Bills';
   if (route === 'Metas') return 'Metas';
   if (route === 'Estatisticas') return 'Analise';
-  if (route === 'Score') return 'Score';
+  if (route === 'Score') return 'Live Deals';
   if (route === 'NetWorth') return 'Patrimonio';
   if (route === 'Chat') return 'Ask';
   return 'Abrir';
@@ -49,7 +49,7 @@ function routeToLabel(route, action) {
 function actionIcon(item, color, size = 17) {
   if (item.action === 'upload') return <UploadCloud size={size} color={color} />;
   if (item.route === 'ImportarDados' || item.route === 'OpenBanking') return <Banknote size={size} color={color} />;
-  if (item.route === 'LiveDeals') return <Search size={size} color={color} />;
+  if (item.route === 'LiveDeals' || item.route === 'Score') return <Search size={size} color={color} />;
   if (item.route === 'RefundRadar') return <Radar size={size} color={color} />;
   if (item.route === 'Bills') return <CalendarDays size={size} color={color} />;
   if (item.route === 'Metas') return <Target size={size} color={color} />;
@@ -66,7 +66,7 @@ function runAction(item, navigation, onUpload) {
     onUpload?.();
     return;
   }
-  if (item.route) navigation?.navigate?.(item.route, item.params || undefined);
+  if (item.route) navigation?.navigate?.(item.route === 'Score' ? 'LiveDeals' : item.route, item.params || undefined);
 }
 
 function ActionCard({ item, index, navigation, onUpload }) {

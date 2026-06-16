@@ -299,9 +299,13 @@ def buscar_lojas_osm(lat: float, lng: float, categoria: str, raio_m: int = 5000,
         'Outros':           'loja geral',
     }
 
-    api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+    api_key = (
+        os.getenv("GOOGLE_PLACES_API_KEY")
+        or os.getenv("GOOGLE_MAPS_API_KEY")
+        or os.getenv("GOOGLE_API_KEY")
+    )
     if not api_key:
-        print("[MAPA] GOOGLE_PLACES_API_KEY não configurada")
+        print("[MAPA] GOOGLE_PLACES_API_KEY/GOOGLE_MAPS_API_KEY nao configurada")
         return _lojas_overpass(lat, lng, categoria, raio_m)
 
     # Usa o nome do produto se disponível — muito mais específico do que a categoria

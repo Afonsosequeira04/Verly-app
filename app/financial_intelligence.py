@@ -273,13 +273,13 @@ def _next_actions(summary, budget, subs, quality):
 
     if quality['records'] > 0:
         actions.append({
-            'id': 'score_next_purchase',
+            'id': 'live_deals_score',
             'priority': 'low',
-            'title': 'Fazer score de compra',
-            'body': 'Usa o score quando quiseres uma leitura rapida de custo, uso e contexto.',
+            'title': 'Analisar compra no Live Deals',
+            'body': 'Compara preco, lojas perto, urgencia, uso e orcamento antes de comprares.',
             'metric': None,
             'currency': currency,
-            'route': 'Score',
+            'route': 'LiveDeals',
         })
 
     if quality['records'] > 0:
